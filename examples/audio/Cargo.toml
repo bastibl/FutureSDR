@@ -1,0 +1,14 @@
+[package]
+name = "futuresdr-audio"
+version = "0.0.1"
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.38"
+async-io = "1.6.0"
+async-trait = "0.1.41"
+cpal = "0.13.4"
+futures = "0.3.5"
+futuresdr = { path = "../..", default-features = false }
+log = "0.4"
+rodio = "0.14.0"

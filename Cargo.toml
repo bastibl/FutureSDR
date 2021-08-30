@@ -17,6 +17,7 @@ members = [
     "pmt",
     "frontend",
     "examples/android",
+    "examples/audio",
     "examples/logging",
     "examples/wasm",
     "perf/msg",
