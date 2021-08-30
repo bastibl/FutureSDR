@@ -10,6 +10,9 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v2
 
+      - name: Install alsalibs
+        run: sudo apt-get -y install libasound2-dev
+
       - name: Install stable toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -30,12 +33,32 @@ jobs:
           command: clippy
           args: --all-targets --workspace --no-default-features --features=vulkan -- -D warnings
 
-  test:
+  test-linux:
     name: Unit Tests Unix
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install alsalibs
+        run: sudo apt-get -y install libasound2-dev
+
+      - name: Run cargo test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --all-targets --workspace --exclude "androidfs"
+
+  test-mac:
+    name: Unit Tests Unix
+    runs-on: macos-latest
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
