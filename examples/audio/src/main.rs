@@ -1,16 +1,44 @@
 use anyhow::Result;
+use async_io::block_on;
 use async_trait::async_trait;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::BufferSize;
+use cpal::SampleRate;
+use cpal::Stream;
+use cpal::StreamConfig;
+use rodio::source::{SineWave, Source};
+use rodio::Decoder;
+use std::fs::File;
+use std::io::BufReader;
 
+use futures::channel::mpsc;
+use futures::channel::oneshot;
+use futures::SinkExt;
+use futures::StreamExt;
+use futuresdr::runtime::AsyncKernel;
+use futuresdr::runtime::Block;
+use futuresdr::runtime::BlockMeta;
+use futuresdr::runtime::BlockMetaBuilder;
 use futuresdr::runtime::Flowgraph;
+use futuresdr::runtime::MessageIo;
+use futuresdr::runtime::MessageIoBuilder;
 use futuresdr::runtime::Runtime;
+use futuresdr::runtime::StreamIo;
+use futuresdr::runtime::StreamIoBuilder;
+use futuresdr::runtime::WorkIo;
 
 fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
     let rt = Runtime::new();
 
-    let src = SigSource::new();
+    // let src = FileSource::new("rick.mp3");
+    // let inner = src.as_async::<FileSource>().unwrap();
+    // let snk = AudioSink::new(inner.sample_rate(), inner.channels());
+
+    let src = SineSource::new(440, 0.3);
+    let snk = AudioSink::new(48_000, 1);
+
     let src = fg.add_block(src);
-    let snk = AudioSink::new();
     let snk = fg.add_block(snk);
 
     fg.connect_stream(src, "out", snk, "in")?;
@@ -20,30 +48,59 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-use async_io::block_on;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::BufferSize;
-use cpal::SampleRate;
-use cpal::Stream;
-use cpal::StreamConfig;
-use futures::channel::mpsc;
-use futures::channel::oneshot;
-use futures::SinkExt;
-use futures::StreamExt;
-use rodio::source::{SineWave, Source};
+pub struct FileSource {
+    src: Box<dyn Source<Item = f32> + Send>,
+}
 
-use futuresdr::runtime::AsyncKernel;
-use futuresdr::runtime::Block;
-use futuresdr::runtime::BlockMeta;
-use futuresdr::runtime::BlockMetaBuilder;
-use futuresdr::runtime::MessageIo;
-use futuresdr::runtime::MessageIoBuilder;
-use futuresdr::runtime::StreamIo;
-use futuresdr::runtime::StreamIoBuilder;
-use futuresdr::runtime::WorkIo;
+impl FileSource {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(file: &str) -> Block {
+        let file = BufReader::new(File::open(file).unwrap());
+        let source = Decoder::new(file).unwrap();
+
+        Block::new_async(
+            BlockMetaBuilder::new("FileSource").build(),
+            StreamIoBuilder::new().add_stream_output("out", 4).build(),
+            MessageIoBuilder::new().build(),
+            FileSource {
+                src: Box::new(source.convert_samples()),
+            },
+        )
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.src.sample_rate()
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.src.channels()
+    }
+}
+
+#[async_trait]
+impl AsyncKernel for FileSource {
+    async fn work(
+        &mut self,
+        _io: &mut WorkIo,
+        sio: &mut StreamIo,
+        _mio: &mut MessageIo<Self>,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let out = sio.output(0).slice::<f32>();
+
+        for (i, v) in self.src.by_ref().take(out.len()).enumerate() {
+            out[i] = v;
+        }
+        sio.output(0).produce(out.len());
+
+        Ok(())
+    }
+}
 
 #[allow(clippy::type_complexity)]
 pub struct AudioSink {
+    sample_rate: u32,
+    channels: u16,
     stream: Option<Stream>,
     rx: Option<mpsc::UnboundedReceiver<(usize, oneshot::Sender<Box<[f32]>>)>>,
     buff: Option<(Box<[f32]>, usize, oneshot::Sender<Box<[f32]>>)>,
@@ -53,12 +110,14 @@ unsafe impl Send for AudioSink {}
 
 impl AudioSink {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> Block {
+    pub fn new(sample_rate: u32, channels: u16) -> Block {
         Block::new_async(
             BlockMetaBuilder::new("AudioSink").build(),
             StreamIoBuilder::new().add_stream_input("in", 4).build(),
             MessageIoBuilder::new().build(),
             AudioSink {
+                sample_rate,
+                channels,
                 stream: None,
                 rx: None,
                 buff: None,
@@ -81,8 +140,8 @@ impl AsyncKernel for AudioSink {
             .expect("no output device available");
 
         let config = StreamConfig {
-            channels: 1,
-            sample_rate: SampleRate(48000),
+            channels: self.channels,
+            sample_rate: SampleRate(self.sample_rate),
             buffer_size: BufferSize::Default,
         };
 
@@ -150,26 +209,26 @@ impl AsyncKernel for AudioSink {
     }
 }
 
-pub struct SigSource {
+pub struct SineSource {
     src: Box<dyn Iterator<Item = f32> + Send>,
 }
 
-impl SigSource {
+impl SineSource {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> Block {
+    pub fn new(freq: u32, amp: f32) -> Block {
         Block::new_async(
-            BlockMetaBuilder::new("SigSource").build(),
+            BlockMetaBuilder::new("SineSource").build(),
             StreamIoBuilder::new().add_stream_output("out", 4).build(),
             MessageIoBuilder::new().build(),
-            SigSource {
-                src: Box::new(SineWave::new(440).amplify(0.20)),
+            SineSource {
+                src: Box::new(SineWave::new(freq).amplify(amp)),
             },
         )
     }
 }
 
 #[async_trait]
-impl AsyncKernel for SigSource {
+impl AsyncKernel for SineSource {
     async fn work(
         &mut self,
         _io: &mut WorkIo,
