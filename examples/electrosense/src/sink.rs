@@ -136,6 +136,7 @@ impl AsyncKernel for Sink {
 
             let mut data = avro_rs::to_avro_datum(schema, record).unwrap();
             let before = data.len();
+            #[allow(clippy::same_item_push)]
             if data.len() % 4 != 0 {
                 for _ in 0..(4 - data.len() % 4) {
                     data.push(0);
@@ -144,7 +145,7 @@ impl AsyncKernel for Sink {
 
             let mut send = Vec::new();
             send.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            send.extend_from_slice(&(1024 as u32).to_be_bytes());
+            send.extend_from_slice(&(1024_u32).to_be_bytes());
             send.extend_from_slice(&data);
 
             println!("###### Sending PSD data (len {} - {})", before, data.len());

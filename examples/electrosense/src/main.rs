@@ -133,7 +133,7 @@ async fn handle_message(
     msg: mqtt::Message,
     sensor_id: i64,
 ) {
-    let data = avro_rs::from_avro_datum(&schema, &mut msg.payload(), None).unwrap();
+    let data = avro_rs::from_avro_datum(schema, &mut msg.payload(), None).unwrap();
 
     println!("{:?}", data);
 

@@ -9,5 +9,3 @@ futuresdr = { path = "../..", features = ["soapy"]}
 serde = { version = "1.0", features = ["derive"] }
 paho-mqtt = "0.9.1"
 async-native-tls = "0.4.0"
-
-#futures = "0.3.15"
