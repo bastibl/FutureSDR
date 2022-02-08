@@ -1,0 +1,4 @@
+log_level = "info"
+
+[electrosense]
+sensor_id = 123456795

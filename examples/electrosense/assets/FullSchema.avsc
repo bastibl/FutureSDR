@@ -1,0 +1,87 @@
+{ "name": "Message",
+  "type": "record",
+  "fields": [ 
+  {"name": "Type", "type": 
+    {"name": "messageType", "type":"enum", "symbols":
+      ["GroupConfiguration","Log","MeasurementCommand","SensorInfo","SensorStatus","StatusInfo","StatusRequest"]
+    }
+  },
+  {"name": "Message", "type": [
+    { "name": "GroupConfiguration",
+      "type": "record",
+      "fields": [
+      {"name": "GroupIDs", "type": 
+        {"type":"array", "items":"string"}
+      }
+      ]
+    },
+    { "name": "Log",
+      "type": "record",
+      "fields": [
+      {"name": "SerialNumber", "type": "long" },
+      {"name": "Timestamp", "type": "long" },
+      {"name": "Level", "type": 
+        {"name":"levelType", "type":"enum", "symbols":
+          ["DEBUG","INFO","WARN","ERROR"]
+        }
+      },
+      {"name": "RequestUuid", "type": ["null", "string"]},
+      {"name": "LogMessage", "type": "string"},
+      {"name": "LogInfo", "type": 
+        [ "null", {"type":"map", "values":"string"} ]
+      }
+      ]
+    },
+    { "name": "MeasurementCommand",
+      "type": "record",
+      "fields": [
+      {"name": "Uuid", "type": "string"},
+      {"name": "Timestamp", "type": "long" },
+      {"name": "Command", "type": 
+        {"name":"commandType", "type":"enum", "symbols":["START","STOP"]}
+      },
+      {"name": "SensingParams", "type": 
+        [ "null", {"type":"map", "values":"string"} ]
+      }
+      ]
+    },
+    { "name": "SensorInfo",
+      "type": "record",
+      "fields": [
+      {"name": "SerialNumber", "type": "long" },
+      {"name": "Timestamp", "type": "long" },
+      {"name": "SensorType", "type": "string"},
+      {"name": "SoftwareInfo", "type":
+        [ "null", {"type":"map", "values":"string"} ]
+      }
+      ]
+    },
+    { "name": "SensorStatus",
+      "type": "record",
+      "fields": [
+      {"name": "SerialNumber", "type": "long" },
+      {"name": "Timestamp", "type": "long" },
+      {"name": "Uptime", "type": "int" },
+      {"name": "Status", "type": 
+        {"name":"sensorStatusType", "type":"enum", "symbols":
+          ["IDLE","SENSING","BUSY","ERROR","OFF"]
+        }
+      },
+      {"name": "StatusInfo", "type":
+        [ "null", {"type":"map", "values":"string"} ]
+      }
+      ]
+    },
+    { "name": "StatusRequest",
+      "type": "record",
+      "fields": [
+      {"name": "Type", "type": 
+        {"name":"statusRequestType", "type":"enum", 
+          "symbols":["SENSORINFO","SENSORSTATUS","MEASUREMENT"]}
+      }
+      ]
+    }
+    ]
+  }
+  ]
+}
