@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FutureSDR End-To-End Frontend</title>
+    <link rel="stylesheet" href="/css/futuresdr.css">
+    <link rel="shortcut icon" href="/favicon.png">
+    <style>
+        body {
+            font-family: arial;
+            margin: 0;
+            padding: none;
+            background-color: white;
+        }
+        canvas {
+            width: 80vw;
+            height: 80vh;
+        }
+
+        .flex-container {
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+        }
+        .flex-item {
+            line-height: 20px;
+            color: white;
+            font-weight: bold;
+            font-size: 2em;
+            text-align: center;
+            display: flex-item;
+            margin: 5px;
+        }
+        .white_text {
+            color: white;
+            font-size: 14px;
+        }
+        #start {
+            margin: 0;
+            padding: 20px;
+        }
+        #interface {
+            width: 1500px;
+            /* border: 1px  solid gray; */
+            overflow: hidden;
+        }
+        #nodes_table {
+            width: 1100px;
+            float:left;
+            border: 1px  solid gray;
+        }
+        #control_panel {
+            border: 1px solid gray;
+            float: left;
+        }
+        .panel {
+            border: 1px solid gray;
+            /*float: left; */
+        }
+        table {
+            font-family: arial, sans-serif;
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        td, th {
+            border: 1px solid black;
+            text-align: left;
+            padding: 8px;
+        }
+
+        tr:nth-child(even) {
+            background-color: lightgray;
+        }
+    </style>
+</head>
+<body>
+<div id="interface">
+    <div id="nodes_table_div">
+        <table id="nodes_table">
+            <tr>
+                <th>Node ID</th>
+                <th>FFT Visualizer</th>
+                <th>ZigBee Visualizer</th>
+                <th>Current config</th>
+                <th>Last seen</th>
+            </tr>
+        </table>
+    </div>
+    <div id="control_panel" class="panel">
+        <div class="panel" id="node_selector">
+            <label for="node_input">Node ID</label>
+            <br>
+            <input type="text" id="node_input" name="node_input">
+        </div>
+        <div class="panel" id="mode_selection">
+            <p>Node mode selection</p>
+            <input type="checkbox" id="fft_checkbox" name="mode_checkboxes">
+            <label for="fft_checkbox">FFT</label>
+            <br>
+            <input type="checkbox" id="zigbee_checkbox" name="mode_checkboxes">
+            <label for="zigbee_checkbox">ZigBee</label>
+            <br>
+        </div>
+        <div class="panel" id="config_panel">
+            <p>Node config</p>
+            <label for="frequency_input">Frequency (Hz)</label>
+            <br>
+            <input type="number" id="frequency_input" name="frequency" min="1000000" max="6000000000">
+            <br>
+            <label for="amp_checkbox">Pre-Amp (+14dB)</label>
+            <input type="checkbox" id="amp_checkbox" name="amp_checkbox">
+            <br>
+            <label for="lna_input">LNA</label>
+            <br>
+            <select id="lna_input">
+                <option value="0"> 0</option>
+                <option value="8"> 8</option>
+                <option value="16">16</option>
+                <option value="24">24</option>
+                <option value="32">32</option>
+                <option value="40">40</option>
+            </select>
+            <br>
+            <label for="vga_input">VGA</label>
+            <br>
+            <select id="vga_input">
+                <option          value=" 0"> 0</option>
+                <option          value=" 2"> 2</option>
+                <option          value=" 4"> 4</option>
+                <option          value=" 6"> 6</option>
+                <option          value=" 8"> 8</option>
+                <option          value="10">10</option>
+                <option          value="12">12</option>
+                <option          value="14">14</option>
+                <option          value="16">16</option>
+                <option          value="18">18</option>
+                <option          value="20">20</option>
+                <option          value="22">22</option>
+                <option          value="24">24</option>
+                <option          value="26">26</option>
+                <option          value="28">28</option>
+                <option          value="30">30</option>
+                <option          value="32">32</option>
+                <option          value="34">34</option>
+                <option          value="36">36</option>
+                <option          value="38">38</option>
+                <option          value="40">40</option>
+                <option          value="42">42</option>
+                <option          value="44">44</option>
+                <option          value="46">46</option>
+                <option          value="48">48</option>
+                <option          value="50">50</option>
+                <option          value="52">52</option>
+                <option          value="54">54</option>
+                <option          value="56">56</option>
+                <option          value="58">58</option>
+                <option          value="60">60</option>
+                <option          value="62">62</option>
+            </select>
+            <br>
+            <label for="sample_rate_input">Sample rate (samples per second)</label>
+            <br>
+            <input type="number" id="sample_rate_input" name="sample_rate" min="1000000" max="20000000">
+            <br>
+            <label for="fft_chunks_per_ws_transfer_input">FFT chunks per WebSocket Transfer</label>
+            <br>
+            <input type="number" id="fft_chunks_per_ws_transfer_input" name="fft_chunks_per_ws_transfer">
+        </div>
+        <div class="panel" id="update_and_apply">
+            <label for="historic_time">
+                Set timestamp for historic data
+                <br>
+                (applies only after next update from server)
+            </label>
+            <br>
+            <input type="datetime-local" id="historic_time" name="historic_time" value="2017-06-01T08:30">
+            <br>
+            <input type="button" value="Update from backend" onclick="update_from_backend()">
+            <input type="button" value="Send to node" onclick="send_config()">
+            <div id="send_response"></div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+
+    const wasm_module_functions = {};
+    async function send_config() {
+        await wasm_module_functions.send_config()
+    }
+
+    async function update_from_backend() {
+        await wasm_module_functions.update_from_backend()
+    }
+</script>
+
+<script type="module">
+    import init, {update_from_backend_rust, send_config_rust, set_console_error_panic_hook,} from "./frontend.js"
+
+    async function update_from_backend() {
+        await update_from_backend_rust();
+    }
+
+    async function send_config() {
+        await send_config_rust();
+    }
+
+    const rustWasm = await init();
+    set_console_error_panic_hook();
+    wasm_module_functions.update_from_backend = update_from_backend;
+    wasm_module_functions.send_config = send_config;
+
+</script>
+</body>
+</html>

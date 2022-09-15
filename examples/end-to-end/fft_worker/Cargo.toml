@@ -1,0 +1,22 @@
+[package]
+name = "fft-worker"
+version = "0.1.0"
+authors = ["FutureSDR Contributors <team@futuresdr.org>","arctic-alpaca <67190338+arctic-alpaca@users.noreply.github.com>"]
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace]
+
+[features]
+include_main = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1.7"
+futuresdr = { path = "../../.." }
+wasm-bindgen = "0.2.79"
+wasm-bindgen-futures = "0.4.28"
+gloo-worker = "0.2.0"
+shared_utils = {path = "../shared-utils"}

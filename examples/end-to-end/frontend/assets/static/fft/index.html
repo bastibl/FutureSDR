@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FutureSDR End-To-End Frontend</title>
+    <link rel="stylesheet" href="/css/futuresdr.css">
+    <link rel="shortcut icon" href="/favicon.png">
+    <style>
+        body {
+            font-family: arial;
+            margin: 0;
+            padding: none;
+            background-color: black;
+        }
+        canvas {
+            width: 80vw;
+            height: 80vh;
+        }
+
+        .flex-container {
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+        }
+        .flex-item {
+            line-height: 20px;
+            color: white;
+            font-weight: bold;
+            font-size: 2em;
+            text-align: center;
+            display: flex-item;
+            margin: 5px;
+        }
+
+        #start {
+            margin: 0;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+<div id="freq"></div>
+
+<script type="module">
+    import init, {add_freq} from "./futuresdr.js";
+
+    function Sleep(milliseconds) {
+        return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    function SetDataUrl() {
+        let path_parts = window.location.pathname.split('/');
+        let query = new URLSearchParams(window.location.search)
+        console.log(query.toString().length);
+        if (query.toString().trim().length !== 0) {
+            query = "?" + query;
+        }
+        let ws_url = "ws://localhost:3000/frontend_api/data/" + path_parts[3] + "/" + path_parts[2] +  query;
+        return ws_url;
+    }
+
+    const runWasm = async () => {
+        await Sleep(500);
+        const rustWasm = await init();
+        let ws_url = SetDataUrl();
+        add_freq('#freq', ws_url, -20, 10);
+    };
+
+    runWasm();
+
+</script>
+</body>
+</html>

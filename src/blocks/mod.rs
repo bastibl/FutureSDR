@@ -211,7 +211,7 @@ mod vulkan;
 pub use vulkan::{Vulkan, VulkanBuilder};
 
 #[cfg(target_arch = "wasm32")]
-mod wasm_sdr;
+pub mod wasm_sdr;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_sdr::WasmSdr;
 #[cfg(target_arch = "wasm32")]

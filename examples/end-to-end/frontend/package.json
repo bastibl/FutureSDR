@@ -1,0 +1,16 @@
+{
+  "name": "hackrf_node_webworker",
+  "version": "0.0.1",
+  "description": "FutureSDR End-To-End HackRF Node Example",
+  "browserslist": [
+    "defaults"
+  ],
+  "author": "arctic-alpaca <67190338+arctic-alpaca@users.noreply.github.com>",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "browser-sync": "^2.26.14",
+    "gulp": "^4.0.2",
+    "gulp-sass": "^5.1.0",
+    "sass": "^1.50.0"
+  }
+}

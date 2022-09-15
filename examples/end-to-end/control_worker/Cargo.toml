@@ -1,0 +1,24 @@
+[package]
+name = "control-worker"
+version = "0.1.0"
+authors = ["arctic-alpaca <67190338+arctic-alpaca@users.noreply.github.com>"]
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace]
+
+[features]
+include_main = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bincode = "1.3"
+console_error_panic_hook = "0.1"
+futures = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+gloo-worker = "0.2"
+gloo-net = "0.2"
+shared_utils = {path = "../shared-utils"}

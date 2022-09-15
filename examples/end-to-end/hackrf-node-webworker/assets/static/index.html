@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FutureSDR End-To-End HackRf-Node</title>
+    <link rel="stylesheet" href="/css/futuresdr.css">
+    <link rel="shortcut icon" href="/favicon.png">
+    <style>
+        body {
+            font-family: arial;
+            margin: 0;
+            padding: none;
+            background-color: black;
+        }
+        canvas {
+            width: 80vw;
+            height: 80vh;
+        }
+
+        .flex-container {
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+        }
+        .flex-item {
+            line-height: 20px;
+            color: white;
+            font-weight: bold;
+            font-size: 2em;
+            text-align: center;
+            display: flex-item;
+            margin: 5px;
+        }
+        .white_text {
+            color: white;
+            font-size: 14px;
+        }
+
+        #status_output {
+            min-height: 400px;
+            min-width: 800px;
+            max-width: 800px;
+            max-height: 400px;
+            background-color: white;
+            color: black;
+            white-space: pre-line;
+            #overflow-y: scroll;
+            overflow: auto;
+        }
+        #start {
+            margin: 0;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="flex-container">
+    <div class="flex-item">
+        <button id="start" type="button" value="Start">
+            Start
+        </button>
+    </div>
+</div>
+<div id="node_id_form">
+    <form>
+        <label class="white_text" for="node_id">Please insert a Node ID if available. Needs to be a Uuid v4, no checking is done at this point, the application will fail if this is incorrect. If no ID is set, a random will be assigned.:</label><br>
+        <input type="text" id="node_id" name="node_id" size="30"><br>
+        <input type="button" id="node_id_submit" name="node_id_submit" value="Set Node ID" onclick="process_node_id(node_id.value)">
+        <input type="button" id="node_id_generate" name="node_id_generate" value="Generate new Node ID" onclick="generate_node_id()">
+    </form>
+    <div class="white_text" id="status">Status output may reduce performance:</div>
+    <div>
+        <input type="checkbox" id="activate_status_output" name="activate_status_output" onclick="(function () {
+            status_output_active = !status_output_active
+        })()" checked>
+        <label for="activate_status_output">Activate status output</label>
+    </div>
+    <div id="status_output" ></div>
+</div>
+
+<script type="text/javascript">
+    var Module = {
+        preRun: [],
+        postRun: [],
+        print: (function() {
+            return function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                add_text_to_status_output(text);
+            };
+        })(),
+        printErr: function(text) {
+            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+            add_text_to_status_output(text);
+        },
+        setStatus: function(text) {
+            if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+            if (text === Module.setStatus.last.text) return;
+            var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+            var now = Date.now();
+            if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+            Module.setStatus.last.time = now;
+            Module.setStatus.last.text = text;
+            if (m) {
+                text = m[1];
+            }
+            add_text_to_status_output(text);
+        },
+        totalDependencies: 0,
+        monitorRunDependencies: function(left) {
+            this.totalDependencies = Math.max(this.totalDependencies, left);
+            Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+        }
+    };
+
+    var status_output_active = true;
+    const wasm_module_functions = {};
+
+    Module.setStatus('Downloading...');
+
+    var samples = new Float32Array(2048);
+    var read_samples;
+    var set_freq;
+    var set_amp;
+    var set_lna;
+    var set_vga;
+    var set_sample_rate;
+    var resolver = function () {};
+    var new_freq = false;
+    var freq = 0;
+
+    Module['onRuntimeInitialized'] = function() {
+        add_text_to_status_output("EMSCRIPTEN LOADED");
+        read_samples = Module.read_samples;
+        set_freq = Module.set_freq;
+        set_amp = Module.set_amp;
+        set_lna = Module.set_lna;
+        set_vga = Module.set_vga;
+        set_sample_rate = Module.set_sample_rate;
+        add_text_to_status_output(Module);
+    }
+
+    function process_node_id(node_id) {
+        add_text_to_status_output("Node ID set to: " + node_id);
+        document.cookie = "node_id=" + node_id + "; expires=Thu, 31 Dec 2100 12:00:00 UTC; path=/";
+    }
+
+    var myLink = document.getElementById('start');
+    myLink.onclick = function() {
+        check_node_id_and_set_if_not_present();
+        var script = document.createElement("script");
+        script.type = "text/javascript";
+        script.src = "hackrf_open.js";
+        document.getElementsByTagName("head")[0].appendChild(script);
+        return false;
+    }
+
+    function generate_node_id() {
+        if(typeof wasm_module_functions.generate_uuid === 'function') {
+            let node_id = wasm_module_functions.generate_uuid();
+            add_text_to_status_output("Generated Node ID: " + node_id);
+            document.getElementById("node_id").value = node_id;
+            process_node_id(node_id);
+        } else {
+            add_text_to_status_output("Not loaded yet, please try again in a moment");
+        }
+    }
+
+    function check_node_id_cookie_and_set_if_present() {
+        let cookie_name = document.cookie.split("=")[0];
+        let cookie_value = document.cookie.split("=")[1];
+        if (cookie_name === "node_id") {
+            add_text_to_status_output("Found existing Node ID: " + cookie_value);
+            document.getElementById("node_id").value = cookie_value;
+        }
+    }
+
+    function check_node_id_and_set_if_not_present() {
+        let cookie_name = document.cookie.split("=")[0];
+        if (cookie_name !== "node_id") {
+            add_text_to_status_output("No Node ID set, generating and setting one");
+            generate_node_id();
+        }
+    }
+
+    function add_leading_zero_to_time(time) {
+        if (time < 10) {
+            return "0" + time;
+        } else {
+            return time;
+        }
+    }
+
+    function add_text_to_status_output(text) {
+        if (status_output_active) {
+            let status_output = document.getElementById("status_output");
+            let now = new Date();
+            let new_text = add_leading_zero_to_time(now.getHours()) + ":" + add_leading_zero_to_time(now.getMinutes()) + ":" + add_leading_zero_to_time(now.getSeconds()) + " - " + text + "\n";
+            let text_to_add = document.createTextNode(new_text);
+            status_output.prepend(text_to_add);
+        }
+    }
+
+    function set_freq_helper(freq) {
+        let i = parseInt(freq, 10);
+        set_freq(i);
+    }
+    function set_amp_helper(amp) {
+        let i = parseInt(amp, 10);
+        set_amp(i);
+    }
+    function set_lna_helper(lna) {
+        let i = parseInt(lna, 10);
+        set_lna(i);
+    }
+    function set_vga_helper(vga) {
+        let i = parseInt(vga, 10);
+        set_vga(i);
+    }
+    function set_sample_rate_helper(sample_rate) {
+        let i = parseInt(sample_rate, 10);
+        set_sample_rate(i);
+    }
+
+    check_node_id_cookie_and_set_if_present();
+</script>
+
+<script type="module">
+    import init, {input_samples, new_uuid, set_console_error_panic_hook, initialize_config, create_control_worker} from "./hackrf_node_webworker.js"
+
+    function generate_uuid() {
+        return new_uuid()
+    }
+
+    export function print_from_rust(text) {
+        add_text_to_status_output(text);
+    }
+
+    export function set_freq_from_rust(freq) {
+        set_freq_helper(freq);
+    }
+    export function set_amp_from_rust(amp) {
+        set_amp_helper(amp);
+    }
+    export function set_lna_from_rust(lna) {
+        set_lna_helper(lna);
+    }
+    export function set_vga_from_rust(vga) {
+        set_vga_helper(vga);
+    }
+    export function set_sample_rate_from_rust(sample_rate) {
+        set_sample_rate_helper(sample_rate);
+    }
+
+    function Sleep(milliseconds) {
+        return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    async function push() {
+        let first_run = true;
+        while(true) {
+            let s = read_samples();
+            if (s.length > 0) {
+                // wait until the hackrf driver is running to apply initial config
+                if (first_run) {
+                    initialize_config();
+                    first_run = false;
+                }
+                input_samples(s);
+            } else {
+                //add_text_to_status_output("sleeping, no samples");
+                await Sleep(200);
+            }
+        }
+    }
+
+    const runWasm = async () => {
+        await Promise.all([push()]);
+    };
+
+    function waitForElement(){
+        if(typeof read_samples === 'function') {
+            add_text_to_status_output("present, loading");
+            runWasm();
+        } else {
+            add_text_to_status_output("not present, waiting");
+            setTimeout(waitForElement, 1000);
+        }
+    }
+    window.print_from_rust = print_from_rust;
+    window.set_freq_from_rust = set_freq_from_rust;
+    window.set_amp_from_rust = set_amp_from_rust;
+    window.set_lna_from_rust = set_lna_from_rust;
+    window.set_vga_from_rust = set_vga_from_rust;
+    window.set_sample_rate_from_rust = set_sample_rate_from_rust;
+
+    const rustWasm = await init();
+    set_console_error_panic_hook();
+    wasm_module_functions.generate_uuid = generate_uuid;
+    create_control_worker();
+    waitForElement();
+
+</script>
+</body>
+</html>
