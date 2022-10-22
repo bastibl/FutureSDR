@@ -63,8 +63,8 @@ impl Vulkan {
         Block::new(
             BlockMetaBuilder::new("Vulkan").build(),
             StreamIoBuilder::new()
-                .add_input::<f32>("in")
-                .add_output::<f32>("out")
+                .add_input("in", 4)
+                .add_output("out", 4)
                 .build(),
             MessageIoBuilder::<Vulkan>::new().build(),
             Vulkan {
