@@ -17,14 +17,14 @@ use crate::runtime::StreamIo;
 use crate::runtime::StreamIoBuilder;
 use crate::runtime::WorkIo;
 
-static SENDER: OnceCell<Mutex<mpsc::Sender<Vec<i8>>>> = OnceCell::new();
+static SENDER: OnceCell<Mutex<mpsc::Sender<Vec<u8>>>> = OnceCell::new();
 
 // there should be no one else contenting for this lock
 // to make sure, we use try_lock().unwrap(), which would panic
 // if the lock is held by someone else
 #[allow(clippy::await_holding_lock)]
 #[wasm_bindgen]
-pub async fn push_samples(s: Vec<i8>) -> bool {
+pub async fn push_samples(s: Vec<u8>) -> bool {
     if let Some(tx) = SENDER.get() {
         if tx.try_lock().unwrap().send(s).await.is_err() {
             info!("WasmSdr, pushing while closed");
@@ -39,8 +39,8 @@ pub async fn push_samples(s: Vec<i8>) -> bool {
 }
 
 pub struct WasmSdr {
-    receiver: mpsc::Receiver<Vec<i8>>,
-    samples: Vec<i8>,
+    receiver: mpsc::Receiver<Vec<u8>>,
+    samples: Vec<u8>,
     index: usize,
 }
 
@@ -86,9 +86,13 @@ impl Kernel for WasmSdr {
 
         for (i, o) in output.iter_mut().enumerate().take(n) {
             *o = Complex32::new(
-                (self.samples[self.index + i * 2] as f32) / 128.0,
-                (self.samples[self.index + i * 2 + 1] as f32) / 128.0,
+                ((self.samples[self.index + i * 2] as f32) - 128.0) / 128.0,
+                ((self.samples[self.index + i * 2 + 1] as f32) - 128.0) / 128.0,
             );
+            // *o = Complex32::new(
+            //     (self.samples[self.index + i * 2] as f32) / 128.0,
+            //     (self.samples[self.index + i * 2 + 1] as f32) / 128.0,
+            // );
         }
 
         self.index += 2 * n;

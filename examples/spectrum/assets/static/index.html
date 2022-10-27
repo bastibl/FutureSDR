@@ -3,6 +3,10 @@
     <head>
         <meta charset="utf-8">
         <title>FutureSDR WASM Example</title>
+        <script src="/js/mermaid.min.js"></script>
+        <script>
+         mermaid.mermaidAPI.initialize({'theme': 'dark'});
+        </script>
         <link rel="stylesheet" href="/css/futuresdr.css">
         <link rel="shortcut icon" href="/favicon.png">
         <style>
@@ -140,7 +144,8 @@
 
          const runWasm = async () => {
              const rustWasm = await init();
-             add_freq('#freq', '', -20, 10);
+             console.log('adding freq');
+             add_freq('#freq', '', -60, 20);
          };
 
          runWasm();
@@ -167,7 +172,9 @@
                      });
                      produced = 0;
                  } else {
-                     let res = await push_samples(read_samples());
+                     let s = read_samples();
+                     console.log("read samples " + s.length)
+                     let res = await push_samples(s);
                      if(res) {
                          produced += 8192;
                      } else {

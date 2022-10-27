@@ -17,7 +17,11 @@ gulp.task('assets:static', function() {
 });
 
 gulp.task('assets:futuresdr', function() {
-    return gulp.src('../../frontend/dist/futuresdr*')
+    return gulp.src([
+      '../../frontend/dist/futuresdr*',
+      '../../frontend/dist/js*/*',
+      '../../frontend/dist/shaders*/*',
+    ])
         .pipe(gulp.dest('dist/'))
         .pipe(browserSync.stream());
 });
