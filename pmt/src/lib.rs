@@ -41,8 +41,11 @@ impl dyn PmtAny {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Pmt {
+    Ok,
+    InvalidValue,
     Null,
     String(String),
+    Bool(bool),
     U32(u32),
     U64(u64),
     F32(f32),
@@ -124,8 +127,11 @@ impl Pmt {
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq)]
 pub enum PmtKind {
+    Ok,
+    InvalidValue,
     Null,
     String,
+    Bool,
     U32,
     U64,
     F32,
