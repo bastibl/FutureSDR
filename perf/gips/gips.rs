@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::fs;
 use std::iter::repeat_with;
 use std::time;
 
@@ -26,7 +27,7 @@ struct Args {
     samples: usize,
     #[clap(short, long, default_value_t = 4000000000)]
     max_copy: usize,
-    #[clap(short = 'S', long, default_value = "smol1")]
+    #[clap(short = 'S', long, default_value = "gips")]
     scheduler: String,
 }
 
@@ -85,9 +86,6 @@ fn main() -> Result<()> {
         snks.push(snk);
     }
 
-    let json = serde_json::to_string_pretty(&gips).unwrap();
-    println!("graph {}", json);
-
     let elapsed;
 
     if scheduler == "smol1" {
@@ -101,6 +99,10 @@ fn main() -> Result<()> {
         fg = runtime.run(fg)?;
         elapsed = now.elapsed();
     } else if scheduler == "gips" {
+        let json = serde_json::to_string_pretty(&gips).unwrap();
+        println!("graph {}", json);
+        fs::write("gips_graph.json", json).unwrap();
+
         let runtime = Runtime::with_scheduler(GipsScheduler::new());
         let now = time::Instant::now();
         fg = runtime.run(fg)?;

@@ -1,0 +1,664 @@
+{
+  "cores": 4,
+  "threadsPerCore": 1,
+  "interThreadCommunicationFactor": 0.25,
+  "blocks": [
+    {
+      "id": 0,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 1,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 2,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 3,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 4,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 5,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 6,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 7,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 8,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 9,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 10,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 11,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 12,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 13,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 14,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 15,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 16,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 17,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 18,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 19,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 20,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 21,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 22,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 23,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 24,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 25,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 26,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 27,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 28,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 29,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 30,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 31,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 32,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 33,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 34,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 35,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 36,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 37,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 38,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 39,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 40,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 41,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 42,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 43,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 44,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 45,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 46,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 47,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 48,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 49,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 50,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 51,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 52,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 53,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 54,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 55,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 56,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 57,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 58,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 59,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 60,
+      "complexity": 0,
+      "inToOut": 1
+    },
+    {
+      "id": 61,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 62,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 63,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 64,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 65,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 66,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 67,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 68,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 69,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 70,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 71,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 72,
+      "complexity": 1,
+      "inToOut": 1
+    },
+    {
+      "id": 73,
+      "complexity": 10,
+      "inToOut": 1
+    },
+    {
+      "id": 74,
+      "complexity": 0,
+      "inToOut": 1
+    }
+  ],
+  "flows": [
+    {
+      "sourceId": 0,
+      "targetId": 1
+    },
+    {
+      "sourceId": 1,
+      "targetId": 2
+    },
+    {
+      "sourceId": 2,
+      "targetId": 3
+    },
+    {
+      "sourceId": 3,
+      "targetId": 4
+    },
+    {
+      "sourceId": 4,
+      "targetId": 5
+    },
+    {
+      "sourceId": 5,
+      "targetId": 6
+    },
+    {
+      "sourceId": 6,
+      "targetId": 7
+    },
+    {
+      "sourceId": 7,
+      "targetId": 8
+    },
+    {
+      "sourceId": 8,
+      "targetId": 9
+    },
+    {
+      "sourceId": 9,
+      "targetId": 10
+    },
+    {
+      "sourceId": 10,
+      "targetId": 11
+    },
+    {
+      "sourceId": 11,
+      "targetId": 12
+    },
+    {
+      "sourceId": 12,
+      "targetId": 13
+    },
+    {
+      "sourceId": 13,
+      "targetId": 14
+    },
+    {
+      "sourceId": 15,
+      "targetId": 16
+    },
+    {
+      "sourceId": 16,
+      "targetId": 17
+    },
+    {
+      "sourceId": 17,
+      "targetId": 18
+    },
+    {
+      "sourceId": 18,
+      "targetId": 19
+    },
+    {
+      "sourceId": 19,
+      "targetId": 20
+    },
+    {
+      "sourceId": 20,
+      "targetId": 21
+    },
+    {
+      "sourceId": 21,
+      "targetId": 22
+    },
+    {
+      "sourceId": 22,
+      "targetId": 23
+    },
+    {
+      "sourceId": 23,
+      "targetId": 24
+    },
+    {
+      "sourceId": 24,
+      "targetId": 25
+    },
+    {
+      "sourceId": 25,
+      "targetId": 26
+    },
+    {
+      "sourceId": 26,
+      "targetId": 27
+    },
+    {
+      "sourceId": 27,
+      "targetId": 28
+    },
+    {
+      "sourceId": 28,
+      "targetId": 29
+    },
+    {
+      "sourceId": 30,
+      "targetId": 31
+    },
+    {
+      "sourceId": 31,
+      "targetId": 32
+    },
+    {
+      "sourceId": 32,
+      "targetId": 33
+    },
+    {
+      "sourceId": 33,
+      "targetId": 34
+    },
+    {
+      "sourceId": 34,
+      "targetId": 35
+    },
+    {
+      "sourceId": 35,
+      "targetId": 36
+    },
+    {
+      "sourceId": 36,
+      "targetId": 37
+    },
+    {
+      "sourceId": 37,
+      "targetId": 38
+    },
+    {
+      "sourceId": 38,
+      "targetId": 39
+    },
+    {
+      "sourceId": 39,
+      "targetId": 40
+    },
+    {
+      "sourceId": 40,
+      "targetId": 41
+    },
+    {
+      "sourceId": 41,
+      "targetId": 42
+    },
+    {
+      "sourceId": 42,
+      "targetId": 43
+    },
+    {
+      "sourceId": 43,
+      "targetId": 44
+    },
+    {
+      "sourceId": 45,
+      "targetId": 46
+    },
+    {
+      "sourceId": 46,
+      "targetId": 47
+    },
+    {
+      "sourceId": 47,
+      "targetId": 48
+    },
+    {
+      "sourceId": 48,
+      "targetId": 49
+    },
+    {
+      "sourceId": 49,
+      "targetId": 50
+    },
+    {
+      "sourceId": 50,
+      "targetId": 51
+    },
+    {
+      "sourceId": 51,
+      "targetId": 52
+    },
+    {
+      "sourceId": 52,
+      "targetId": 53
+    },
+    {
+      "sourceId": 53,
+      "targetId": 54
+    },
+    {
+      "sourceId": 54,
+      "targetId": 55
+    },
+    {
+      "sourceId": 55,
+      "targetId": 56
+    },
+    {
+      "sourceId": 56,
+      "targetId": 57
+    },
+    {
+      "sourceId": 57,
+      "targetId": 58
+    },
+    {
+      "sourceId": 58,
+      "targetId": 59
+    },
+    {
+      "sourceId": 60,
+      "targetId": 61
+    },
+    {
+      "sourceId": 61,
+      "targetId": 62
+    },
+    {
+      "sourceId": 62,
+      "targetId": 63
+    },
+    {
+      "sourceId": 63,
+      "targetId": 64
+    },
+    {
+      "sourceId": 64,
+      "targetId": 65
+    },
+    {
+      "sourceId": 65,
+      "targetId": 66
+    },
+    {
+      "sourceId": 66,
+      "targetId": 67
+    },
+    {
+      "sourceId": 67,
+      "targetId": 68
+    },
+    {
+      "sourceId": 68,
+      "targetId": 69
+    },
+    {
+      "sourceId": 69,
+      "targetId": 70
+    },
+    {
+      "sourceId": 70,
+      "targetId": 71
+    },
+    {
+      "sourceId": 71,
+      "targetId": 72
+    },
+    {
+      "sourceId": 72,
+      "targetId": 73
+    },
+    {
+      "sourceId": 73,
+      "targetId": 74
+    }
+  ]
+}
