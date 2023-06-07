@@ -5,7 +5,7 @@ mod flow;
 pub use crate::runtime::scheduler::flow::FlowScheduler;
 
 #[cfg(feature = "gips_scheduler")]
-mod gips;
+pub mod gips;
 #[cfg(feature = "gips_scheduler")]
 pub use crate::runtime::scheduler::gips::GipsScheduler;
 

@@ -8,6 +8,7 @@ use futuresdr::blocks::FirBuilder;
 use futuresdr::blocks::Head;
 use futuresdr::blocks::NullSink;
 use futuresdr::blocks::NullSource;
+use futuresdr::runtime::scheduler::gips::GipsGraph;
 use futuresdr::runtime::scheduler::GipsScheduler;
 use futuresdr::runtime::scheduler::SmolScheduler;
 use futuresdr::runtime::Flowgraph;
@@ -40,6 +41,7 @@ fn main() -> Result<()> {
     } = Args::parse();
 
     let mut fg = Flowgraph::new();
+    let mut gips = GipsGraph::new(4, 0.25);
     let taps: [f32; 64] = repeat_with(rand::random::<f32>)
         .take(64)
         .collect::<Vec<f32>>()
@@ -50,25 +52,41 @@ fn main() -> Result<()> {
 
     for _ in 0..pipes {
         let src = fg.add_block(NullSource::<f32>::new());
+        gips.add_block(0, 1);
         let head = fg.add_block(Head::<f32>::new(samples as u64));
+        gips.add_block(1, 1);
         fg.connect_stream(src, "out", head, "in")?;
+        gips.connect(src, head);
 
         let copy = fg.add_block(CopyRandBuilder::<f32>::new().max_copy(max_copy).build());
+        gips.add_block(1, 1);
         let mut last = fg.add_block(FirBuilder::new::<f32, f32, _, _>(taps.to_owned()));
+        gips.add_block(10, 1);
         fg.connect_stream(head, "out", copy, "in")?;
+        gips.connect(head, copy);
         fg.connect_stream(copy, "out", last, "in")?;
+        gips.connect(copy, last);
 
         for _ in 1..stages {
             let copy = fg.add_block(CopyRandBuilder::<f32>::new().max_copy(max_copy).build());
+            gips.add_block(1, 1);
             fg.connect_stream(last, "out", copy, "in")?;
+            gips.connect(last, copy);
             last = fg.add_block(FirBuilder::new::<f32, f32, _, _>(taps.to_owned()));
+            gips.add_block(10, 1);
             fg.connect_stream(copy, "out", last, "in")?;
+            gips.connect(copy, last);
         }
 
         let snk = fg.add_block(NullSink::<f32>::new());
+        gips.add_block(0, 1);
         fg.connect_stream(last, "out", snk, "in")?;
+        gips.connect(last, snk);
         snks.push(snk);
     }
+
+    let json = serde_json::to_string_pretty(&gips).unwrap();
+    println!("graph {}", json);
 
     let elapsed;
 

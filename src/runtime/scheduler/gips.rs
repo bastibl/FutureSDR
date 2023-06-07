@@ -1,3 +1,4 @@
+//! GIPS Scheduler
 use async_io::block_on;
 use async_lock::Barrier;
 use async_task::Runnable;
@@ -7,6 +8,7 @@ use core_affinity;
 use futures::channel::mpsc::{channel, Sender};
 use futures::channel::oneshot;
 use futures_lite::future::{self, Future, FutureExt};
+use serde::Serialize;
 use slab::Slab;
 use std::cmp;
 use std::fmt;
@@ -21,6 +23,64 @@ use crate::runtime::scheduler::Scheduler;
 use crate::runtime::BlockMessage;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::Topology;
+
+/// Gips Block
+#[derive(Clone, Debug, Serialize)]
+struct GipsBlock {
+    id: usize,
+    complexity: usize,
+    #[serde(rename(serialize = "inToOut"))]
+    in_to_out: usize,
+}
+
+/// Gips Flow
+#[derive(Clone, Debug, Serialize)]
+struct GipsFlow {
+    #[serde(rename(serialize = "sourceId"))]
+    source_id: usize,
+    #[serde(rename(serialize = "targetId"))]
+    target_id: usize,
+}
+
+/// Gips Graph
+#[derive(Clone, Debug, Serialize)]
+pub struct GipsGraph {
+    cores: usize,
+    #[serde(rename(serialize = "threadsPerCore"))]
+    threads_per_core: usize,
+    #[serde(rename(serialize = "interThreadCommunicationFactor"))]
+    inter_thread_communication_factor: f32,
+    blocks: Vec<GipsBlock>,
+    flows: Vec<GipsFlow>,
+    #[serde(skip)]
+    id: usize,
+}
+
+impl GipsGraph {
+    /// Create Gips Graph
+    pub fn new(cores: usize, inter_thread_communication_factor: f32) -> Self {
+        Self {
+            id: 0,
+            cores,
+            threads_per_core: 1,
+            inter_thread_communication_factor,
+            blocks: Vec::new(),
+            flows: Vec::new(),
+        }
+    }
+
+    /// Add block to Gips Graph
+    pub fn add_block(&mut self, complexity: usize, in_to_out: usize) {
+        let id = self.id;
+        self.id += 1;
+        self.blocks.push(GipsBlock { id, complexity, in_to_out });
+    }
+
+    /// Connect blocks in Gips Graph
+    pub fn connect(&mut self, source_id: usize, target_id: usize) {
+        self.flows.push(GipsFlow { source_id, target_id });
+    }
+}
 
 /// Gips scheduler
 ///
@@ -264,6 +324,7 @@ impl GipsExecutor {
         task
     }
 
+    /// Spawn Executor Task
     pub fn spawn_executor<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
