@@ -4,6 +4,11 @@ mod flow;
 #[cfg(feature = "flow_scheduler")]
 pub use crate::runtime::scheduler::flow::FlowScheduler;
 
+#[cfg(feature = "gips_scheduler")]
+mod gips;
+#[cfg(feature = "gips_scheduler")]
+pub use crate::runtime::scheduler::gips::GipsScheduler;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod smol;
 #[cfg(not(target_arch = "wasm32"))]
