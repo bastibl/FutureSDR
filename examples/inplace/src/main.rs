@@ -1,5 +1,6 @@
 use anyhow::Result;
 use futuresdr::prelude::*;
+use std::time::Instant;
 
 #[derive(Block)]
 struct VectorSource<T>
@@ -147,10 +148,10 @@ where
     }
 }
 
-fn main() -> Result<()> {
+fn run_inplace() -> Result<()> {
     let mut fg = Flowgraph::new();
 
-    let orig = Vec::from_iter(0..999_999u32);
+    let orig = Vec::from_iter(0..99_999_999u32);
 
     let mut src = VectorSource::new(orig.clone());
     src.output().inject_buffers(4);
@@ -160,7 +161,9 @@ fn main() -> Result<()> {
     connect!(fg, src > apply > snk);
     connect!(fg, src < snk);
 
+    let now = Instant::now();
     Runtime::new().run(fg)?;
+    println!("in-place took {:?}", now.elapsed());
 
     let snk = snk.get()?;
     assert_eq!(snk.items.len(), orig.len());
@@ -169,5 +172,71 @@ fn main() -> Result<()> {
         .zip(orig.iter())
         .for_each(|(a, b)| assert_eq!(*a, b.wrapping_add(1)));
 
+    Ok(())
+}
+
+fn run_hybrid() -> Result<()> {
+    use futuresdr::blocks::VectorSink;
+    use futuresdr::blocks::VectorSource;
+
+    let mut fg = Flowgraph::new();
+
+    let orig = Vec::from_iter(0..99_999_999u32);
+
+    let mut src = VectorSource::<u32, circuit::Writer<u32>>::new(orig.clone());
+    src.output().inject_buffers(4);
+    let apply = Apply::new();
+    let snk = VectorSink::new(orig.len());
+
+    connect!(fg, src > apply > snk);
+    connect!(fg, src < snk);
+
+    let now = Instant::now();
+    Runtime::new().run(fg)?;
+    println!("hybrid took {:?}", now.elapsed());
+
+    let snk = snk.get()?;
+    assert_eq!(snk.items().len(), orig.len());
+    snk.items()
+        .iter()
+        .zip(orig.iter())
+        .for_each(|(a, b)| assert_eq!(*a, b.wrapping_add(1)));
+
+    Ok(())
+}
+
+fn run_outofplace() -> Result<()> {
+    use futuresdr::blocks::Apply;
+    use futuresdr::blocks::VectorSink;
+    use futuresdr::blocks::VectorSource;
+
+    let mut fg = Flowgraph::new();
+
+    let orig = Vec::from_iter(0..99_999_999u32);
+
+    let src: VectorSource<u32> = VectorSource::new(orig.clone());
+    let apply: Apply<_, _, _> = Apply::new(|i: &u32| i.wrapping_add(1));
+    let snk: VectorSink<u32> = VectorSink::new(orig.len());
+
+    connect!(fg, src > apply > snk);
+
+    let now = Instant::now();
+    Runtime::new().run(fg)?;
+    println!("out-of-place took {:?}", now.elapsed());
+
+    let snk = snk.get()?;
+    assert_eq!(snk.items().len(), orig.len());
+    snk.items()
+        .iter()
+        .zip(orig.iter())
+        .for_each(|(a, b)| assert_eq!(*a, b.wrapping_add(1)));
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    run_inplace()?;
+    run_hybrid()?;
+    run_outofplace()?;
     Ok(())
 }

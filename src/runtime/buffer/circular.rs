@@ -156,7 +156,8 @@ where
             self.min_buffer_size_in_items = Some(buffer_size / size_of::<D>());
             dest.min_buffer_size_in_items = Some(buffer_size / size_of::<D>());
 
-            self.writer = Some(generic::Circular::with_capacity(buffer_size).unwrap());
+            self.writer =
+                Some(generic::Circular::with_capacity(buffer_size / size_of::<D>()).unwrap());
         } else {
             if self.min_buffer_size_in_items.unwrap_or(0)
                 < dest.min_buffer_size_in_items.unwrap_or(0)

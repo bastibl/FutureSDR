@@ -7,10 +7,13 @@ use crate::runtime::ItemTag;
 use crate::runtime::PortId;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
+use crate::runtime::buffer::CpuBufferReader;
+use crate::runtime::buffer::CpuBufferWriter;
 use crate::runtime::buffer::CpuSample;
 use crate::runtime::buffer::InplaceBuffer;
 use crate::runtime::buffer::InplaceReader;
 use crate::runtime::buffer::InplaceWriter;
+use crate::runtime::buffer::Tags;
 use crate::runtime::config;
 use futures::prelude::*;
 use std::any::Any;
@@ -86,6 +89,12 @@ where
     writer_output: PortId,
     inbound: Arc<Mutex<Vec<Buffer<T>>>>,
     outbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
+    // for CPU buffer writer
+    current: Option<Buffer<T>>,
+    min_items: usize,
+    min_buffer_size_in_items: Option<usize>,
+    // dummy to return when no buffer available
+    tags: Vec<ItemTag>,
 }
 
 impl<T> Writer<T>
@@ -103,6 +112,10 @@ where
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
+            current: None,
+            min_items: 1,
+            min_buffer_size_in_items: None,
+            tags: Vec::new(),
         }
     }
 
@@ -154,6 +167,9 @@ where
     }
 
     async fn notify_finished(&mut self) {
+        if let Some(b) = self.current.take() {
+            self.outbound.lock().unwrap().push_back(b);
+        }
         let _ = self
             .reader_inbox
             .send(BlockMessage::StreamInputDone {
@@ -202,6 +218,67 @@ where
         }
     }
 }
+impl<T> CpuBufferWriter for Writer<T>
+where
+    T: CpuSample,
+{
+    type Item = T;
+
+    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags) {
+        if self.current.is_none() {
+            match self.inbound.lock().unwrap().pop() {
+                Some(mut b) => {
+                    b.valid = 0;
+                    b.tags.clear();
+                    self.current = Some(b);
+                }
+                None => {
+                    return (&mut [], Tags::new(&mut self.tags, 0));
+                }
+            }
+        }
+
+        let c = self.current.as_mut().unwrap();
+        (&mut c.buffer[c.valid..], Tags::new(&mut c.tags, c.valid))
+    }
+
+    fn produce(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+
+        let c = self.current.as_mut().unwrap();
+        debug_assert!(n <= c.buffer.len() - c.valid);
+        c.valid += n;
+        if (c.buffer.len() - c.valid) < self.min_items {
+            let c = self.current.take().unwrap();
+            self.outbound.lock().unwrap().push_back(c);
+
+            let _ = self.reader_inbox.try_send(BlockMessage::Notify);
+
+            // make sure to be called again, if we have another buffer queued
+            if !self.inbound.lock().unwrap().is_empty() {
+                let _ = self.writer_inbox.try_send(BlockMessage::Notify);
+            }
+        }
+    }
+
+    fn set_min_items(&mut self, n: usize) {
+        self.min_items = std::cmp::max(self.min_items, n);
+    }
+
+    fn set_min_buffer_size_in_items(&mut self, n: usize) {
+        self.min_buffer_size_in_items = match self.min_buffer_size_in_items {
+            Some(c) => Some(std::cmp::max(n, c)),
+            None => Some(std::cmp::max(n, 1)),
+        }
+    }
+
+    fn max_items(&self) -> usize {
+        warn!("max_items not implemented for circuit writer");
+        1
+    }
+}
 
 /// Circuit Reader
 pub struct Reader<T>
@@ -217,6 +294,8 @@ where
     #[allow(clippy::type_complexity)]
     circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Buffer<T>>>>)>,
     finished: bool,
+    // for CPU buffer reader
+    current: Option<(Buffer<T>, usize)>,
 }
 
 impl<T> Reader<T>
@@ -235,6 +314,7 @@ where
             inbound: Arc::new(Mutex::new(VecDeque::new())),
             circuit_start: None,
             finished: false,
+            current: None,
         }
     }
 }
@@ -288,7 +368,6 @@ where
     }
 
     fn finished(&self) -> bool {
-        // Todo: also check for current buffer
         self.finished && self.inbound.lock().unwrap().is_empty()
     }
 
@@ -324,5 +403,70 @@ where
         } else {
             warn!("Put empty buffer in non-connected circuit reader. Dropping buffer.")
         }
+    }
+}
+
+impl<T> CpuBufferReader for Reader<T>
+where
+    T: CpuSample,
+{
+    type Item = T;
+
+    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
+        if self.current.is_none() {
+            match self.inbound.lock().unwrap().pop_front() {
+                Some(b) => {
+                    self.current = Some((b, 0));
+                }
+                _ => {
+                    static V: Vec<ItemTag> = vec![];
+                    return (&[], &V);
+                }
+            }
+        }
+
+        let (c, o) = self.current.as_mut().unwrap();
+        (&c.buffer[*o..c.valid], &c.tags)
+    }
+
+    fn consume(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+
+        let (c, o) = self.current.as_mut().unwrap();
+        debug_assert!(n <= c.valid - *o);
+        *o += n;
+
+        if *o == c.valid {
+            let (b, _) = self.current.take().unwrap();
+            match self.circuit_start {
+                Some((ref mut inbox, ref queue)) => {
+                    queue.lock().unwrap().push(b);
+                    let _ = inbox.try_send(BlockMessage::Notify);
+                },
+                None => {
+                    warn!("circuit reader used as cpu buffer reader but not connected to circuit start. dropping buffer.");
+                }
+            }
+
+            // make sure to be called again, if we have another buffer queued
+            if !self.inbound.lock().unwrap().is_empty() {
+                let _ = self.reader_inbox.try_send(BlockMessage::Notify);
+            }
+        }
+    }
+
+    fn set_min_items(&mut self, _n: usize) {
+        warn!("set_min_items not implemented for circuit reader");
+    }
+
+    fn set_min_buffer_size_in_items(&mut self, _n: usize) {
+        warn!("set_min_buffer_size_in_items not implemented for circuit reader");
+    }
+
+    fn max_items(&self) -> usize {
+        warn!("max_items not implemented for circuit reader");
+        1
     }
 }
