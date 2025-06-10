@@ -444,9 +444,11 @@ where
                 Some((ref mut inbox, ref queue)) => {
                     queue.lock().unwrap().push(b);
                     let _ = inbox.try_send(BlockMessage::Notify);
-                },
+                }
                 None => {
-                    warn!("circuit reader used as cpu buffer reader but not connected to circuit start. dropping buffer.");
+                    warn!(
+                        "circuit reader used as cpu buffer reader but not connected to circuit start. dropping buffer."
+                    );
                 }
             }
 
