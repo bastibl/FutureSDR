@@ -1,5 +1,9 @@
 //! Buffer Implementations for CPU and Accelerator Memory
 
+// ==================== BURN =======================
+#[cfg(feature = "burn")]
+pub mod burn;
+
 /// In-place circuit buffer
 pub mod circuit;
 
