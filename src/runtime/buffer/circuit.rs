@@ -47,10 +47,6 @@ where
             tags: Vec::new(),
         }
     }
-    /// Set the number of valid items in the buffer
-    pub fn set_valid(&mut self, valid: usize) {
-        self.valid = valid;
-    }
 }
 
 impl<T> Default for Buffer<T>
@@ -67,6 +63,10 @@ where
     T: CpuSample,
 {
     type Item = T;
+
+    fn set_valid(&mut self, valid: usize) {
+        self.valid = valid;
+    }
 
     fn slice(&mut self) -> &mut [Self::Item] {
         &mut self.buffer[0..self.valid]

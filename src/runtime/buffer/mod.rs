@@ -173,6 +173,8 @@ pub trait CpuBufferWriter: BufferWriter + Default + Send {
 pub trait InplaceBuffer {
     /// Type of the samples in the buffer
     type Item: CpuSample;
+    /// Set number of valid samples
+    fn set_valid(&mut self, valid: usize);
     /// Items in the buffer
     fn slice(&mut self) -> &mut [Self::Item];
     /// Items in the buffer and tags
@@ -180,7 +182,7 @@ pub trait InplaceBuffer {
 }
 
 /// In-Place Reader
-pub trait InplaceReader {
+pub trait InplaceReader: BufferReader + Default + Send {
     /// Items in the reader
     type Item: CpuSample;
     /// Buffer type
@@ -195,7 +197,7 @@ pub trait InplaceReader {
 }
 
 /// In-Place Writer
-pub trait InplaceWriter {
+pub trait InplaceWriter: BufferWriter + Default + Send {
     /// Items in the reader
     type Item: CpuSample;
     /// Buffer type

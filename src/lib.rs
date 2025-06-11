@@ -111,6 +111,8 @@ pub mod prelude {
     pub use futuresdr::runtime::buffer::InplaceBuffer;
     pub use futuresdr::runtime::buffer::InplaceReader;
     pub use futuresdr::runtime::buffer::InplaceWriter;
+    #[cfg(feature = "burn")]
+    pub use futuresdr::runtime::buffer::burn as burn_buffer;
     pub use futuresdr::runtime::buffer::circuit;
     #[cfg(not(target_arch = "wasm32"))]
     pub use futuresdr::runtime::buffer::circular;

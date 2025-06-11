@@ -68,7 +68,7 @@ required-features = ["seify_dummy"]
 anyhow = "1.0"
 async-lock = "3.4"
 async-trait = "0.1"
-burn = { version = "0.17.0", features = [
+burn = { version = "0.17", features = [
   "ndarray",
   "webgpu",
   "autotune",

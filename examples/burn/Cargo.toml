@@ -6,9 +6,19 @@ edition = "2024"
 [workspace]
 
 [dependencies]
-burn = { version = "0.17.0", features = ["ndarray", "tui", "train", "wgpu", "webgpu", "autotune", "fusion"] }
-ndarray = "0.16"
-serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
-ndarray-npy = "0.9"
+burn = { version = "0.17", features = [
+  "ndarray",
+  "tui",
+  "train",
+  "wgpu",
+  "webgpu",
+  "autotune",
+  "fusion",
+] }
+futuresdr = { path = "../..", features = ["burn"] }
+inplace = { path = "../inplace" }
 log = "0.4"
+ndarray = "0.16"
+ndarray-npy = "0.9"
+serde = { version = "1.0", features = ["derive"] }

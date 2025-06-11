@@ -7,21 +7,19 @@ use crate::runtime::ItemTag;
 use crate::runtime::PortId;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
-use crate::runtime::buffer::CpuBufferReader;
-use crate::runtime::buffer::CpuBufferWriter;
 use crate::runtime::buffer::CpuSample;
 use crate::runtime::buffer::InplaceBuffer;
 use crate::runtime::buffer::InplaceReader;
 use crate::runtime::buffer::InplaceWriter;
-use crate::runtime::buffer::Tags;
 use crate::runtime::config;
 use burn::prelude::*;
 use burn::tensor::BasicOps;
-use burn::tensor::Element;
 use burn::tensor::TensorKind;
 use futures::prelude::*;
 use std::any::Any;
 use std::collections::VecDeque;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -29,7 +27,8 @@ use std::sync::Mutex;
 pub struct Buffer<B, E>
 where
     B: Backend,
-    E: Element + TensorKind<B> + BasicOps<B> + CpuSample,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     valid: usize,
     tensor: Tensor<B, 1, E>,
@@ -40,7 +39,8 @@ where
 impl<B, E> Buffer<B, E>
 where
     B: Backend,
-    E: Element + TensorKind<B> + BasicOps<B> + CpuSample,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     /// Set the number of valid items in the buffer
     pub fn new(device: &B::Device) -> Self {
@@ -57,18 +57,19 @@ where
             tags: Vec::new(),
         }
     }
-    /// Set the number of valid items in the buffer
-    pub fn set_valid(&mut self, valid: usize) {
-        self.valid = valid;
-    }
 }
 
 impl<B, E> InplaceBuffer for Buffer<B, E>
 where
     B: Backend,
-    E: Element + TensorKind<B> + BasicOps<B> + CpuSample,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
-    type Item = E;
+    type Item = E::Elem;
+
+    fn set_valid(&mut self, valid: usize) {
+        self.valid = valid;
+    }
 
     fn slice(&mut self) -> &mut [Self::Item] {
         &mut self.data.as_mut_slice().unwrap()[0..self.valid]
@@ -80,28 +81,29 @@ where
 }
 
 /// Circuit Writer
-pub struct Writer<T>
+pub struct Writer<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     reader_inbox: Sender<BlockMessage>,
     reader_input: PortId,
     writer_inbox: Sender<BlockMessage>,
     writer_id: BlockId,
     writer_output: PortId,
-    inbound: Arc<Mutex<Vec<Buffer<T>>>>,
-    outbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
-    // for CPU buffer writer
-    current: Option<Buffer<T>>,
-    min_items: usize,
-    min_buffer_size_in_items: Option<usize>,
+    outbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
     // dummy to return when no buffer available
-    tags: Vec<ItemTag>,
+    buffer_size_in_items: Option<usize>,
+    device: Option<Device<B>>,
+    n_buffers: Arc<AtomicUsize>,
 }
 
-impl<T> Writer<T>
+impl<B, E> Writer<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     /// Create circuit buffer writer
     pub fn new() -> Self {
@@ -112,35 +114,44 @@ where
             writer_inbox: rx,
             writer_id: BlockId::default(),
             writer_output: PortId::default(),
-            inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
-            current: None,
-            min_items: 1,
-            min_buffer_size_in_items: None,
-            tags: Vec::new(),
+            buffer_size_in_items: None,
+            device: None,
+            n_buffers: Arc::new(AtomicUsize::new(0)),
         }
     }
 
+    /// Set backend device
+    ///
+    /// This is required to create tensors
+    pub fn set_device(&mut self, device: &B::Device) {
+        self.device = Some(device.clone());
+    }
+
     /// Close Circuit
-    pub fn close_circuit(&mut self, end: &mut Reader<T>) {
-        end.circuit_start = Some((self.writer_inbox.clone(), self.inbound.clone()));
+    pub fn close_circuit(&mut self, end: &mut Reader<B, E>) {
+        end.n_buffers = self.n_buffers.clone();
     }
 }
 
-impl<T> Default for Writer<T>
+impl<B, E> Default for Writer<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> BufferWriter for Writer<T>
+impl<B, E> BufferWriter for Writer<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
-    type Reader = Reader<T>;
+    type Reader = Reader<B, E>;
 
     fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
         self.writer_id = block_id;
@@ -169,9 +180,6 @@ where
     }
 
     async fn notify_finished(&mut self) {
-        if let Some(b) = self.current.take() {
-            self.outbound.lock().unwrap().push_back(b);
-        }
         let _ = self
             .reader_inbox
             .send(BlockMessage::StreamInputDone {
@@ -189,13 +197,15 @@ where
     }
 }
 
-impl<T> InplaceWriter for Writer<T>
+impl<B, E> InplaceWriter for Writer<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
-    type Item = T;
+    type Item = E::Elem;
 
-    type Buffer = Buffer<T>;
+    type Buffer = Buffer<B, E>;
 
     fn put_full_buffer(&mut self, buffer: Self::Buffer) {
         self.outbound.lock().unwrap().push_back(buffer);
@@ -203,106 +213,56 @@ where
     }
 
     fn get_empty_buffer(&mut self) -> Option<Self::Buffer> {
-        self.inbound.lock().unwrap().pop().map(|mut b| {
-            b.valid = b.buffer.len();
-            b
-        })
+        if let Some(ref d) = self.device {
+            let n = self.n_buffers.load(Ordering::SeqCst);
+            if n > 0 {
+                self.n_buffers.fetch_sub(1, Ordering::SeqCst);
+                if let Some(s) = self.buffer_size_in_items {
+                    Some(Buffer::with_items(s, d))
+                } else {
+                    Some(Buffer::new(d))
+                }
+            } else {
+                None
+            }
+        } else {
+            warn!("cannot create tensor, device not set");
+            None
+        }
     }
 
     fn has_more_buffers(&mut self) -> bool {
-        !self.inbound.lock().unwrap().is_empty()
+       self.n_buffers.load(Ordering::SeqCst) > 0
     }
 
     fn inject_buffers_with_items(&mut self, n_buffers: usize, n_items: usize) {
-        let mut inbound = self.inbound.lock().unwrap();
-        for _ in 0..n_buffers {
-            inbound.push(Buffer::with_items(n_items));
-        }
-    }
-}
-impl<T> CpuBufferWriter for Writer<T>
-where
-    T: CpuSample,
-{
-    type Item = T;
-
-    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags) {
-        if self.current.is_none() {
-            match self.inbound.lock().unwrap().pop() {
-                Some(mut b) => {
-                    b.valid = 0;
-                    b.tags.clear();
-                    self.current = Some(b);
-                }
-                None => {
-                    return (&mut [], Tags::new(&mut self.tags, 0));
-                }
-            }
-        }
-
-        let c = self.current.as_mut().unwrap();
-        (&mut c.buffer[c.valid..], Tags::new(&mut c.tags, c.valid))
-    }
-
-    fn produce(&mut self, n: usize) {
-        if n == 0 {
-            return;
-        }
-
-        let c = self.current.as_mut().unwrap();
-        debug_assert!(n <= c.buffer.len() - c.valid);
-        c.valid += n;
-        if (c.buffer.len() - c.valid) < self.min_items {
-            let c = self.current.take().unwrap();
-            self.outbound.lock().unwrap().push_back(c);
-
-            let _ = self.reader_inbox.try_send(BlockMessage::Notify);
-
-            // make sure to be called again, if we have another buffer queued
-            if !self.inbound.lock().unwrap().is_empty() {
-                let _ = self.writer_inbox.try_send(BlockMessage::Notify);
-            }
-        }
-    }
-
-    fn set_min_items(&mut self, n: usize) {
-        self.min_items = std::cmp::max(self.min_items, n);
-    }
-
-    fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        self.min_buffer_size_in_items = match self.min_buffer_size_in_items {
-            Some(c) => Some(std::cmp::max(n, c)),
-            None => Some(std::cmp::max(n, 1)),
-        }
-    }
-
-    fn max_items(&self) -> usize {
-        warn!("max_items not implemented for circuit writer");
-        1
+        self.buffer_size_in_items = Some(n_items);
+        self.n_buffers.fetch_add(n_buffers, Ordering::SeqCst);
     }
 }
 
 /// Circuit Reader
-pub struct Reader<T>
+pub struct Reader<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     reader_inbox: Sender<BlockMessage>,
     reader_id: BlockId,
     reader_input: PortId,
     writer_inbox: Sender<BlockMessage>,
     writer_output: PortId,
-    inbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
-    #[allow(clippy::type_complexity)]
-    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Buffer<T>>>>)>,
+    inbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
     finished: bool,
-    // for CPU buffer reader
-    current: Option<(Buffer<T>, usize)>,
+    n_buffers: Arc<AtomicUsize>,
 }
 
-impl<T> Reader<T>
+impl<B, E> Reader<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     /// Create circuit buffer reader
     pub fn new() -> Self {
@@ -314,16 +274,17 @@ where
             writer_inbox: rx,
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(VecDeque::new())),
-            circuit_start: None,
             finished: false,
-            current: None,
+            n_buffers: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
 
-impl<T> Default for Reader<T>
+impl<B, E> Default for Reader<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     fn default() -> Self {
         Self::new()
@@ -331,9 +292,11 @@ where
 }
 
 #[async_trait]
-impl<T> BufferReader for Reader<T>
+impl<B, E> BufferReader for Reader<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
@@ -382,13 +345,15 @@ where
     }
 }
 
-impl<T> InplaceReader for Reader<T>
+impl<B, E> InplaceReader for Reader<B, E>
 where
-    T: CpuSample,
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
 {
-    type Item = T;
+    type Item = E::Elem;
 
-    type Buffer = Buffer<T>;
+    type Buffer = Buffer<B, E>;
 
     fn get_full_buffer(&mut self) -> Option<Self::Buffer> {
         self.inbound.lock().unwrap().pop_front()
@@ -398,79 +363,9 @@ where
         !self.inbound.lock().unwrap().is_empty()
     }
 
-    fn put_empty_buffer(&mut self, buffer: Self::Buffer) {
-        if let Some((ref mut inbox, ref buffers)) = self.circuit_start {
-            buffers.lock().unwrap().push(buffer);
-            let _ = inbox.try_send(BlockMessage::Notify);
-        } else {
-            warn!("Put empty buffer in non-connected circuit reader. Dropping buffer.")
-        }
+    fn put_empty_buffer(&mut self, _buffer: Self::Buffer) {
+        self.n_buffers.fetch_add(1, Ordering::SeqCst);
+        let _ = self.writer_inbox.try_send(BlockMessage::Notify);
     }
 }
 
-impl<T> CpuBufferReader for Reader<T>
-where
-    T: CpuSample,
-{
-    type Item = T;
-
-    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
-        if self.current.is_none() {
-            match self.inbound.lock().unwrap().pop_front() {
-                Some(b) => {
-                    self.current = Some((b, 0));
-                }
-                _ => {
-                    static V: Vec<ItemTag> = vec![];
-                    return (&[], &V);
-                }
-            }
-        }
-
-        let (c, o) = self.current.as_mut().unwrap();
-        (&c.buffer[*o..c.valid], &c.tags)
-    }
-
-    fn consume(&mut self, n: usize) {
-        if n == 0 {
-            return;
-        }
-
-        let (c, o) = self.current.as_mut().unwrap();
-        debug_assert!(n <= c.valid - *o);
-        *o += n;
-
-        if *o == c.valid {
-            let (b, _) = self.current.take().unwrap();
-            match self.circuit_start {
-                Some((ref mut inbox, ref queue)) => {
-                    queue.lock().unwrap().push(b);
-                    let _ = inbox.try_send(BlockMessage::Notify);
-                }
-                None => {
-                    warn!(
-                        "circuit reader used as cpu buffer reader but not connected to circuit start. dropping buffer."
-                    );
-                }
-            }
-
-            // make sure to be called again, if we have another buffer queued
-            if !self.inbound.lock().unwrap().is_empty() {
-                let _ = self.reader_inbox.try_send(BlockMessage::Notify);
-            }
-        }
-    }
-
-    fn set_min_items(&mut self, _n: usize) {
-        warn!("set_min_items not implemented for circuit reader");
-    }
-
-    fn set_min_buffer_size_in_items(&mut self, _n: usize) {
-        warn!("set_min_buffer_size_in_items not implemented for circuit reader");
-    }
-
-    fn max_items(&self) -> usize {
-        warn!("max_items not implemented for circuit reader");
-        1
-    }
-}
