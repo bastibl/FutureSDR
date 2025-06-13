@@ -163,6 +163,7 @@ where
     ) -> Result<()> {
         if let Some(mut b) = self.input.get_full_buffer() {
             self.items.extend_from_slice(b.slice());
+            self.input.put_empty_buffer(b);
 
             if self.input.has_more_buffers() {
                 io.call_again = true;

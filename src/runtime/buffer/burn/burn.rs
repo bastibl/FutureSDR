@@ -2,6 +2,7 @@ use crate::channel::mpsc::Sender;
 use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
+use crate::runtime::config::config;
 use crate::runtime::Error;
 use crate::runtime::ItemTag;
 use crate::runtime::PortId;
@@ -20,15 +21,15 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(Clone)]
-struct BufferReuse<B, E>
+enum BufferState<B, E>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
     E::Elem: CpuSample,
 {
-    queue: Arc<Mutex<Vec<Buffer<B, E>>>>,
-    inbox: Sender<BlockMessage>,
+    Tensor(Tensor<B, 1, E>),
+    Data(TensorData),
+    Empty,
 }
 
 /// In-place buffer
@@ -39,10 +40,9 @@ where
     E::Elem: CpuSample,
 {
     valid: usize,
-    pub tensor: Tensor<B, 1, E>,
-    pub data: TensorData,
+    state: BufferState<B, E>,
+    device: B::Device,
     tags: Vec<ItemTag>,
-    reuse: Option<BufferReuse<B, E>>,
 }
 
 impl<B, E> Buffer<B, E>
@@ -52,15 +52,51 @@ where
     E::Elem: CpuSample,
 {
     /// Create buffer
-    fn with_items(items: usize, device: &B::Device, reuse: Option<BufferReuse<B, E>>) -> Self {
-        let tensor = Tensor::empty([items], device);
-        let data = tensor.to_data();
+    fn with_items(items: usize, device: &B::Device) -> Self {
+        let data = TensorData::zeros::<E::Elem, _>([items]);
         Self {
             valid: 0,
-            tensor,
-            data,
+            state: BufferState::Data(data),
+            device: device.clone(),
             tags: Vec::new(),
-            reuse,
+        }
+    }
+
+    /// Create a Buffer from a Tensor
+    pub fn from_tensor(tensor: Tensor<B, 1, E>) -> Self {
+        let device = tensor.device();
+        Self {
+            valid: tensor.shape().num_elements(),
+            state: BufferState::Tensor(tensor),
+            device,
+            tags: Vec::new(),
+        }
+    }
+
+    /// Consume the buffer to create a Tensor
+    pub fn into_tensor(self) -> Tensor<B, 1, E> {
+        match self.state {
+            BufferState::Tensor(t) => {
+                t.slice(0..self.valid)
+            },
+            BufferState::Data(d) => {
+                Tensor::from_data(d, &self.device).slice(0..self.valid)
+            },
+            BufferState::Empty => unreachable!()
+        }
+    }
+
+    fn ensure_data(&mut self) {
+        if matches!(self.state, BufferState::Tensor(_)) && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty) {
+            self.state = BufferState::Data(t.into_data());
+        }
+    }
+
+    fn num_elements(&self) -> usize {
+        match &self.state {
+            BufferState::Tensor(t) => t.shape().num_elements(),
+            BufferState::Data(d) => d.num_elements(),
+            BufferState::Empty => unreachable!()
         }
     }
 }
@@ -78,38 +114,22 @@ where
     }
 
     fn slice(&mut self) -> &mut [Self::Item] {
-        &mut self.data.as_mut_slice().unwrap()[0..self.valid]
+        self.ensure_data();
+        match self.state {
+            BufferState::Data(ref mut d) => {
+                &mut d.as_mut_slice().unwrap()[0..self.valid]
+            }
+            _ => unreachable!()
+        }
     }
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>) {
-        (
-            &mut self.data.as_mut_slice().unwrap()[0..self.valid],
-            &mut self.tags,
-        )
-    }
-
-    fn detach(&mut self) {
-        self.reuse = None;
-    }
-}
-
-impl<B, E> Drop for Buffer<B, E>
-where
-    B: Backend,
-    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
-{
-    fn drop(&mut self) {
-        if let Some(r) = self.reuse.take() {
-            let mut n = r.inbox.clone();
-            r.queue.clone().lock().unwrap().push(Buffer {
-                valid: 0,
-                tensor: self.tensor.clone(),
-                data: self.data.clone(),
-                tags: Vec::new(),
-                reuse: Some(r),
-            });
-            let _ = n.try_send(BlockMessage::Notify);
+        self.ensure_data();
+        match self.state {
+            BufferState::Data(ref mut d) => {
+                (&mut d.as_mut_slice().unwrap()[0..self.valid], &mut self.tags)
+            }
+            _ => unreachable!()
         }
     }
 }
@@ -126,8 +146,9 @@ where
     writer_inbox: Sender<BlockMessage>,
     writer_id: BlockId,
     writer_output: PortId,
-    inbound: Arc<Mutex<Vec<Buffer<B, E>>>>,
+    inbound: Arc<Mutex<Vec<Option<Buffer<B, E>>>>>,
     outbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
+    buffer_size_in_items: usize,
     // dummy to return when no buffer available
     device: Option<Device<B>>,
 }
@@ -149,6 +170,7 @@ where
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
+            buffer_size_in_items: config().buffer_size / std::mem::size_of::<E::Elem>(),
             device: None,
         }
     }
@@ -158,6 +180,11 @@ where
     /// This is required to create tensors
     pub fn set_device(&mut self, device: &B::Device) {
         self.device = Some(device.clone());
+    }
+
+    /// Close Circuit
+    pub fn close_circuit(&mut self, end: &mut Reader<B, E>) {
+        end.circuit_start = Some((self.writer_inbox.clone(), self.inbound.clone()));
     }
 }
 
@@ -184,13 +211,6 @@ where
         self.writer_id = block_id;
         self.writer_output = port_id;
         self.writer_inbox = inbox;
-
-        let mut q = self.inbound.lock().unwrap();
-        q.iter_mut().for_each(|b| 
-            if let Some(ref mut r) = b.reuse {
-                r.inbox = self.writer_inbox.clone();
-            }
-        )
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -247,9 +267,18 @@ where
     }
 
     fn get_empty_buffer(&mut self) -> Option<Self::Buffer> {
-        self.inbound.lock().unwrap().pop().map(|mut b| {
-            b.set_valid(b.data.num_elements());
-            b
+        self.inbound.lock().unwrap().pop().and_then(|b| {
+            if let Some(mut b) = b {
+                b.set_valid(b.num_elements());
+                Some(b)
+            } else if let Some(ref d) = self.device {
+                let mut b = Buffer::with_items(self.buffer_size_in_items, d);
+                b.set_valid(b.num_elements());
+                Some(b)
+            } else {
+                warn!("cannot create buffers/tensors, device not set");
+                None
+            }
         })
     }
 
@@ -258,16 +287,11 @@ where
     }
 
     fn inject_buffers_with_items(&mut self, n_buffers: usize, n_items: usize) {
+        self.buffer_size_in_items = n_items;
         if let Some(ref d) = self.device {
             let mut q = self.inbound.lock().unwrap();
-            let reuse = BufferReuse {
-                queue: self.inbound.clone(),
-                inbox: self.writer_inbox.clone(),
-            };
             for _ in 0..n_buffers {
-                let mut b = Buffer::with_items(n_items, d, Some(reuse.clone()));
-                b.set_valid(b.data.num_elements());
-                q.push(b);
+                q.push(Some(Buffer::with_items(n_items, d)));
             }
         } else {
             warn!("cannot create buffers/tensors, device not set");
@@ -288,6 +312,8 @@ where
     writer_inbox: Sender<BlockMessage>,
     writer_output: PortId,
     inbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
+    #[allow(clippy::type_complexity)]
+    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Option<Buffer<B, E>>>>>)>,
     finished: bool,
 }
 
@@ -307,6 +333,7 @@ where
             writer_inbox: rx,
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(VecDeque::new())),
+            circuit_start: None,
             finished: false,
         }
     }
@@ -393,5 +420,19 @@ where
 
     fn has_more_buffers(&mut self) -> bool {
         !self.inbound.lock().unwrap().is_empty()
+    }
+
+    fn put_empty_buffer(&mut self, buffer: Self::Buffer) {
+        if let Some((ref mut inbox, ref buffers)) = self.circuit_start {
+            buffers.lock().unwrap().push(Some(buffer));
+            let _ = inbox.try_send(BlockMessage::Notify);
+        }
+    }
+
+    fn notify_consumed_buffer(&mut self) {
+        if let Some((ref mut inbox, ref buffers)) = self.circuit_start {
+            buffers.lock().unwrap().push(None);
+            let _ = inbox.try_send(BlockMessage::Notify);
+        }
     }
 }

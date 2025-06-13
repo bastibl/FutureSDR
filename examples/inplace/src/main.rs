@@ -17,6 +17,7 @@ fn run_inplace() -> Result<()> {
     let snk = VectorSink::new(orig.len());
 
     connect!(fg, src > apply > snk);
+    connect!(fg, src < snk);
 
     let now = Instant::now();
     Runtime::new().run(fg)?;
@@ -46,6 +47,7 @@ fn run_hybrid() -> Result<()> {
     let snk = VectorSink::new(orig.len());
 
     connect!(fg, src > apply > snk);
+    connect!(fg, src < snk);
 
     let now = Instant::now();
     Runtime::new().run(fg)?;

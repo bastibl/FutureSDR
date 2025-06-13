@@ -2,6 +2,7 @@
 use anyhow::Result;
 use burn::backend::WebGpu;
 use burn::prelude::*;
+use futuresdr::prelude::burn_buffer::Buffer;
 use futuresdr::prelude::*;
 use inplace::VectorSink;
 use inplace::VectorSource;
@@ -59,19 +60,26 @@ where
     input: burn_buffer::Reader<B, Int>,
     #[output]
     output: burn_buffer::Writer<B, Int>,
-    device: B::Device,
 }
 
 impl<B> ApplyTensor<B>
 where
     B: Backend,
 {
-    fn new(device: &B::Device) -> Self {
+    fn new() -> Self {
         Self {
             input: Default::default(),
             output: Default::default(),
-            device: device.clone(),
         }
+    }
+}
+
+impl<B> Default for ApplyTensor<B>
+where
+    B: Backend,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -85,18 +93,12 @@ where
         _m: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
-        if let Some(mut b) = self.input.get_full_buffer() {
-            // println!("before {}", b.tensor);
-            // println!("before {}", b.data);
-            let t = Tensor::from_data(b.data.clone(), &self.device);
-            let t = t + 1;
-            b.tensor = t;
-            b.data = b.tensor.to_data();
+        if let Some(b) = self.input.get_full_buffer() {
+            let tensor = b.into_tensor();
+            let tensor = tensor + 1;
 
-            // println!("after {}", b.tensor);
-            // println!("after {}", b.data);
-
-            self.output.put_full_buffer(b);
+            self.output.put_full_buffer(Buffer::from_tensor(tensor));
+            self.input.notify_consumed_buffer();
 
             if self.input.has_more_buffers() {
                 io.call_again = true;
@@ -120,10 +122,11 @@ fn main() -> Result<()> {
     src.output().set_device(&device);
     src.output().inject_buffers(4);
     let apply = Apply::new();
-    let apply_tensor = ApplyTensor::new(&device);
+    let apply_tensor = ApplyTensor::new();
     let snk = VectorSink::new(orig.len());
 
     connect!(fg, src > apply > apply_tensor > snk);
+    connect!(fg, src < apply_tensor);
 
     Runtime::new().run(fg)?;
 
