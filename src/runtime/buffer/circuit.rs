@@ -14,12 +14,20 @@ use crate::runtime::buffer::InplaceBuffer;
 use crate::runtime::buffer::InplaceReader;
 use crate::runtime::buffer::InplaceWriter;
 use crate::runtime::buffer::Tags;
-use crate::runtime::config;
 use futures::prelude::*;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+#[derive(Clone)]
+struct BufferReuse<T>
+where
+    T: CpuSample,
+{
+    queue: Arc<Mutex<Vec<Buffer<T>>>>,
+    inbox: Sender<BlockMessage>,
+}
 
 /// In-place buffer
 pub struct Buffer<T>
@@ -29,32 +37,21 @@ where
     valid: usize,
     buffer: Box<[T]>,
     tags: Vec<ItemTag>,
+    reuse: Option<BufferReuse<T>>,
 }
 
 impl<T> Buffer<T>
 where
     T: CpuSample,
 {
-    /// Set the number of valid items in the buffer
-    pub fn new() -> Self {
-        Self::with_items(config::config().buffer_size / std::mem::size_of::<T>())
-    }
-    /// Set the number of valid items in the buffer
-    pub fn with_items(items: usize) -> Self {
+    /// Create buffer
+    fn with_items(items: usize, reuse: Option<BufferReuse<T>>) -> Self {
         Self {
             valid: 0,
             buffer: vec![T::default(); items].into_boxed_slice(),
             tags: Vec::new(),
+            reuse,
         }
-    }
-}
-
-impl<T> Default for Buffer<T>
-where
-    T: CpuSample,
-{
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -74,6 +71,31 @@ where
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>) {
         (&mut self.buffer[0..self.valid], &mut self.tags)
+    }
+
+    fn detach(&mut self) {
+        self.reuse = None;
+    }
+}
+
+impl<T> Drop for Buffer<T>
+where
+    T: CpuSample,
+{
+    fn drop(&mut self) {
+        if let Some(mut r) = self.reuse.take() {
+            let empty = Self {
+                valid: 0,
+                buffer: Vec::new().into_boxed_slice(),
+                tags: Vec::new(),
+                reuse: None,
+            };
+
+            let mut buf = std::mem::replace(self, empty);
+            buf.reuse = Some(r.clone());
+            r.queue.lock().unwrap().push(buf);
+            let _ = r.inbox.try_send(BlockMessage::Notify);
+        }
     }
 }
 
@@ -118,11 +140,6 @@ where
             tags: Vec::new(),
         }
     }
-
-    /// Close Circuit
-    pub fn close_circuit(&mut self, end: &mut Reader<T>) {
-        end.circuit_start = Some((self.writer_inbox.clone(), self.inbound.clone()));
-    }
 }
 
 impl<T> Default for Writer<T>
@@ -144,6 +161,13 @@ where
         self.writer_id = block_id;
         self.writer_output = port_id;
         self.writer_inbox = inbox;
+
+        let mut q = self.inbound.lock().unwrap();
+        q.iter_mut().for_each(|b| 
+            if let Some(ref mut r) = b.reuse {
+                r.inbox = self.writer_inbox.clone();
+            }
+        )
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -214,7 +238,13 @@ where
     fn inject_buffers_with_items(&mut self, n_buffers: usize, n_items: usize) {
         let mut inbound = self.inbound.lock().unwrap();
         for _ in 0..n_buffers {
-            inbound.push(Buffer::with_items(n_items));
+            inbound.push(Buffer::with_items(
+                n_items,
+                Some(BufferReuse {
+                    queue: self.inbound.clone(),
+                    inbox: self.writer_inbox.clone(),
+                }),
+            ));
         }
     }
 }
@@ -292,7 +322,6 @@ where
     writer_output: PortId,
     inbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
     #[allow(clippy::type_complexity)]
-    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Buffer<T>>>>)>,
     finished: bool,
     // for CPU buffer reader
     current: Option<(Buffer<T>, usize)>,
@@ -312,7 +341,6 @@ where
             writer_inbox: rx,
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(VecDeque::new())),
-            circuit_start: None,
             finished: false,
             current: None,
         }
@@ -395,15 +423,6 @@ where
     fn has_more_buffers(&mut self) -> bool {
         !self.inbound.lock().unwrap().is_empty()
     }
-
-    fn put_empty_buffer(&mut self, buffer: Self::Buffer) {
-        if let Some((ref mut inbox, ref buffers)) = self.circuit_start {
-            buffers.lock().unwrap().push(buffer);
-            let _ = inbox.try_send(BlockMessage::Notify);
-        } else {
-            warn!("Put empty buffer in non-connected circuit reader. Dropping buffer.")
-        }
-    }
 }
 
 impl<T> CpuBufferReader for Reader<T>
@@ -439,19 +458,7 @@ where
         *o += n;
 
         if *o == c.valid {
-            let (b, _) = self.current.take().unwrap();
-            match self.circuit_start {
-                Some((ref mut inbox, ref queue)) => {
-                    queue.lock().unwrap().push(b);
-                    let _ = inbox.try_send(BlockMessage::Notify);
-                }
-                None => {
-                    warn!(
-                        "circuit reader used as cpu buffer reader but not connected to circuit start. dropping buffer."
-                    );
-                }
-            }
-
+            self.current = None;
             // make sure to be called again, if we have another buffer queued
             if !self.inbound.lock().unwrap().is_empty() {
                 let _ = self.reader_inbox.try_send(BlockMessage::Notify);

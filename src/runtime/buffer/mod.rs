@@ -179,6 +179,8 @@ pub trait InplaceBuffer {
     fn slice(&mut self) -> &mut [Self::Item];
     /// Items in the buffer and tags
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>);
+    /// Detach the buffer from its source
+    fn detach(&mut self);
 }
 
 /// In-Place Reader
@@ -190,8 +192,6 @@ pub trait InplaceReader: BufferReader + Default + Send {
 
     /// Get next buffer
     fn get_full_buffer(&mut self) -> Option<Self::Buffer>;
-    /// Put an empty buffer to circle it back to the beginning of the circuit
-    fn put_empty_buffer(&mut self, buffer: Self::Buffer);
     /// Has more full buffers
     fn has_more_buffers(&mut self) -> bool;
 }

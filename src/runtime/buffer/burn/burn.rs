@@ -11,17 +11,25 @@ use crate::runtime::buffer::CpuSample;
 use crate::runtime::buffer::InplaceBuffer;
 use crate::runtime::buffer::InplaceReader;
 use crate::runtime::buffer::InplaceWriter;
-use crate::runtime::config;
 use burn::prelude::*;
 use burn::tensor::BasicOps;
 use burn::tensor::TensorKind;
 use futures::prelude::*;
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+#[derive(Clone)]
+struct BufferReuse<B, E>
+where
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
+{
+    queue: Arc<Mutex<Vec<Buffer<B, E>>>>,
+    inbox: Sender<BlockMessage>,
+}
 
 /// In-place buffer
 pub struct Buffer<B, E>
@@ -31,9 +39,10 @@ where
     E::Elem: CpuSample,
 {
     valid: usize,
-    tensor: Tensor<B, 1, E>,
-    data: TensorData,
+    pub tensor: Tensor<B, 1, E>,
+    pub data: TensorData,
     tags: Vec<ItemTag>,
+    reuse: Option<BufferReuse<B, E>>,
 }
 
 impl<B, E> Buffer<B, E>
@@ -42,12 +51,8 @@ where
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
     E::Elem: CpuSample,
 {
-    /// Set the number of valid items in the buffer
-    pub fn new(device: &B::Device) -> Self {
-        Self::with_items(config::config().buffer_size / std::mem::size_of::<E>(), device)
-    }
-    /// Set the number of valid items in the buffer
-    pub fn with_items(items: usize, device: &B::Device) -> Self {
+    /// Create buffer
+    fn with_items(items: usize, device: &B::Device, reuse: Option<BufferReuse<B, E>>) -> Self {
         let tensor = Tensor::empty([items], device);
         let data = tensor.to_data();
         Self {
@@ -55,6 +60,7 @@ where
             tensor,
             data,
             tags: Vec::new(),
+            reuse,
         }
     }
 }
@@ -76,7 +82,35 @@ where
     }
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>) {
-        (&mut self.data.as_mut_slice().unwrap()[0..self.valid], &mut self.tags)
+        (
+            &mut self.data.as_mut_slice().unwrap()[0..self.valid],
+            &mut self.tags,
+        )
+    }
+
+    fn detach(&mut self) {
+        self.reuse = None;
+    }
+}
+
+impl<B, E> Drop for Buffer<B, E>
+where
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    E::Elem: CpuSample,
+{
+    fn drop(&mut self) {
+        if let Some(r) = self.reuse.take() {
+            let mut n = r.inbox.clone();
+            r.queue.clone().lock().unwrap().push(Buffer {
+                valid: 0,
+                tensor: self.tensor.clone(),
+                data: self.data.clone(),
+                tags: Vec::new(),
+                reuse: Some(r),
+            });
+            let _ = n.try_send(BlockMessage::Notify);
+        }
     }
 }
 
@@ -92,11 +126,10 @@ where
     writer_inbox: Sender<BlockMessage>,
     writer_id: BlockId,
     writer_output: PortId,
+    inbound: Arc<Mutex<Vec<Buffer<B, E>>>>,
     outbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
     // dummy to return when no buffer available
-    buffer_size_in_items: Option<usize>,
     device: Option<Device<B>>,
-    n_buffers: Arc<AtomicUsize>,
 }
 
 impl<B, E> Writer<B, E>
@@ -114,10 +147,9 @@ where
             writer_inbox: rx,
             writer_id: BlockId::default(),
             writer_output: PortId::default(),
+            inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
-            buffer_size_in_items: None,
             device: None,
-            n_buffers: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -126,11 +158,6 @@ where
     /// This is required to create tensors
     pub fn set_device(&mut self, device: &B::Device) {
         self.device = Some(device.clone());
-    }
-
-    /// Close Circuit
-    pub fn close_circuit(&mut self, end: &mut Reader<B, E>) {
-        end.n_buffers = self.n_buffers.clone();
     }
 }
 
@@ -157,6 +184,13 @@ where
         self.writer_id = block_id;
         self.writer_output = port_id;
         self.writer_inbox = inbox;
+
+        let mut q = self.inbound.lock().unwrap();
+        q.iter_mut().for_each(|b| 
+            if let Some(ref mut r) = b.reuse {
+                r.inbox = self.writer_inbox.clone();
+            }
+        )
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -213,31 +247,31 @@ where
     }
 
     fn get_empty_buffer(&mut self) -> Option<Self::Buffer> {
-        if let Some(ref d) = self.device {
-            let n = self.n_buffers.load(Ordering::SeqCst);
-            if n > 0 {
-                self.n_buffers.fetch_sub(1, Ordering::SeqCst);
-                if let Some(s) = self.buffer_size_in_items {
-                    Some(Buffer::with_items(s, d))
-                } else {
-                    Some(Buffer::new(d))
-                }
-            } else {
-                None
-            }
-        } else {
-            warn!("cannot create tensor, device not set");
-            None
-        }
+        self.inbound.lock().unwrap().pop().map(|mut b| {
+            b.set_valid(b.data.num_elements());
+            b
+        })
     }
 
     fn has_more_buffers(&mut self) -> bool {
-       self.n_buffers.load(Ordering::SeqCst) > 0
+        !self.inbound.lock().unwrap().is_empty()
     }
 
     fn inject_buffers_with_items(&mut self, n_buffers: usize, n_items: usize) {
-        self.buffer_size_in_items = Some(n_items);
-        self.n_buffers.fetch_add(n_buffers, Ordering::SeqCst);
+        if let Some(ref d) = self.device {
+            let mut q = self.inbound.lock().unwrap();
+            let reuse = BufferReuse {
+                queue: self.inbound.clone(),
+                inbox: self.writer_inbox.clone(),
+            };
+            for _ in 0..n_buffers {
+                let mut b = Buffer::with_items(n_items, d, Some(reuse.clone()));
+                b.set_valid(b.data.num_elements());
+                q.push(b);
+            }
+        } else {
+            warn!("cannot create buffers/tensors, device not set");
+        }
     }
 }
 
@@ -255,7 +289,6 @@ where
     writer_output: PortId,
     inbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
     finished: bool,
-    n_buffers: Arc<AtomicUsize>,
 }
 
 impl<B, E> Reader<B, E>
@@ -275,7 +308,6 @@ where
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(VecDeque::new())),
             finished: false,
-            n_buffers: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -362,10 +394,4 @@ where
     fn has_more_buffers(&mut self) -> bool {
         !self.inbound.lock().unwrap().is_empty()
     }
-
-    fn put_empty_buffer(&mut self, _buffer: Self::Buffer) {
-        self.n_buffers.fetch_add(1, Ordering::SeqCst);
-        let _ = self.writer_inbox.try_send(BlockMessage::Notify);
-    }
 }
-

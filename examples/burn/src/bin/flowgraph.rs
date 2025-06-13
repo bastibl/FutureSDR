@@ -50,6 +50,67 @@ impl Kernel for Apply {
     }
 }
 
+#[derive(Block)]
+struct ApplyTensor<B>
+where
+    B: Backend,
+{
+    #[input]
+    input: burn_buffer::Reader<B, Int>,
+    #[output]
+    output: burn_buffer::Writer<B, Int>,
+    device: B::Device,
+}
+
+impl<B> ApplyTensor<B>
+where
+    B: Backend,
+{
+    fn new(device: &B::Device) -> Self {
+        Self {
+            input: Default::default(),
+            output: Default::default(),
+            device: device.clone(),
+        }
+    }
+}
+
+impl<B> Kernel for ApplyTensor<B>
+where
+    B: Backend,
+{
+    async fn work(
+        &mut self,
+        io: &mut WorkIo,
+        _m: &mut MessageOutputs,
+        _b: &mut BlockMeta,
+    ) -> Result<()> {
+        if let Some(mut b) = self.input.get_full_buffer() {
+            // println!("before {}", b.tensor);
+            // println!("before {}", b.data);
+            let t = Tensor::from_data(b.data.clone(), &self.device);
+            let t = t + 1;
+            b.tensor = t;
+            b.data = b.tensor.to_data();
+
+            // println!("after {}", b.tensor);
+            // println!("after {}", b.data);
+
+            self.output.put_full_buffer(b);
+
+            if self.input.has_more_buffers() {
+                io.call_again = true;
+            } else if self.input.finished() {
+                io.finished = true;
+            }
+        } else if self.input.finished() {
+            io.finished = true;
+        }
+
+        Ok(())
+    }
+}
+
 fn main() -> Result<()> {
     let device = burn::backend::wgpu::WgpuDevice::default();
     let mut fg = Flowgraph::new();
@@ -59,11 +120,10 @@ fn main() -> Result<()> {
     src.output().set_device(&device);
     src.output().inject_buffers(4);
     let apply = Apply::new();
+    let apply_tensor = ApplyTensor::new(&device);
     let snk = VectorSink::new(orig.len());
 
-    connect!(fg, src > apply > snk);
-    connect!(fg, src < apply);
-    connect!(fg, apply < snk);
+    connect!(fg, src > apply > apply_tensor > snk);
 
     Runtime::new().run(fg)?;
 
@@ -72,7 +132,7 @@ fn main() -> Result<()> {
     snk.items()
         .iter()
         .zip(orig.iter())
-        .for_each(|(a, b)| assert_eq!(*a, *b));
+        .for_each(|(a, b)| assert_eq!(*a, *b + 2));
 
     Ok(())
 }
