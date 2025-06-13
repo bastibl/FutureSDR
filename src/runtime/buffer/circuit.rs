@@ -76,11 +76,11 @@ where
     writer_output: PortId,
     inbound: Arc<Mutex<Vec<Option<Buffer<T>>>>>,
     outbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
+    buffer_size_in_items: usize,
     // for CPU buffer writer
     current: Option<Buffer<T>>,
     min_items: usize,
     min_buffer_size_in_items: Option<usize>,
-    buffer_size_in_items: usize,
     // dummy to return when no buffer available
     tags: Vec<ItemTag>,
 }
@@ -100,10 +100,10 @@ where
             writer_output: PortId::default(),
             inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
+            buffer_size_in_items: config().buffer_size / std::mem::size_of::<T>(),
             current: None,
             min_items: 1,
             min_buffer_size_in_items: None,
-            buffer_size_in_items: config().buffer_size / std::mem::size_of::<T>(),
             tags: Vec::new(),
         }
     }
