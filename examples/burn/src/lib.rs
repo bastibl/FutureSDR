@@ -25,4 +25,3 @@ pub struct TrainingConfig {
     #[config(default = 0.0001)]
     pub learning_rate: f64,
 }
-

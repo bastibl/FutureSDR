@@ -36,6 +36,7 @@ cd ${SCRIPTPATH}/perf/zynq && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/adsb && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/android-hw && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/audio && ${CARGO_FMT} --check
+cd ${SCRIPTPATH}/examples/burn && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/custom-routes && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/cw && ${CARGO_FMT} --check
 cd ${SCRIPTPATH}/examples/egui && ${CARGO_FMT} --check
@@ -62,7 +63,7 @@ cd ${SCRIPTPATH}/examples/zynq && ${CARGO_FMT} --check
 # CLIPPY
 ###########################################################
 # aaronia feature is not tested, since most user might not have the sdr installed
-cd ${SCRIPTPATH} && cargo clippy --all-targets --workspace --features=vulkan,zeromq,audio,flow_scheduler,tpb_scheduler,soapy,zynq,wgpu,seify_dummy -- -D warnings
+cd ${SCRIPTPATH} && cargo clippy --all-targets --workspace --features=burn,vulkan,zeromq,audio,flow_scheduler,tpb_scheduler,soapy,zynq,wgpu,seify_dummy -- -D warnings
 cd ${SCRIPTPATH}/crates/futuredsp && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/crates/macros && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/crates/remote && cargo clippy --all-targets -- -D warnings
@@ -85,6 +86,7 @@ cd ${SCRIPTPATH}/perf/zynq && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/adsb && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/android-hw && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/audio && cargo clippy --all-targets -- -D warnings
+cd ${SCRIPTPATH}/examples/burn && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/custom-routes && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/cw && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/egui && cargo clippy --all-targets -- -D warnings
@@ -108,7 +110,7 @@ cd ${SCRIPTPATH}/examples/zigbee && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/zynq && cargo clippy --all-targets -- -D warnings
 
 # WASM
-cd ${SCRIPTPATH} && cargo clippy --lib --workspace --features=audio,seify_dummy,wgpu --target=wasm32-unknown-unknown -- -D warnings
+cd ${SCRIPTPATH} && cargo clippy --lib --workspace --features=burn,audio,seify_dummy,wgpu --target=wasm32-unknown-unknown -- -D warnings
 cd ${SCRIPTPATH}/crates/macros && cargo clippy --all-targets --target=wasm32-unknown-unknown -- -D warnings
 cd ${SCRIPTPATH}/crates/prophecy && cargo clippy --all-targets --target=wasm32-unknown-unknown -- -D warnings
 cd ${SCRIPTPATH}/crates/types && cargo clippy --all-targets --target=wasm32-unknown-unknown -- -D warnings
@@ -147,6 +149,7 @@ cd ${SCRIPTPATH}/perf/zynq && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/adsb && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/android-hw && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/audio && cargo test --all-targets
+cd ${SCRIPTPATH}/examples/burn && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/custom-routes && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/cw && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/egui && cargo test --all-targets

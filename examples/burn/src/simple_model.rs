@@ -64,8 +64,7 @@ impl<B: Backend> Simple<B> {
 
 impl<B: AutodiffBackend> TrainStep<RadioDatasetBatch<B>, ClassificationOutput<B>> for Simple<B> {
     fn step(&self, batch: RadioDatasetBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
-        let item =
-            self.forward_classification(batch.iq_samples, batch.modulation);
+        let item = self.forward_classification(batch.iq_samples, batch.modulation);
         let grads = item.loss.backward();
         TrainOutput::new(self, grads, item)
     }

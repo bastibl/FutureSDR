@@ -4,7 +4,7 @@ use futuresdr::prelude::*;
 pub struct VectorSource<T, O = circuit::Writer<T>>
 where
     T: CpuSample,
-    O: InplaceWriter<Item = T>
+    O: InplaceWriter<Item = T>,
 {
     #[output]
     output: O,
@@ -15,7 +15,7 @@ where
 impl<T, O> VectorSource<T, O>
 where
     T: CpuSample,
-    O: InplaceWriter<Item = T>
+    O: InplaceWriter<Item = T>,
 {
     pub fn new(items: Vec<T>) -> Self {
         Self {
@@ -29,7 +29,7 @@ where
 impl<T, O> Kernel for VectorSource<T, O>
 where
     T: CpuSample,
-    O: InplaceWriter<Item = T>
+    O: InplaceWriter<Item = T>,
 {
     async fn work(
         &mut self,
@@ -59,8 +59,8 @@ where
 }
 
 #[derive(Block)]
-pub struct Apply<I = circuit::Reader<i32>, O = circuit::Writer<i32>> 
-where 
+pub struct Apply<I = circuit::Reader<i32>, O = circuit::Writer<i32>>
+where
     I: InplaceReader<Item = i32>,
     O: InplaceWriter<Item = i32, Buffer = I::Buffer>,
 {
@@ -71,7 +71,7 @@ where
 }
 
 impl<I, O> Apply<I, O>
-where 
+where
     I: InplaceReader<Item = i32>,
     O: InplaceWriter<Item = i32, Buffer = I::Buffer>,
 {
@@ -84,7 +84,7 @@ where
 }
 
 impl<I, O> Default for Apply<I, O>
-where 
+where
     I: InplaceReader<Item = i32>,
     O: InplaceWriter<Item = i32, Buffer = I::Buffer>,
 {
@@ -94,7 +94,7 @@ where
 }
 
 impl<I, O> Kernel for Apply<I, O>
-where 
+where
     I: InplaceReader<Item = i32>,
     O: InplaceWriter<Item = i32, Buffer = I::Buffer>,
 {
@@ -126,7 +126,7 @@ where
 pub struct VectorSink<T, I = circuit::Reader<T>>
 where
     T: CpuSample,
-    I: InplaceReader<Item = T>
+    I: InplaceReader<Item = T>,
 {
     #[input]
     input: I,
@@ -136,7 +136,7 @@ where
 impl<T, I> VectorSink<T, I>
 where
     T: CpuSample,
-    I: InplaceReader<Item = T>
+    I: InplaceReader<Item = T>,
 {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -153,7 +153,7 @@ where
 impl<T, I> Kernel for VectorSink<T, I>
 where
     T: CpuSample,
-    I: InplaceReader<Item = T>
+    I: InplaceReader<Item = T>,
 {
     async fn work(
         &mut self,

@@ -52,16 +52,12 @@ impl SimpleCNNConfig {
         let conv1 = Conv1dConfig::new(self.in_channels, self.conv_channels1, 5)
             .with_padding(PaddingConfig1d::Same)
             .init(device);
-        let pool1 = MaxPool1dConfig::new(2)
-            .with_stride(2)
-            .init(); // halves seq_len → 64
+        let pool1 = MaxPool1dConfig::new(2).with_stride(2).init(); // halves seq_len → 64
         // conv2: in_channels=64, out_channels=128, kernel_size=3, padding=1 → seq_len 64→64
         let conv2 = Conv1dConfig::new(self.conv_channels1, self.conv_channels2, 5)
             .with_padding(PaddingConfig1d::Same)
             .init(device);
-        let pool2 = MaxPool1dConfig::new(2)
-            .with_stride(2)
-            .init(); // halves again → 32
+        let pool2 = MaxPool1dConfig::new(2).with_stride(2).init(); // halves again → 32
         // fc layers: input_dim = conv_channels2 * (seq_len / 4) = 128 * 32 = 4096
         let fc1 = LinearConfig::new(self.conv_channels2 * (self.seq_len / 4), self.fc_hidden)
             .init(device);

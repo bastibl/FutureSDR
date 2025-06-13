@@ -59,11 +59,7 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
         .num_epochs(config.num_epochs)
         .grads_accumulation(4)
         .summary()
-        .build(
-            model,
-            config.optimizer.init(),
-            config.learning_rate,
-        );
+        .build(model, config.optimizer.init(), config.learning_rate);
 
     let model_trained = learner.fit(dataloader_train, dataloader_test);
 

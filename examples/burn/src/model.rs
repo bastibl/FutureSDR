@@ -138,14 +138,10 @@ impl McldnnConfig {
             .init(device);
 
         let lstm1 = LstmConfig::new(100, 128, true)
-            .with_initializer(Initializer::XavierUniform {
-                gain: 1.0,
-            })
+            .with_initializer(Initializer::XavierUniform { gain: 1.0 })
             .init(device);
         let lstm2 = LstmConfig::new(128, 128, true)
-            .with_initializer(Initializer::XavierUniform {
-                gain: 1.0,
-            })
+            .with_initializer(Initializer::XavierUniform { gain: 1.0 })
             .init(device);
         let fc1 = LinearConfig::new(128, 128)
             .with_initializer(Initializer::XavierUniform { gain: 1.0 })

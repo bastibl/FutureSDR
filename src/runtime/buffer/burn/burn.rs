@@ -2,7 +2,6 @@ use crate::channel::mpsc::Sender;
 use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
-use crate::runtime::config::config;
 use crate::runtime::Error;
 use crate::runtime::ItemTag;
 use crate::runtime::PortId;
@@ -12,6 +11,7 @@ use crate::runtime::buffer::CpuSample;
 use crate::runtime::buffer::InplaceBuffer;
 use crate::runtime::buffer::InplaceReader;
 use crate::runtime::buffer::InplaceWriter;
+use crate::runtime::config::config;
 use burn::prelude::*;
 use burn::tensor::BasicOps;
 use burn::tensor::TensorKind;
@@ -76,18 +76,16 @@ where
     /// Consume the buffer to create a Tensor
     pub fn into_tensor(self) -> Tensor<B, 1, E> {
         match self.state {
-            BufferState::Tensor(t) => {
-                t.slice(0..self.valid)
-            },
-            BufferState::Data(d) => {
-                Tensor::from_data(d, &self.device).slice(0..self.valid)
-            },
-            BufferState::Empty => unreachable!()
+            BufferState::Tensor(t) => t.slice(0..self.valid),
+            BufferState::Data(d) => Tensor::from_data(d, &self.device).slice(0..self.valid),
+            BufferState::Empty => unreachable!(),
         }
     }
 
     fn ensure_data(&mut self) {
-        if matches!(self.state, BufferState::Tensor(_)) && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty) {
+        if matches!(self.state, BufferState::Tensor(_))
+            && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty)
+        {
             self.state = BufferState::Data(t.into_data());
         }
     }
@@ -96,7 +94,7 @@ where
         match &self.state {
             BufferState::Tensor(t) => t.shape().num_elements(),
             BufferState::Data(d) => d.num_elements(),
-            BufferState::Empty => unreachable!()
+            BufferState::Empty => unreachable!(),
         }
     }
 }
@@ -116,20 +114,19 @@ where
     fn slice(&mut self) -> &mut [Self::Item] {
         self.ensure_data();
         match self.state {
-            BufferState::Data(ref mut d) => {
-                &mut d.as_mut_slice().unwrap()[0..self.valid]
-            }
-            _ => unreachable!()
+            BufferState::Data(ref mut d) => &mut d.as_mut_slice().unwrap()[0..self.valid],
+            _ => unreachable!(),
         }
     }
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>) {
         self.ensure_data();
         match self.state {
-            BufferState::Data(ref mut d) => {
-                (&mut d.as_mut_slice().unwrap()[0..self.valid], &mut self.tags)
-            }
-            _ => unreachable!()
+            BufferState::Data(ref mut d) => (
+                &mut d.as_mut_slice().unwrap()[0..self.valid],
+                &mut self.tags,
+            ),
+            _ => unreachable!(),
         }
     }
 }
@@ -146,6 +143,7 @@ where
     writer_inbox: Sender<BlockMessage>,
     writer_id: BlockId,
     writer_output: PortId,
+    #[allow(clippy::type_complexity)]
     inbound: Arc<Mutex<Vec<Option<Buffer<B, E>>>>>,
     outbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
     buffer_size_in_items: usize,
