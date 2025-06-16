@@ -7,9 +7,10 @@ use futuresdr::blocks::WebsocketSinkMode;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 use futuresdr::runtime::buffer::burn::Buffer;
+use futuresdr::runtime::scheduler::SmolScheduler;
 
 const FFT_SIZE: usize = 2048;
-const BATCH_SIZE: usize = 128;
+const BATCH_SIZE: usize = 16;
 type B = WebGpu<f32, i32>;
 
 #[derive(Block)]
@@ -68,8 +69,8 @@ where
             // Narrow the 3rd dim to [0..1] and [1..2], yielding [batch, n, 1]
             let x_re = t
                 .clone()
-                .narrow(2, 0, 1) // real channel  :contentReference[oaicite:0]{index=0}
-                .reshape([BATCH_SIZE, FFT_SIZE]); // -> [batch, n]  :contentReference[oaicite:1]{index=1}
+                .narrow(2, 0, 1) // real channel
+                .reshape([BATCH_SIZE, FFT_SIZE]); // -> [batch, n]
 
             let x_im = t
                 .narrow(2, 1, 1) // imag channel
@@ -91,15 +92,15 @@ where
 
             // 7) Magnitude and batch mean: √(re²+im²) → [batch, n] → mean_dim(0) → [n]
             let mag = x_re
-                .clone()
-                .mul(x_re)
-                .add(x_im.clone().mul(x_im.clone()))
-                .sqrt();
-            let mag = mag.mean_dim(0).reshape([FFT_SIZE]);
+                .powi_scalar(2)
+                .add(x_im.powi_scalar(2))
+                .sqrt()
+                .mean_dim(0)
+                .reshape([FFT_SIZE]);
 
             let half = FFT_SIZE / 2;
             let second_half = mag.clone().slice(0..half);
-            let first_half  = mag.slice(half..);
+            let first_half = mag.slice(half..);
             let mag = Tensor::cat(vec![first_half, second_half], 0);
 
             self.output
@@ -165,7 +166,12 @@ impl Kernel for Convert {
         let output = &mut buffer.slice()[*offset..];
         let input = self.input.slice();
 
-        debug!("convert input {}   output {}   offset {}", input.len(), output.len(), offset);
+        debug!(
+            "convert input {}   output {}   offset {}",
+            input.len(),
+            output.len(),
+            offset
+        );
 
         let m = std::cmp::min(input.len(), output.len() / 2);
         for i in 0..m {
@@ -176,7 +182,7 @@ impl Kernel for Convert {
         *offset += 2 * m;
         self.input.consume(m);
 
-        if m == output.len() {
+        if m == output.len() / 2 {
             let (b, _) = self.current.take().unwrap();
             self.output.put_full_buffer(b);
             if self.output.has_more_buffers() {
@@ -198,11 +204,13 @@ fn main() -> Result<()> {
         .sample_rate(32e6)
         .gain(34.0)
         .build_source()?;
-    src.outputs()[0].set_min_buffer_size_in_items(1 << 23);
+    src.outputs()[0].set_min_buffer_size_in_items(1 << 20);
 
     let mut convert = Convert::new();
     convert.output().set_device(&device);
-    convert.output().inject_buffers_with_items(16, BATCH_SIZE * FFT_SIZE * 2);
+    convert
+        .output()
+        .inject_buffers_with_items(16, BATCH_SIZE * FFT_SIZE * 2);
 
     let fft = Fft::new(&device);
 
@@ -214,6 +222,6 @@ fn main() -> Result<()> {
     connect!(fg, src.outputs[0] > convert > fft > snk);
     connect!(fg, convert < snk);
 
-    Runtime::new().run(fg)?;
+    Runtime::with_scheduler(SmolScheduler::new(4, true)).run(fg)?;
     Ok(())
 }
