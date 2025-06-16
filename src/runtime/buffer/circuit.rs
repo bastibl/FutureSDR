@@ -217,7 +217,7 @@ where
 {
     type Item = T;
 
-    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags) {
+    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>) {
         if self.current.is_none() {
             match self.inbound.lock().unwrap().pop() {
                 Some(Some(mut b)) => {
