@@ -35,6 +35,8 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
         }
     });
 
+    let block_id = move || { fg_desc.map(|fg| fg.as_ref().and_then(|fg| fg.blocks.iter().find(|b| b.type_name == "SeifySource").and_then(|b| Some(b.id.0))).unwrap_or(0)).unwrap_or(0)};
+
     let (time_data, set_time_data) = signal(vec![]);
     let (waterfall_data, set_waterfall_data) = signal(vec![]);
     let ws_url = {
@@ -147,7 +149,7 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                                 let p = Pmt::F64(freq * 1e6);
                                 let mut fg_handle = fg_handle.clone();
                                 spawn_local(async move {
-                                    let _ = fg_handle.call(4, "freq", p).await;
+                                    let _ = fg_handle.call(block_id(), "freq", p).await;
                                 });
                             }
                         }
@@ -176,7 +178,7 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                                 let p = Pmt::F64(gain);
                                 let mut fg_handle = fg_handle.clone();
                                 spawn_local(async move {
-                                    let _ = fg_handle.call(4, "gain", p).await;
+                                    let _ = fg_handle.call(block_id(), "gain", p).await;
                                 });
                             }
                         }
@@ -188,7 +190,7 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                 <div class="text-white basis-1/2">
                     <RadioSelector
                         fg_handle=fg_handle.clone()
-                        block_id=4
+                        block_id= { block_id() }
                         handler="sample_rate"
                         values=[
                             ("3.2 MHz".to_string(), Pmt::F64(3.2e6)),

@@ -85,6 +85,14 @@ where
         }
     }
 
+    /// Resize the buffer
+    pub fn resize(&mut self, n: usize) {
+        if self.num_elements() == n {
+            return;
+        }
+        self.state = BufferState::Data(TensorData::zeros::<E::Elem, _>([n]));
+    }
+
     fn ensure_data(&mut self) {
         if matches!(self.state, BufferState::Tensor(_))
             && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty)

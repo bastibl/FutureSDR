@@ -7,7 +7,10 @@ use seify::GenericDevice;
 use crate::blocks::seify::Config;
 use crate::blocks::seify::Sink;
 use crate::blocks::seify::Source;
+use crate::num_complex::Complex32;
 use crate::runtime::Error;
+use crate::runtime::buffer::CpuBufferReader;
+use crate::runtime::buffer::CpuBufferWriter;
 
 pub trait IntoAntenna {
     fn into(self) -> Option<String>;
@@ -118,10 +121,30 @@ impl<D: DeviceTrait + Clone> Builder<D> {
             .apply(&self.dev, &self.channels, Direction::Rx)?;
         Ok(Source::new(self.dev, self.channels, self.start_time))
     }
+    /// Build Typed Seify Source
+    pub fn build_source_with_buffer<B: CpuBufferWriter<Item = Complex32>>(
+        self,
+    ) -> Result<Source<D, B>, Error> {
+        self.config
+            .apply(&self.dev, &self.channels, Direction::Rx)?;
+        Ok(Source::<D, B>::new(
+            self.dev,
+            self.channels,
+            self.start_time,
+        ))
+    }
     /// Builder Typed Seify Sink
     pub fn build_sink(self) -> Result<Sink<D>, Error> {
         self.config
             .apply(&self.dev, &self.channels, Direction::Tx)?;
         Ok(Sink::new(self.dev, self.channels, self.start_time))
+    }
+    /// Builder Typed Seify Sink
+    pub fn build_sink_with_buffer<B: CpuBufferReader<Item = Complex32>>(
+        self,
+    ) -> Result<Sink<D, B>, Error> {
+        self.config
+            .apply(&self.dev, &self.channels, Direction::Tx)?;
+        Ok(Sink::<D, B>::new(self.dev, self.channels, self.start_time))
     }
 }

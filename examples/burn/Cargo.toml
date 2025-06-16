@@ -16,7 +16,7 @@ burn = { version = "0.17", features = [
   "autotune",
   "fusion",
 ] }
-futuresdr = { path = "../..", features = ["burn"] }
+futuresdr = { path = "../..", features = ["burn", "seify", "soapy"] }
 inplace = { path = "../inplace" }
 log = "0.4"
 ndarray = "0.16"
