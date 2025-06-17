@@ -207,7 +207,7 @@ where
             return Ok(());
         }
 
-        match streamer.read(&mut bufs, 1_000_000) {
+        match streamer.read(&mut bufs, 500_000) {
             Ok(len) => {
                 self.outputs.iter_mut().for_each(|o| o.produce(len));
             }

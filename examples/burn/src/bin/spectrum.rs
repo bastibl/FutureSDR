@@ -14,10 +14,7 @@ const BATCH_SIZE: usize = 16;
 type B = WebGpu<f32, i32>;
 
 #[derive(Block)]
-struct Fft<B>
-where
-    B: Backend,
-{
+struct Fft {
     #[input]
     input: burn_buffer::Reader<B, Float>,
     #[output]
@@ -26,11 +23,8 @@ where
     wi: Tensor<B, 2>,
 }
 
-impl<B> Fft<B>
-where
-    B: Backend,
-{
-    fn new(device: &B::Device) -> Self {
+impl Fft {
+    fn new(device: &Device<B>) -> Self {
         let k = Tensor::<B, 1, Int>::arange(0..FFT_SIZE as i64, device).reshape([FFT_SIZE, 1]);
         let n_idx = Tensor::<B, 1, Int>::arange(0..FFT_SIZE as i64, device).reshape([1, FFT_SIZE]);
 
@@ -42,6 +36,8 @@ where
         let wr = angle.clone().cos();
         let wi = angle.sin();
 
+        let _ = device.queue();
+
         Self {
             input: Default::default(),
             output: Default::default(),
@@ -51,10 +47,7 @@ where
     }
 }
 
-impl<B> Kernel for Fft<B>
-where
-    B: Backend,
-{
+impl Kernel for Fft {
     async fn work(
         &mut self,
         io: &mut WorkIo,
@@ -66,35 +59,35 @@ where
             assert_eq!(t.shape().num_elements(), BATCH_SIZE * FFT_SIZE * 2);
             let t = t.reshape([BATCH_SIZE, FFT_SIZE, 2]);
 
-            // Narrow the 3rd dim to [0..1] and [1..2], yielding [batch, n, 1]
             let x_re = t
                 .clone()
-                .narrow(2, 0, 1) // real channel
-                .reshape([BATCH_SIZE, FFT_SIZE]); // -> [batch, n]
+                .slice(s![.., .., 0])
+                .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
+                .transpose();
 
             let x_im = t
-                .narrow(2, 1, 1) // imag channel
-                .reshape([BATCH_SIZE, FFT_SIZE]); // -> [batch, n]
+                .slice(s![.., .., 1])
+                .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
+                .transpose();
 
             let tmp = self
                 .wr
                 .clone()
-                .matmul(x_re.clone().transpose())
-                .transpose()
-                .sub(self.wi.clone().matmul(x_im.clone().transpose()).transpose());
+                .matmul(x_re.clone())
+                .sub(self.wi.clone().matmul(x_im.clone()))
+                .transpose();
             let x_im = self
                 .wr
                 .clone()
-                .matmul(x_im.transpose())
-                .transpose()
-                .add(self.wi.clone().matmul(x_re.transpose()).transpose());
+                .matmul(x_im)
+                .add(self.wi.clone().matmul(x_re))
+                .transpose();
             let x_re = tmp;
 
-            // 7) Magnitude and batch mean: √(re²+im²) → [batch, n] → mean_dim(0) → [n]
             let mag = x_re
                 .powi_scalar(2)
                 .add(x_im.powi_scalar(2))
-                .sqrt()
+                // .sqrt()
                 .mean_dim(0)
                 .reshape([FFT_SIZE]);
 
@@ -109,13 +102,8 @@ where
 
             if self.input.has_more_buffers() {
                 io.call_again = true;
-            } else if self.input.finished() {
-                io.finished = true;
             }
-        } else if self.input.finished() {
-            io.finished = true;
         }
-
         Ok(())
     }
 }
@@ -146,32 +134,19 @@ impl Kernel for Convert {
         _m: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
-        if self.input.finished() {
-            io.finished = true;
-        }
-
         if self.current.is_none() {
             if let Some(mut b) = self.output.get_empty_buffer() {
                 b.resize(BATCH_SIZE * FFT_SIZE * 2);
                 b.set_valid(BATCH_SIZE * FFT_SIZE * 2);
                 self.current = Some((b, 0));
             } else {
-                debug!("convert no buffer available");
                 return Ok(());
             }
         }
 
         let (buffer, offset) = self.current.as_mut().unwrap();
-        debug!("convert buffer size {}", buffer.slice().len());
         let output = &mut buffer.slice()[*offset..];
         let input = self.input.slice();
-
-        debug!(
-            "convert input {}   output {}   offset {}",
-            input.len(),
-            output.len(),
-            offset
-        );
 
         let m = std::cmp::min(input.len(), output.len() / 2);
         for i in 0..m {
@@ -199,7 +174,7 @@ fn main() -> Result<()> {
     let device = burn::backend::wgpu::WgpuDevice::default();
     let mut fg = Flowgraph::new();
 
-    let mut src = Builder::new("")?
+    let mut src = Builder::new("num_recv_frames=512")?
         .frequency(100e6)
         .sample_rate(32e6)
         .gain(34.0)
