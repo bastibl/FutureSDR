@@ -35,7 +35,20 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
         }
     });
 
-    let block_id = move || { fg_desc.map(|fg| fg.as_ref().and_then(|fg| fg.blocks.iter().find(|b| b.type_name == "SeifySource").and_then(|b| Some(b.id.0))).unwrap_or(0)).unwrap_or(0)};
+    let block_id = move || {
+        fg_desc
+            .map(|fg| {
+                fg.as_ref()
+                    .and_then(|fg| {
+                        fg.blocks
+                            .iter()
+                            .find(|b| b.type_name == "SeifySource")
+                            .and_then(|b| Some(b.id.0))
+                    })
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
+    };
 
     let (time_data, set_time_data) = signal(vec![]);
     let (waterfall_data, set_waterfall_data) = signal(vec![]);
