@@ -36,8 +36,6 @@ impl Fft {
         let wr = angle.clone().cos();
         let wi = angle.sin();
 
-        let _ = device.queue();
-
         Self {
             input: Default::default(),
             output: Default::default(),

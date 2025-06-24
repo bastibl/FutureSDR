@@ -149,7 +149,7 @@ pub trait CpuBufferWriter: BufferWriter + Default + Send {
         self.slice_with_tags().0
     }
     /// Available buffer space and tags.
-    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags);
+    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>);
     /// Produce items
     fn produce(&mut self, n: usize);
     /// Configure the minimum numer of items required in [work()](futuresdr::runtime::Kernel::work)

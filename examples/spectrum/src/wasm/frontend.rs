@@ -43,7 +43,7 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
                         fg.blocks
                             .iter()
                             .find(|b| b.type_name == "SeifySource")
-                            .and_then(|b| Some(b.id.0))
+                            .map(|b| b.id.0)
                     })
                     .unwrap_or(0)
             })
