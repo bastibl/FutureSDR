@@ -101,7 +101,8 @@ where
         }
     }
 
-    fn num_elements(&self) -> usize {
+    /// Number of elements in the buffer
+    pub fn num_elements(&self) -> usize {
         match &self.state {
             BufferState::Tensor(t) => t.shape().num_elements(),
             BufferState::Data(d) => d.num_elements(),
@@ -576,7 +577,7 @@ where
                     let _ = inbox.try_send(BlockMessage::Notify);
                 }
                 None => {
-                    warn!(
+                    debug!(
                         "burn reader used as cpu buffer reader but not connected to circuit start. dropping buffer."
                     );
                 }

@@ -11,14 +11,20 @@ burn = { version = "0.17", features = [
   "ndarray",
   "tui",
   "train",
+  "cuda",
+  "vulkan",
   "wgpu",
   "webgpu",
   "autotune",
   "fusion",
 ] }
-futuresdr = { path = "../..", features = ["burn", "seify", "soapy"] }
+bytemuck = "1.23"
+futuresdr = { path = "../..", features = ["burn", "seify", "soapy", "flow_scheduler"] }
 inplace = { path = "../inplace" }
 log = "0.4"
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+debug = true
