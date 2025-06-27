@@ -59,18 +59,18 @@ impl Kernel for Fft {
             let t = b.into_tensor();
             assert_eq!(t.shape().num_elements(), BATCH_SIZE * FFT_SIZE * 2);
             let t = t.reshape([BATCH_SIZE, FFT_SIZE, 2]);
-            
+
             let x_re = t
                 .clone()
                 .slice(s![.., .., 0])
                 .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
                 .transpose();
-            
+
             let x_im = t
                 .slice(s![.., .., 1])
                 .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
                 .transpose();
-            
+
             let tmp = self
                 .wr
                 .clone()
@@ -84,14 +84,14 @@ impl Kernel for Fft {
                 .add(self.wi.clone().matmul(x_re))
                 .transpose();
             let x_re = tmp;
-            
+
             let mag = x_re
                 .powi_scalar(2)
                 .add(x_im.powi_scalar(2))
                 // .sqrt()
                 .mean_dim(0)
                 .reshape([FFT_SIZE]);
-            
+
             let half = FFT_SIZE / 2;
             let second_half = mag.clone().slice(0..half);
             let first_half = mag.slice(half..);

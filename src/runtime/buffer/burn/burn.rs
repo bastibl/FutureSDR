@@ -556,8 +556,6 @@ where
         }
 
         let (c, o) = self.current.as_mut().unwrap();
-        let elements = c.num_elements();
-        let valid = c.valid;
         let (s, t) = c.slice_with_tags();
         (&s[*o..], t)
     }
