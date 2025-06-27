@@ -19,12 +19,20 @@ burn = { version = "0.17", features = [
   "fusion",
 ] }
 bytemuck = "1.23"
-futuresdr = { path = "../..", features = ["burn", "seify", "soapy", "flow_scheduler"] }
+clap = { version = "4", features = ["derive"] }
+futuresdr = { path = "../..", features = [
+  "audio",
+  "burn",
+  "seify",
+  "soapy",
+  "flow_scheduler",
+] }
 inplace = { path = "../inplace" }
 log = "0.4"
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1.0", features = ["derive"] }
+whisper = { path = "/home/basti/src/whisper-burn/" }
 
 [profile.release]
 debug = true

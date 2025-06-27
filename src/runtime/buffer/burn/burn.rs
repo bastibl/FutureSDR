@@ -143,7 +143,7 @@ where
     }
 }
 
-/// Circuit Writer
+/// Burn Writer
 pub struct Writer<B, E>
 where
     B: Backend,
@@ -362,7 +362,7 @@ where
         let (c, o) = self.current.as_mut().unwrap();
         debug_assert!(n <= c.num_elements() - *o);
         *o += n;
-        if (c.num_elements() - c.valid) < self.min_items {
+        if (c.num_elements() - *o) < self.min_items {
             let (mut c, o) = self.current.take().unwrap();
             c.set_valid(o);
             self.outbound.lock().unwrap().push_back(c);
@@ -556,6 +556,8 @@ where
         }
 
         let (c, o) = self.current.as_mut().unwrap();
+        let elements = c.num_elements();
+        let valid = c.valid;
         let (s, t) = c.slice_with_tags();
         (&s[*o..], t)
     }
