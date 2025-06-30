@@ -1,9 +1,20 @@
 #![recursion_limit = "512"]
 use anyhow::Result;
+use burn::backend::wgpu::WgpuRuntime;
 use burn::prelude::*;
+use burn::backend::wgpu::init_setup;
+use burn::backend::WebGpu;
 use burn::record::FullPrecisionSettings;
 use burn::record::NamedMpkFileRecorder;
 use burn::record::Recorder;
+use burn_cubecl::ops::numeric::empty_device;
+use burn::tensor::DType;
+use burn::tensor::TensorPrimitive;
+use burn_cubecl::CubeBackend;
+use burn_cubecl::tensor::CubeTensor;
+use burn_fusion::Fusion;
+use burn_fusion::client::FusionClient;
+use burn_fusion::stream::StreamId;
 use clap::Parser;
 use futuresdr::blocks::Apply;
 use futuresdr::blocks::FirBuilder;
@@ -17,83 +28,87 @@ use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::Runtime;
-use whisper::audio::prep_audio;
-use whisper::model::Whisper;
-use whisper::model::WhisperConfig;
-use whisper::token::Gpt2Tokenizer;
-use whisper::token::Language;
-use whisper::transcribe::find_chunk_overlap;
-use whisper::transcribe::mels_to_text;
+// use whisper::audio::prep_audio;
+// use whisper::model::Whisper;
+// use whisper::model::WhisperConfig;
+// use whisper::token::Gpt2Tokenizer;
+// use whisper::token::Language;
+// use whisper::transcribe::find_chunk_overlap;
+// use whisper::transcribe::mels_to_text;
 
 const PADDING: usize = 200;
 
 // type B = burn::backend::Wgpu;
-type B = burn::backend::Cuda;
+// type B = burn::backend::Cuda;
+pub type Cube = CubeBackend<WgpuRuntime, f32, i32, u32>;
+pub type B = Fusion<Cube>;
 
-fn load_model<B: Backend>(
-    model_path: &str,
-    model_name: &str,
-    device: &B::Device,
-) -> (Gpt2Tokenizer, WhisperConfig, Whisper<B>) {
-    let bpe = match Gpt2Tokenizer::new(model_path) {
-        Ok(bpe) => bpe,
-        Err(e) => {
-            eprintln!("Failed to load tokenizer: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    println!("name {model_name}");
-    let whisper_config = match WhisperConfig::load(format!("{model_path}/{model_name}.cfg")) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to load whisper config: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    println!("Loading model...");
-    let whisper: Whisper<B> = {
-        match NamedMpkFileRecorder::<FullPrecisionSettings>::new()
-            .load(format!("{model_path}/{model_name}").into(), device)
-            .map(|record| whisper_config.init(device).load_record(record))
-        {
-            Ok(whisper_model) => whisper_model,
-            Err(e) => {
-                eprintln!("Failed to load whisper model file: {e}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    let whisper = whisper.to_device(device);
-    (bpe, whisper_config, whisper)
-}
+// fn load_model<B: Backend>(
+//     model_path: &str,
+//     model_name: &str,
+//     device: &B::Device,
+// ) -> (Gpt2Tokenizer, WhisperConfig, Whisper<B>) {
+//     let bpe = match Gpt2Tokenizer::new(model_path) {
+//         Ok(bpe) => bpe,
+//         Err(e) => {
+//             eprintln!("Failed to load tokenizer: {e}");
+//             std::process::exit(1);
+//         }
+//     };
+//
+//     println!("name {model_name}");
+//     let whisper_config = match WhisperConfig::load(format!("{model_path}/{model_name}.cfg")) {
+//         Ok(config) => config,
+//         Err(e) => {
+//             eprintln!("Failed to load whisper config: {e}");
+//             std::process::exit(1);
+//         }
+//     };
+//
+//     println!("Loading model...");
+//     let whisper: Whisper<B> = {
+//         match NamedMpkFileRecorder::<FullPrecisionSettings>::new()
+//             .load(format!("{model_path}/{model_name}").into(), device)
+//             .map(|record| whisper_config.init(device).load_record(record))
+//         {
+//             Ok(whisper_model) => whisper_model,
+//             Err(e) => {
+//                 eprintln!("Failed to load whisper model file: {e}");
+//                 std::process::exit(1);
+//             }
+//         }
+//     };
+//
+//     let whisper = whisper.to_device(device);
+//     (bpe, whisper_config, whisper)
+// }
 
 #[derive(Block)]
 struct WhisperBlock {
     #[input]
     input: burn_buffer::Reader<B, Float>,
-    language: Language,
-    model: Whisper<B>,
-    tokenizer: Gpt2Tokenizer,
-    n_mels: usize,
-    tokens: Vec<usize>,
+    device: Device<B>,
+    // language: Language,
+    // model: Whisper<B>,
+    // tokenizer: Gpt2Tokenizer,
+    // n_mels: usize,
+    // tokens: Vec<usize>,
 }
 
 impl WhisperBlock {
     fn new(device: &Device<B>) -> Self {
-        let (tokenizer, _config, model) =
-            load_model::<B>("/home/basti/src/whisper-burn/tiny", "tiny", device);
+        // let (tokenizer, _config, model) =
+        //     load_model::<B>("/home/basti/src/whisper-burn/tiny", "tiny", device);
 
-        let n_mels = model.encoder_mel_size();
+        // let n_mels = model.encoder_mel_size();
         Self {
             input: Default::default(),
-            language: Language::German,
-            model,
-            tokenizer,
-            n_mels,
-            tokens: Vec::new(),
+            device: device.clone(),
+            // language: Language::German,
+            // model,
+            // tokenizer,
+            // n_mels,
+            // tokens: Vec::new(),
         }
     }
 }
@@ -106,11 +121,71 @@ impl Kernel for WhisperBlock {
         _b: &mut BlockMeta,
     ) -> Result<()> {
         if let Some(b) = self.input.get_full_buffer() {
-            let waveform = b.into_tensor();
-            let mel = prep_audio(waveform.unsqueeze(), 16000.0, self.n_mels);
+            let _waveform = b.into_tensor();
 
-            let (new_text, new_tokens) =
-                mels_to_text(&self.model, &self.tokenizer, self.language, mel, PADDING).unwrap();
+            let tensor = Tensor::<B, 1, Float>::zeros([1024 * 256], &self.device);
+            let prim = tensor.into_primitive().tensor();
+            let client = prim.client.clone();
+            let new_tensor = client.tensor_uninitialized(vec![1024], DType::F32);
+            let cube_tensor = client.resolve_tensor_float::<Cube>(new_tensor);
+            let cube_client = cube_tensor.client;
+            let cube_device = cube_tensor.device.clone();
+            let handle = cube_tensor.handle.clone();
+
+            let binding = cube_client.get_resource(cube_tensor.handle.binding());
+            let buffer = binding.resource().buffer();
+
+            // let shape = [1024];
+            // let strides = vec![1]; // contiguous
+            // let dtype = DType::F32;
+            // let device = cube_tensor.device.clone(); // your CubeDevice
+            //
+            // let cube_tensor = CubeTensor::new(
+            //     cube_client.clone(),
+            //     handle,
+            //     shape.into(),
+            //     device.clone(),
+            //     strides,
+            //     dtype,
+            // );
+            //
+            // let fusion_prim = client.register_tensor(
+            //     cube_tensor.into(),
+            //     shape.to_vec(),
+            //     StreamId::current(),
+            //     dtype,
+            // );
+            // let primitive_enum = TensorPrimitive::Float(fusion_prim);
+            // let fusion_tensor = Tensor::<B, 1, Float>::from_primitive(primitive_enum);
+
+            let cube_tensor: CubeTensor<_> = empty_device::<WgpuRuntime, f32>(
+                cube_client.clone(),
+                cube_device.clone(),
+                [1024].into(),
+            );
+
+            let handle = cube_tensor.handle.clone();
+            let buffer = cube_client
+                .get_resource(handle.binding())
+                .resource()
+                .buffer();
+
+            // let captureable = buffer.clone();
+            //
+            // buffer.map_async(wgpu::MapMode::Write, .., move |result| {
+            //     if result.is_ok() {
+            //         let mut view = captureable.get_mapped_range_mut(..);
+            //         let floats: &mut [f32] = bytemuck::cast_slice_mut(&mut view);
+            //         floats.fill(42.0);
+            //         drop(view);
+            //         captureable.unmap();
+            //     }
+            // });
+
+            // let mel = prep_audio(waveform.unsqueeze(), 16000.0, self.n_mels);
+            //
+            // let (new_text, new_tokens) =
+            //     mels_to_text(&self.model, &self.tokenizer, self.language, mel, PADDING).unwrap();
 
             // if let Some((prev_index, curr_index)) =
             //     find_chunk_overlap(&self.tokens[..], &new_tokens[..], 40, 3)
@@ -122,7 +197,7 @@ impl Kernel for WhisperBlock {
             // }
             //
             // let text = self.tokenizer.decode(&self.tokens[..], true).unwrap();
-            println!("\nText: {new_text}");
+            // println!("\nText: {new_text}");
             self.input.notify_consumed_buffer();
         }
         Ok(())
@@ -159,6 +234,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("Configuration {args:?}");
     let device = Default::default();
+    let setup = init_setup::<burn_wgpu::graphics::WebGpu>(&device, Default::default());
+    let queue = setup.queue;
 
     let mut fg = Flowgraph::new();
     let src = Builder::new(args.args)?
@@ -194,9 +271,10 @@ fn main() -> Result<()> {
     let whisper = WhisperBlock::new(&device);
     let snk = AudioSink::new(args.audio_rate, 1);
 
-    let n_ctx_max_encoder = whisper.model.encoder_ctx_size();
-    let n_waveform_samples_per_window =
-        whisper::audio::max_waveform_samples(n_ctx_max_encoder - PADDING);
+    // let n_ctx_max_encoder = whisper.model.encoder_ctx_size();
+    // let n_waveform_samples_per_window =
+    //     whisper::audio::max_waveform_samples(n_ctx_max_encoder - PADDING);
+    let n_waveform_samples_per_window = 1024 * 256;
     println!("waveform samples {n_waveform_samples_per_window}");
     split
         .output0()

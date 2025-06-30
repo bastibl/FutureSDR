@@ -18,6 +18,10 @@ burn = { version = "0.17", features = [
   "autotune",
   "fusion",
 ] }
+cubecl = "0.5"
+burn-fusion = "0.17"
+burn-cubecl = "0.17"
+burn-wgpu = "0.17"
 bytemuck = "1.23"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = [
@@ -32,7 +36,8 @@ log = "0.4"
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1.0", features = ["derive"] }
-whisper = { path = "/home/basti/src/whisper-burn/" }
+# whisper = { path = "/home/basti/src/whisper-burn/" }
+wgpu = "25.0"
 
 [profile.release]
 debug = true
