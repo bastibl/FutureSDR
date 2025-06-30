@@ -9,10 +9,7 @@ use futuresdr::runtime::buffer::burn::Buffer;
 
 const FFT_SIZE: usize = 2048;
 const BATCH_SIZE: usize = 100;
-// type B = burn::backend::NdArray;
-// type B = burn::backend::Wgpu<f32, i32>;
-// type B = burn::backend::WebGpu<f32, i32>;
-type B = burn::backend::Cuda;
+type B = burn::backend::Wgpu<f32, i32>;
 
 #[derive(Block)]
 struct Fft {
@@ -57,7 +54,6 @@ impl Kernel for Fft {
             && let Some(b) = self.input.get_full_buffer()
         {
             let t = b.into_tensor();
-            assert_eq!(t.shape().num_elements(), BATCH_SIZE * FFT_SIZE * 2);
             let t = t.reshape([BATCH_SIZE, FFT_SIZE, 2]);
 
             let x_re = t
@@ -66,11 +62,10 @@ impl Kernel for Fft {
                 .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
                 .transpose();
 
-            let x_im = t
-                .slice(s![.., .., 1])
-                .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
-                .transpose();
-
+            let x_im = t.slice(s![.., .., 1])
+            .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
+            .transpose();
+            
             let tmp = self
                 .wr
                 .clone()
@@ -84,7 +79,7 @@ impl Kernel for Fft {
                 .add(self.wi.clone().matmul(x_re))
                 .transpose();
             let x_re = tmp;
-
+            
             let mag = x_re
                 .powi_scalar(2)
                 .add(x_im.powi_scalar(2))
@@ -173,10 +168,7 @@ impl Kernel for Convert {
 
 fn main() -> Result<()> {
     futuresdr::runtime::init();
-    // let device = burn::backend::wgpu::WgpuDevice::default();
-    // let device = burn::backend::wgpu::WgpuDevice::IntegratedGpu(0);
-    let device = burn::backend::cuda::CudaDevice::default();
-    // let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = Default::default();
     let mut fg = Flowgraph::new();
 
     let mut src = Builder::new("")?
