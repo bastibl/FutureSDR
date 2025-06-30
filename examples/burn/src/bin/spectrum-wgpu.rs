@@ -1,14 +1,11 @@
 #![recursion_limit = "512"]
 use anyhow::Result;
 use burn::backend::wgpu::WgpuRuntime;
-use burn::backend::wgpu::init_setup;
-use burn::backend::wgpu::init_device;
 use burn::prelude::*;
 use burn::tensor::DType;
 use burn::tensor::TensorPrimitive;
 use burn_cubecl::CubeBackend;
 use burn_cubecl::fusion::FusionCubeRuntime;
-use burn_cubecl::ops::numeric::empty_device;
 use burn_cubecl::tensor::CubeTensor;
 use burn_fusion::Fusion;
 use burn_fusion::client::FusionClient;
@@ -39,14 +36,12 @@ struct Fft {
     wr: Tensor<B, 2>,
     wi: Tensor<B, 2>,
     fusion_client: MutexFusionClient<FusionCubeRuntime<WgpuRuntime, u32>>,
-    wgpu_queue: wgpu::Queue,
     cubecl_client: ComputeClient<WgpuServer, MutexComputeChannel<WgpuServer>>,
-    wgpu_device: wgpu::Device,
     wgpu_device_type: WgpuDevice,
 }
 
 impl Fft {
-    fn new(device: &Device<B>, wgpu_device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    fn new(device: &Device<B>) -> Self {
         let k = Tensor::<B, 1, Int>::arange(0..FFT_SIZE as i64, device).reshape([FFT_SIZE, 1]);
         let n_idx = Tensor::<B, 1, Int>::arange(0..FFT_SIZE as i64, device).reshape([1, FFT_SIZE]);
 
@@ -71,9 +66,7 @@ impl Fft {
             wr,
             wi,
             fusion_client,
-            wgpu_queue: queue.clone(),
             cubecl_client,
-            wgpu_device: wgpu_device.clone(),
             wgpu_device_type
         }
     }
@@ -89,25 +82,9 @@ impl Kernel for Fft {
         if self.output.has_more_buffers()
             && let Some(mut b) = self.input.get_full_buffer()
         {
-            // let cube_tensor: CubeTensor<_> = empty_device::<WgpuRuntime, f32>(
-            //     self.cubecl_client.clone(),
-            //     self.wgpu_device_type.clone(),
-            //     [BATCH_SIZE * FFT_SIZE * 2].into(),
-            // );
-            //
-            // let handle = cube_tensor.handle.clone();
-            // let binding = self.cubecl_client.get_resource(handle.clone().binding());
-            // let buffer = binding.resource().buffer();
-
-
             let data = b.slice();
             let byte_data: &[u8] = cast_slice(data);
             let handle = self.cubecl_client.create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4).0;
-
-            // self.wgpu_queue.write_buffer(buffer, 0, byte_data);
-            // // no CommandBuffers, just flush writes
-            // self.wgpu_queue.submit(std::iter::empty());
-            // self.wgpu_device.poll(wgpu::PollType::Wait)?;
 
             let cube_tensor = CubeTensor::new(
                 self.cubecl_client.clone(),
@@ -169,7 +146,7 @@ impl Kernel for Fft {
 
             let _ = self.output.get_empty_buffer().unwrap();
             self.output.put_full_buffer(Buffer::from_tensor(mag));
-            self.input.notify_consumed_buffer();
+            self.input.put_empty_buffer(b);
 
             if self.input.has_more_buffers() {
                 io.call_again = true;
@@ -243,14 +220,7 @@ impl Kernel for Convert {
 
 fn main() -> Result<()> {
     futuresdr::runtime::init();
-    // let device = burn::backend::cuda::CudaDevice::default();
-    // let device = burn::backend::ndarray::NdArrayDevice::Cpu;
     let device = Default::default();
-    let setup = init_setup::<burn_wgpu::graphics::AutoGraphicsApi>(&device, Default::default());
-    let queue = setup.queue.clone();
-    let wgpu_device = setup.device.clone();
-    let device = init_device(setup, Default::default());
-
     let mut fg = Flowgraph::new();
 
     let mut src = Builder::new("")?
@@ -266,7 +236,7 @@ fn main() -> Result<()> {
         .output()
         .inject_buffers_with_items(4, BATCH_SIZE * FFT_SIZE * 2);
 
-    let mut fft = Fft::new(&device, &wgpu_device, &queue);
+    let mut fft = Fft::new(&device);
     fft.output().set_device(&device);
     fft.output().inject_buffers_with_items(4, FFT_SIZE);
 
