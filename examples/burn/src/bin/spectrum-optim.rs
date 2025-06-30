@@ -45,23 +45,20 @@ fn mul_complex4<Bb: Backend>(
     Tensor::cat(vec![real, imag], 3)
 }
 
-fn generate_stage_twiddles<B: Backend>(
-    stage: usize,
-    device: &Device<B>
-) -> Tensor<B, 2, Float> {
-    let m = 1 << stage;  // Stage size
-    let half = m >> 1;   // Number of twiddle factors needed
-    
+fn generate_stage_twiddles<B: Backend>(stage: usize, device: &Device<B>) -> Tensor<B, 2, Float> {
+    let m = 1 << stage; // Stage size
+    let half = m >> 1; // Number of twiddle factors needed
+
     // Generate k values [0..half]
     let k = Tensor::<B, 1, Int>::arange(0..half as i64, device);
-    
+
     // Calculate angles: -2π * k / m
     let angles = k.float().mul_scalar(-2.0 * PI / m as f32);
-    
+
     // Generate complex exponentials
     let real = angles.clone().cos();
     let imag = angles.sin();
-    
+
     // Stack into [half, 2] tensor
     Tensor::stack(vec![real, imag], 1)
 }
@@ -70,22 +67,9 @@ fn generate_stage_twiddles<B: Backend>(
 pub fn fft_inplace(
     input: Tensor<B, 3, Float>, // shape [batch, N, 2]
     log_n: usize,
-    rev: &[usize],
+    rev: Tensor<B, 3, Int>,
 ) -> Tensor<B, 3, Float> {
     let device = input.device();
-
-    // 1) Bit-reversal permutation
-    let rev = Tensor::<B, 1, Int>::from_ints(
-        TensorData::new(
-            rev.iter().map(|&i| i as i32).collect::<Vec<i32>>(),
-            [FFT_SIZE],
-        ),
-        &device,
-    );
-    let rev = rev
-        .reshape([1, 1, FFT_SIZE])
-        .repeat_dim(0, BATCH_SIZE)
-        .repeat_dim(1, 2); // → [batch,n,1]
 
     let input = input.permute([0, 2, 1]);
     let mut x = input.gather(2, rev); // shape [batch, N, 2]
@@ -101,9 +85,7 @@ pub fn fft_inplace(
         let stage_twiddles = generate_stage_twiddles(s, &device);
         // Reshape for butterfly operations
         let wm_half = stage_twiddles.reshape([1, 1, half, 2]);
-        let wm_tiled = wm_half
-            .repeat_dim(0, BATCH_SIZE)
-            .repeat_dim(1, groups);
+        let wm_tiled = wm_half.repeat_dim(0, BATCH_SIZE).repeat_dim(1, groups);
 
         let x_blocks = x.clone().reshape([BATCH_SIZE, groups, m, 2]);
 
@@ -129,12 +111,22 @@ struct Fft {
     input: burn_buffer::Reader<B, Float>,
     #[output]
     output: burn_buffer::Writer<B, Float>,
-    rev: Vec<usize>,
+    rev: Tensor<B, 3, Int>,
 }
 
 impl Fft {
-    fn new(_device: &Device<B>) -> Self {
+    fn new(device: &Device<B>) -> Self {
         let rev = bit_reversal_indices(11);
+        let rev = Tensor::<B, 1, Int>::from_ints(
+            TensorData::new(
+                rev.iter().map(|&i| i as i32).collect::<Vec<i32>>(),
+                [FFT_SIZE],
+            ),
+            &device,
+        )
+        .reshape([1, 1, FFT_SIZE])
+        .repeat_dim(0, BATCH_SIZE)
+        .repeat_dim(1, 2); // → [batch,n,1]
 
         Self {
             input: Default::default(),
@@ -155,15 +147,8 @@ impl Kernel for Fft {
             && let Some(b) = self.input.get_full_buffer()
         {
             let t = b.into_tensor();
-
-            // // Set first sample to 1+0j, rest zeros (impulse)
-            // let mut d = TensorData::zeros::<f32, [usize; 3]>([BATCH_SIZE, FFT_SIZE, 2]);
-            // d.as_mut_slice().unwrap()[0] = 1.0f32;
-            // let t = Tensor::<B, 3, Float>::from_data(d, &Default::default());
-            // println!("input {t}");
-
             let t = t.reshape([BATCH_SIZE, FFT_SIZE, 2]);
-            let t = fft_inplace(t, 11, &self.rev);
+            let t = fft_inplace(t, 11, self.rev.clone());
 
             let x_re = t.clone().slice(s![.., .., 0]);
             // .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
