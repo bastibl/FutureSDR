@@ -66,25 +66,19 @@ fn generate_stage_twiddles<B: Backend>(stage: usize, device: &Device<B>) -> Tens
 /// In-place radix-2 FFT on a batch of complex vectors
 pub fn fft_inplace(
     input: Tensor<B, 3, Float>, // shape [batch, N, 2]
-    log_n: usize,
     rev: Tensor<B, 3, Int>,
+    twiddles: &[Tensor<B, 4, Float>],
 ) -> Tensor<B, 3, Float> {
-    let device = input.device();
+    // input permutation
+    let mut x = input.gather(1, rev); // shape [batch, N, 2]
 
-    let input = input.permute([0, 2, 1]);
-    let mut x = input.gather(2, rev); // shape [batch, N, 2]
-    x = x.permute([0, 2, 1]);
-
-    // 3) Iterative butterfly stages
-    for s in 1..=log_n {
+    // iterative butterfly
+    for (s, twiddle) in twiddles.iter().enumerate().skip(1) {
         let m = 1 << s;
         let half = m >> 1;
         let groups = FFT_SIZE / m;
 
-        // Generate twiddle factors for this stage
-        let stage_twiddles = generate_stage_twiddles(s, &device);
-        // Reshape for butterfly operations
-        let wm_half = stage_twiddles.reshape([1, 1, half, 2]);
+        let wm_half = twiddle.clone();
         let wm_tiled = wm_half.repeat_dim(0, BATCH_SIZE).repeat_dim(1, groups);
 
         let x_blocks = x.clone().reshape([BATCH_SIZE, groups, m, 2]);
@@ -96,12 +90,9 @@ pub fn fft_inplace(
         let top = even.clone().add(odd_t.clone());
         let bottom = even.sub(odd_t);
 
-        let merged_blocks = Tensor::cat(vec![top, bottom], 2);
-
         // flatten the two spatial dims:
-        x = merged_blocks.reshape([BATCH_SIZE, FFT_SIZE, 2]);
+        x = Tensor::cat(vec![top, bottom], 2).reshape([BATCH_SIZE, FFT_SIZE, 2])
     }
-
     x
 }
 
@@ -112,6 +103,7 @@ struct Fft {
     #[output]
     output: burn_buffer::Writer<B, Float>,
     rev: Tensor<B, 3, Int>,
+    twiddles: Vec<Tensor<B, 4, Float>>,
 }
 
 impl Fft {
@@ -122,16 +114,25 @@ impl Fft {
                 rev.iter().map(|&i| i as i32).collect::<Vec<i32>>(),
                 [FFT_SIZE],
             ),
-            &device,
+            device,
         )
-        .reshape([1, 1, FFT_SIZE])
+        .reshape([1, FFT_SIZE, 1])
         .repeat_dim(0, BATCH_SIZE)
-        .repeat_dim(1, 2); // → [batch,n,1]
+        .repeat_dim(2, 2); // → [batch,n,1]
 
+        let mut twiddles = Vec::new();
+        twiddles.push(Tensor::empty([0, 0, 0, 0], device));
+        for s in 1..=11 {
+            let m = 1 << s;
+            let half = m >> 1;
+            let twiddle = generate_stage_twiddles(s, device).reshape([1, 1, half, 2]);
+            twiddles.push(twiddle);
+        }
         Self {
             input: Default::default(),
             output: Default::default(),
             rev,
+            twiddles,
         }
     }
 }
@@ -148,36 +149,9 @@ impl Kernel for Fft {
         {
             let t = b.into_tensor();
             let t = t.reshape([BATCH_SIZE, FFT_SIZE, 2]);
-            let t = fft_inplace(t, 11, self.rev.clone());
+            let t = fft_inplace(t, self.rev.clone(), &self.twiddles);
 
-            let x_re = t.clone().slice(s![.., .., 0]);
-            // .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
-            // .transpose();
-
-            let x_im = t.slice(s![.., .., 1]);
-            // .reshape([BATCH_SIZE, FFT_SIZE]) // -> [batch, n]
-            // .transpose();
-            //
-            // let tmp = self
-            //     .wr
-            //     .clone()
-            //     .matmul(x_re.clone())
-            //     .sub(self.wi.clone().matmul(x_im.clone()))
-            //     .transpose();
-            // let x_im = self
-            //     .wr
-            //     .clone()
-            //     .matmul(x_im)
-            //     .add(self.wi.clone().matmul(x_re))
-            //     .transpose();
-            // let x_re = tmp;
-            //
-            let mag = x_re
-                .powi_scalar(2)
-                .add(x_im.powi_scalar(2))
-                // .sqrt()
-                .mean_dim(0)
-                .reshape([FFT_SIZE]);
+            let mag = t.powi_scalar(2).sum_dim(2).mean_dim(0).reshape([FFT_SIZE]);
 
             let half = FFT_SIZE / 2;
             let second_half = mag.clone().slice(0..half);

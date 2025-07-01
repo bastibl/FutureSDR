@@ -7,7 +7,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-burn = { version = "0.17", features = [
+burn = {git = "https://github.com/tracel-ai/burn", features = [
   "ndarray",
   "tui",
   "train",
@@ -18,10 +18,10 @@ burn = { version = "0.17", features = [
   "autotune",
   "fusion",
 ] }
-cubecl = "0.5"
-burn-fusion = "0.17"
-burn-cubecl = "0.17"
-burn-wgpu = "0.17"
+cubecl = { git = "https://github.com/tracel-ai/cubecl" }
+burn-fusion = { git = "https://github.com/tracel-ai/burn"}
+burn-cubecl = {git = "https://github.com/tracel-ai/burn"}
+burn-wgpu = {git = "https://github.com/tracel-ai/burn"}
 bytemuck = "1.23"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = [
