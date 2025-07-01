@@ -69,10 +69,11 @@ pub fn fft_inplace(
     rev: Tensor<B, 3, Int>,
     twiddles: &[Tensor<B, 4, Float>],
 ) -> Tensor<B, 3, Float> {
-    // input permutation
-    let mut x = input.gather(1, rev); // shape [batch, N, 2]
+    let input = input.permute([0, 2, 1]);
+    let mut x = input.gather(2, rev); // shape [batch, N, 2]
+    x = x.permute([0, 2, 1]);
 
-    // iterative butterfly
+    // 3) Iterative butterfly stages
     for (s, twiddle) in twiddles.iter().enumerate().skip(1) {
         let m = 1 << s;
         let half = m >> 1;
@@ -104,6 +105,7 @@ struct Fft {
     output: burn_buffer::Writer<B, Float>,
     rev: Tensor<B, 3, Int>,
     twiddles: Vec<Tensor<B, 4, Float>>,
+    fft_shift: Tensor<B, 1, Int>,
 }
 
 impl Fft {
@@ -116,9 +118,9 @@ impl Fft {
             ),
             device,
         )
-        .reshape([1, FFT_SIZE, 1])
+        .reshape([1, 1, FFT_SIZE])
         .repeat_dim(0, BATCH_SIZE)
-        .repeat_dim(2, 2); // → [batch,n,1]
+        .repeat_dim(1, 2); // → [batch,n,1]
 
         let mut twiddles = Vec::new();
         twiddles.push(Tensor::empty([0, 0, 0, 0], device));
@@ -128,11 +130,18 @@ impl Fft {
             let twiddle = generate_stage_twiddles(s, device).reshape([1, 1, half, 2]);
             twiddles.push(twiddle);
         }
+
+        let fft_shift = Tensor::from_data(
+            TensorData::new((1024..2048).chain(0..1024).collect(), [FFT_SIZE]),
+            device,
+        );
+
         Self {
             input: Default::default(),
             output: Default::default(),
             rev,
             twiddles,
+            fft_shift,
         }
     }
 }
@@ -152,14 +161,10 @@ impl Kernel for Fft {
             let t = fft_inplace(t, self.rev.clone(), &self.twiddles);
 
             let mag = t.powi_scalar(2).sum_dim(2).mean_dim(0).reshape([FFT_SIZE]);
-
-            let half = FFT_SIZE / 2;
-            let second_half = mag.clone().slice(0..half);
-            let first_half = mag.slice(half..);
-            let mag = Tensor::cat(vec![first_half, second_half], 0);
+            let shift = mag.gather(0, self.fft_shift.clone());
 
             let _ = self.output.get_empty_buffer().unwrap();
-            self.output.put_full_buffer(Buffer::from_tensor(mag));
+            self.output.put_full_buffer(Buffer::from_tensor(shift));
             self.input.notify_consumed_buffer();
 
             if self.input.has_more_buffers() {
@@ -199,7 +204,6 @@ impl Kernel for Convert {
         if self.current.is_none() {
             if let Some(mut b) = self.output.get_empty_buffer() {
                 assert_eq!(b.num_elements(), BATCH_SIZE * FFT_SIZE * 2);
-                // b.resize(BATCH_SIZE * FFT_SIZE * 2);
                 b.set_valid(BATCH_SIZE * FFT_SIZE * 2);
                 self.current = Some((b, 0));
             } else {
