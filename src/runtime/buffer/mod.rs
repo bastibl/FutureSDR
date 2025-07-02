@@ -200,7 +200,7 @@ pub trait InplaceReader: BufferReader + Default + Send {
 
 /// In-Place Writer
 pub trait InplaceWriter: BufferWriter + Default + Send {
-    /// Items in the reader
+    /// Items in the writer
     type Item: CpuSample;
     /// Buffer type
     type Buffer: InplaceBuffer<Item = Self::Item>;

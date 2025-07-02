@@ -15,7 +15,7 @@ use burn_wgpu::WgpuDevice;
 use bytemuck::cast_slice;
 use cubecl::channel::MutexComputeChannel;
 use cubecl::client::ComputeClient;
-use cubecl::wgpu::WgpuServer;
+use cubecl_wgpu::WgpuServer;
 use futuresdr::blocks::WebsocketSink;
 use futuresdr::blocks::WebsocketSinkMode;
 use futuresdr::blocks::seify::Builder;
@@ -30,9 +30,9 @@ pub type B = Fusion<Cube>;
 #[derive(Block)]
 struct Fft {
     #[input]
-    input: burn_buffer::Reader<B, Float>,
+    input: burn_buffer::Reader<B>,
     #[output]
-    output: burn_buffer::Writer<B, Float>,
+    output: burn_buffer::Writer<B>,
     wr: Tensor<B, 2>,
     wi: Tensor<B, 2>,
     fusion_client: MutexFusionClient<FusionCubeRuntime<WgpuRuntime, u32>>,
@@ -67,7 +67,7 @@ impl Fft {
             wi,
             fusion_client,
             cubecl_client,
-            wgpu_device_type
+            wgpu_device_type,
         }
     }
 }
@@ -84,7 +84,10 @@ impl Kernel for Fft {
         {
             let data = b.slice();
             let byte_data: &[u8] = cast_slice(data);
-            let handle = self.cubecl_client.create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4).0;
+            let handle = self
+                .cubecl_client
+                .create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4)
+                .0;
 
             let cube_tensor = CubeTensor::new(
                 self.cubecl_client.clone(),
@@ -161,8 +164,8 @@ struct Convert {
     #[input]
     input: circular::Reader<Complex32>,
     #[output]
-    output: burn_buffer::Writer<B, Float>,
-    current: Option<(Buffer<B, Float>, usize)>,
+    output: burn_buffer::Writer<B>,
+    current: Option<(Buffer<B>, usize)>,
 }
 
 impl Convert {
@@ -184,7 +187,7 @@ impl Kernel for Convert {
     ) -> Result<()> {
         if self.current.is_none() {
             if let Some(mut b) = self.output.get_empty_buffer() {
-                assert_eq!(b.num_elements(), BATCH_SIZE * FFT_SIZE * 2);
+                assert_eq!(b.num_host_elements(), BATCH_SIZE * FFT_SIZE * 2);
                 // b.resize(BATCH_SIZE * FFT_SIZE * 2);
                 b.set_valid(BATCH_SIZE * FFT_SIZE * 2);
                 self.current = Some((b, 0));
@@ -240,7 +243,7 @@ fn main() -> Result<()> {
     fft.output().set_device(&device);
     fft.output().inject_buffers_with_items(4, FFT_SIZE);
 
-    let snk = WebsocketSink::<f32, burn_buffer::Reader<B, Float>>::new(
+    let snk = WebsocketSink::<f32, burn_buffer::Reader<B>>::new(
         9001,
         WebsocketSinkMode::FixedBlocking(FFT_SIZE),
     );

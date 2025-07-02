@@ -69,9 +69,7 @@ pub fn fft_inplace(
     rev: Tensor<B, 3, Int>,
     twiddles: &[Tensor<B, 4, Float>],
 ) -> Tensor<B, 3, Float> {
-    let input = input.permute([0, 2, 1]);
-    let mut x = input.gather(2, rev); // shape [batch, N, 2]
-    x = x.permute([0, 2, 1]);
+    let mut x = input.gather(1, rev); // shape [batch, N, 2]
 
     // 3) Iterative butterfly stages
     for (s, twiddle) in twiddles.iter().enumerate().skip(1) {
@@ -118,9 +116,9 @@ impl Fft {
             ),
             device,
         )
-        .reshape([1, 1, FFT_SIZE])
+        .reshape([1, FFT_SIZE, 1])
         .repeat_dim(0, BATCH_SIZE)
-        .repeat_dim(1, 2); // → [batch,n,1]
+        .repeat_dim(2, 2); // → [batch,n,1]
 
         let mut twiddles = Vec::new();
         twiddles.push(Tensor::empty([0, 0, 0, 0], device));
@@ -175,67 +173,6 @@ impl Kernel for Fft {
     }
 }
 
-#[derive(Block)]
-struct Convert {
-    #[input]
-    input: circular::Reader<Complex32>,
-    #[output]
-    output: burn_buffer::Writer<B, Float>,
-    current: Option<(Buffer<B, Float>, usize)>,
-}
-
-impl Convert {
-    fn new() -> Self {
-        Self {
-            input: Default::default(),
-            output: Default::default(),
-            current: None,
-        }
-    }
-}
-
-impl Kernel for Convert {
-    async fn work(
-        &mut self,
-        io: &mut WorkIo,
-        _m: &mut MessageOutputs,
-        _b: &mut BlockMeta,
-    ) -> Result<()> {
-        if self.current.is_none() {
-            if let Some(mut b) = self.output.get_empty_buffer() {
-                assert_eq!(b.num_elements(), BATCH_SIZE * FFT_SIZE * 2);
-                b.set_valid(BATCH_SIZE * FFT_SIZE * 2);
-                self.current = Some((b, 0));
-            } else {
-                return Ok(());
-            }
-        }
-
-        let (buffer, offset) = self.current.as_mut().unwrap();
-        let output = &mut buffer.slice()[*offset..];
-        let input = self.input.slice();
-
-        let m = std::cmp::min(input.len(), output.len() / 2);
-        for i in 0..m {
-            output[2 * i] = input[i].re;
-            output[2 * i + 1] = input[i].im;
-        }
-
-        *offset += 2 * m;
-        self.input.consume(m);
-
-        if m == output.len() / 2 {
-            let (b, _) = self.current.take().unwrap();
-            self.output.put_full_buffer(b);
-            if self.output.has_more_buffers() {
-                io.call_again = true;
-            }
-        }
-
-        Ok(())
-    }
-}
-
 fn main() -> Result<()> {
     futuresdr::runtime::init();
     let device = Default::default();
@@ -245,26 +182,21 @@ fn main() -> Result<()> {
         .frequency(100e6)
         .sample_rate(3.2e6)
         .gain(34.0)
-        .build_source()?;
-    src.outputs()[0].set_min_buffer_size_in_items(1 << 15);
-
-    let mut convert = Convert::new();
-    convert.output().set_device(&device);
-    convert
-        .output()
-        .inject_buffers_with_items(4, BATCH_SIZE * FFT_SIZE * 2);
+        .build_source_with_buffer::<burn_buffer::Writer<B, Float, Complex32, f32>>()?;
+    src.outputs()[0].set_device(&device);
+    src.outputs()[0].inject_buffers_with_items(32, BATCH_SIZE * FFT_SIZE * 2);
 
     let mut fft = Fft::new(&device);
     fft.output().set_device(&device);
-    fft.output().inject_buffers_with_items(4, FFT_SIZE);
+    fft.output().inject_buffers_with_items(8, FFT_SIZE);
 
-    let snk = WebsocketSink::<f32, burn_buffer::Reader<B, Float>>::new(
+    let snk = WebsocketSink::<f32, burn_buffer::Reader<B>>::new(
         9001,
         WebsocketSinkMode::FixedBlocking(FFT_SIZE),
     );
 
-    connect!(fg, src.outputs[0] > convert > fft > snk);
-    connect!(fg, convert < fft);
+    connect!(fg, src.outputs[0] > fft > snk);
+    connect!(fg, src.outputs[0] < fft);
     connect!(fg, fft < snk);
 
     Runtime::new().run(fg)?;

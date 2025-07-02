@@ -23,38 +23,56 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::marker::PhantomData;
 
-enum BufferState<B, E>
+enum BufferState<B, E = Float, S = f32>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    S: CpuSample,
 {
     Tensor(Tensor<B, 1, E>),
     Data(TensorData),
-    Empty,
+    Empty(PhantomData<S>),
 }
 
-/// In-place buffer
-pub struct Buffer<B, E>
+impl<B, E, S> BufferState<B, E, S>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    S: CpuSample,
+{
+    fn cast<SO: CpuSample>(self) -> BufferState<B, E, SO> {
+        match self {
+            BufferState::Tensor(t) => BufferState::Tensor(t),
+            BufferState::Data(d)   => BufferState::Data(d),
+            BufferState::Empty(_)  => BufferState::Empty(PhantomData),
+        }
+    }
+}
+
+/// In-place buffer
+pub struct Buffer<B, E = Float, S = f32>
+where
+    B: Backend,
+    E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
+    S: CpuSample,
 {
     valid: usize,
-    state: BufferState<B, E>,
+    state: BufferState<B, E, S>,
     device: B::Device,
     tags: Vec<ItemTag>,
 }
 
-impl<B, E> Buffer<B, E>
+impl<B, E, S> Buffer<B, E, S>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    S: CpuSample,
 {
     /// Create buffer
+    ///
+    /// The number of items corresponds to the number of items in the tensor.
     fn with_items(items: usize, device: &B::Device) -> Self {
         let data = TensorData::zeros::<E::Elem, _>([items]);
         Self {
@@ -81,52 +99,62 @@ where
         match self.state {
             BufferState::Tensor(t) => t.slice(0..self.valid),
             BufferState::Data(d) => Tensor::from_data(d, &self.device).slice(0..self.valid),
-            BufferState::Empty => unreachable!(),
+            BufferState::Empty(_) => unreachable!(),
         }
     }
 
-    /// Resize the buffer
-    pub fn resize(&mut self, n: usize) {
-        if self.num_elements() == n {
-            return;
+    fn cast<SO: CpuSample>(self) -> Buffer<B, E, SO> {
+        let Self { valid, state, device, tags } = self;
+        Buffer {
+            valid, state: state.cast(), device, tags
         }
-        self.state = BufferState::Data(TensorData::zeros::<E::Elem, _>([n]));
     }
 
     fn ensure_data(&mut self) {
         if matches!(self.state, BufferState::Tensor(_))
-            && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty)
+            && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty(PhantomData))
         {
             self.state = BufferState::Data(t.into_data());
         }
     }
 
     /// Number of elements in the buffer
-    pub fn num_elements(&self) -> usize {
+    pub fn num_tensor_elements(&self) -> usize {
         match &self.state {
             BufferState::Tensor(t) => t.shape().num_elements(),
             BufferState::Data(d) => d.num_elements(),
-            BufferState::Empty => unreachable!(),
+            BufferState::Empty(_) => unreachable!(),
         }
+    }
+    /// Number of elements in the buffer
+    pub fn num_host_elements(&self) -> usize {
+        let elem = self.num_tensor_elements();
+        elem * size_of::<E::Elem>() / size_of::<S>()
     }
 }
 
-impl<B, E> InplaceBuffer for Buffer<B, E>
+impl<B, E, S> InplaceBuffer for Buffer<B, E, S>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    S: CpuSample,
 {
-    type Item = E::Elem;
+    type Item = S;
 
     fn set_valid(&mut self, valid: usize) {
-        self.valid = valid;
+        self.valid = valid * size_of::<S>() / size_of::<E::Elem>();
     }
 
     fn slice(&mut self) -> &mut [Self::Item] {
         self.ensure_data();
         match self.state {
-            BufferState::Data(ref mut d) => &mut d.as_mut_slice().unwrap()[0..self.valid],
+            BufferState::Data(ref mut d) => {
+                let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
+                let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
+                unsafe {
+                    std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len)
+                }
+            },
             _ => unreachable!(),
         }
     }
@@ -134,21 +162,29 @@ where
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], &mut Vec<ItemTag>) {
         self.ensure_data();
         match self.state {
-            BufferState::Data(ref mut d) => (
-                &mut d.as_mut_slice().unwrap()[0..self.valid],
+            BufferState::Data(ref mut d) => {
+                let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
+                let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
+                let s = unsafe {
+                    std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len)
+                };
+                (
+                s,
                 &mut self.tags,
-            ),
+            )
+            },
             _ => unreachable!(),
         }
     }
 }
 
 /// Burn Writer
-pub struct Writer<B, E>
+pub struct Writer<B, E = Float, SW = f32, SR = SW>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
     reader_inbox: Sender<BlockMessage>,
     reader_input: PortId,
@@ -157,22 +193,23 @@ where
     writer_output: PortId,
     device: Option<Device<B>>,
     #[allow(clippy::type_complexity)]
-    inbound: Arc<Mutex<Vec<Option<Buffer<B, E>>>>>,
-    outbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
+    inbound: Arc<Mutex<Vec<Option<Buffer<B, E, SR>>>>>,
+    outbound: Arc<Mutex<VecDeque<Buffer<B, E, SR>>>>,
     buffer_size_in_items: usize,
     // for CPU buffer writer
-    current: Option<(Buffer<B, E>, usize)>,
+    current: Option<(Buffer<B, E, SW>, usize)>,
     min_items: usize,
     min_buffer_size_in_items: Option<usize>,
     // dummy to return when no buffer available
     tags: Vec<ItemTag>,
 }
 
-impl<B, E> Writer<B, E>
+impl<B, E, SW, SR> Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
     /// Create circuit buffer writer
     pub fn new() -> Self {
@@ -186,7 +223,7 @@ where
             device: None,
             inbound: Arc::new(Mutex::new(Vec::new())),
             outbound: Arc::new(Mutex::new(VecDeque::new())),
-            buffer_size_in_items: config().buffer_size / std::mem::size_of::<E::Elem>(),
+            buffer_size_in_items: config().buffer_size / std::mem::size_of::<SW>(),
             current: None,
             min_items: 1,
             min_buffer_size_in_items: None,
@@ -202,29 +239,31 @@ where
     }
 
     /// Close Circuit
-    pub fn close_circuit(&mut self, end: &mut Reader<B, E>) {
+    pub fn close_circuit(&mut self, end: &mut Reader<B, E, SR>) {
         end.circuit_start = Some((self.writer_inbox.clone(), self.inbound.clone()));
     }
 }
 
-impl<B, E> Default for Writer<B, E>
+impl<B, E, SW, SR> Default for Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<B, E> BufferWriter for Writer<B, E>
+impl<B, E, SW, SR> BufferWriter for Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
-    type Reader = Reader<B, E>;
+    type Reader = Reader<B, E, SR>;
 
     fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
         self.writer_id = block_id;
@@ -270,29 +309,30 @@ where
     }
 }
 
-impl<B, E> InplaceWriter for Writer<B, E>
+impl<B, E, SW, SR> InplaceWriter for Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
-    type Item = E::Elem;
-
-    type Buffer = Buffer<B, E>;
+    type Item = SW;
+    type Buffer = Buffer<B, E, SW>;
 
     fn put_full_buffer(&mut self, buffer: Self::Buffer) {
-        self.outbound.lock().unwrap().push_back(buffer);
+        self.outbound.lock().unwrap().push_back(buffer.cast());
         let _ = self.reader_inbox.try_send(BlockMessage::Notify);
     }
 
     fn get_empty_buffer(&mut self) -> Option<Self::Buffer> {
         self.inbound.lock().unwrap().pop().and_then(|b| {
+            let b: Option<Buffer<B, E, SW>> = b.map(Buffer::cast);
             if let Some(mut b) = b {
-                b.set_valid(b.num_elements());
+                b.set_valid(b.num_host_elements());
                 Some(b)
             } else if let Some(ref d) = self.device {
                 let mut b = Buffer::with_items(self.buffer_size_in_items, d);
-                b.set_valid(b.num_elements());
+                b.set_valid(b.num_host_elements());
                 Some(b)
             } else {
                 warn!("cannot create buffers/tensors, device not set");
@@ -318,26 +358,27 @@ where
     }
 }
 
-impl<B, E> CpuBufferWriter for Writer<B, E>
+impl<B, E, SW, SR> CpuBufferWriter for Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SW: CpuSample,
+    SR: CpuSample,
 {
-    type Item = E::Elem;
+    type Item = SW;
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>) {
         if self.current.is_none() {
             match self.inbound.lock().unwrap().pop() {
                 Some(Some(mut b)) => {
-                    b.valid = b.num_elements();
+                    b.valid = b.num_tensor_elements();
                     b.tags.clear();
-                    self.current = Some((b, 0));
+                    self.current = Some((b.cast(), 0));
                 }
                 Some(None) => {
                     if let Some(ref d) = self.device {
                         let mut b = Buffer::with_items(self.buffer_size_in_items, d);
-                        b.set_valid(b.num_elements());
+                        b.set_valid(b.num_host_elements());
                         self.current = Some((b, 0));
                     } else {
                         warn!("cannot create buffer, device not set");
@@ -360,12 +401,12 @@ where
         }
 
         let (c, o) = self.current.as_mut().unwrap();
-        debug_assert!(n <= c.num_elements() - *o);
+        debug_assert!(n <= c.num_host_elements() - *o);
         *o += n;
-        if (c.num_elements() - *o) < self.min_items {
+        if (c.num_host_elements() - *o) < self.min_items {
             let (mut c, o) = self.current.take().unwrap();
             c.set_valid(o);
-            self.outbound.lock().unwrap().push_back(c);
+            self.outbound.lock().unwrap().push_back(c.cast());
 
             let _ = self.reader_inbox.try_send(BlockMessage::Notify);
 
@@ -394,30 +435,30 @@ where
 }
 
 /// Circuit Reader
-pub struct Reader<B, E>
+pub struct Reader<B, E = Float, SR = f32>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
     reader_inbox: Sender<BlockMessage>,
     reader_id: BlockId,
     reader_input: PortId,
     writer_inbox: Sender<BlockMessage>,
     writer_output: PortId,
-    inbound: Arc<Mutex<VecDeque<Buffer<B, E>>>>,
+    inbound: Arc<Mutex<VecDeque<Buffer<B, E, SR>>>>,
     #[allow(clippy::type_complexity)]
-    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Option<Buffer<B, E>>>>>)>,
+    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Option<Buffer<B, E, SR>>>>>)>,
     finished: bool,
     // for CPU buffer reader
-    current: Option<(Buffer<B, E>, usize)>,
+    current: Option<(Buffer<B, E, SR>, usize)>,
 }
 
-impl<B, E> Reader<B, E>
+impl<B, E, SR> Reader<B, E, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
     /// Create circuit buffer reader
     pub fn new() -> Self {
@@ -436,11 +477,11 @@ where
     }
 }
 
-impl<B, E> Default for Reader<B, E>
+impl<B, E, SR> Default for Reader<B, E, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
     fn default() -> Self {
         Self::new()
@@ -448,11 +489,11 @@ where
 }
 
 #[async_trait]
-impl<B, E> BufferReader for Reader<B, E>
+impl<B, E, SR> BufferReader for Reader<B, E, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
@@ -501,15 +542,15 @@ where
     }
 }
 
-impl<B, E> InplaceReader for Reader<B, E>
+impl<B, E, SR> InplaceReader for Reader<B, E, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
-    type Item = E::Elem;
+    type Item = SR;
 
-    type Buffer = Buffer<B, E>;
+    type Buffer = Buffer<B, E, SR>;
 
     fn get_full_buffer(&mut self) -> Option<Self::Buffer> {
         self.inbound.lock().unwrap().pop_front()
@@ -534,13 +575,13 @@ where
     }
 }
 
-impl<B, E> CpuBufferReader for Reader<B, E>
+impl<B, E, SR> CpuBufferReader for Reader<B, E, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
-    E::Elem: CpuSample,
+    SR: CpuSample,
 {
-    type Item = E::Elem;
+    type Item = SR;
 
     fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
         if self.current.is_none() {

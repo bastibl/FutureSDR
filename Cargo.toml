@@ -22,7 +22,7 @@ categories = [
 members = [".", "crates/futuredsp", "crates/macros", "crates/types"]
 
 [features]
-default = ["tracing_max_level_debug", "tracing_release_max_level_info"]
+default = ["burn", "tracing_max_level_debug", "tracing_release_max_level_info"]
 aaronia_http = ["seify/aaronia_http"]
 audio = ["dep:cpal", "dep:hound", "dep:rodio"]
 burn = ["dep:burn"]
@@ -68,7 +68,7 @@ required-features = ["seify_dummy"]
 anyhow = "1.0"
 async-lock = "3.4"
 async-trait = "0.1"
-burn = { git = "https://github.com/tracel-ai/burn", features = [
+burn = { path = "/home/basti/src/burn/crates/burn/", features = [
   "webgpu",
   "autotune",
   "fusion",

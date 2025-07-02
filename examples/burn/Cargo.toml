@@ -7,7 +7,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-burn = {git = "https://github.com/tracel-ai/burn", features = [
+burn = { path = "/home/basti/src/burn/crates/burn", features = [
   "ndarray",
   "tui",
   "train",
@@ -18,10 +18,12 @@ burn = {git = "https://github.com/tracel-ai/burn", features = [
   "autotune",
   "fusion",
 ] }
-cubecl = { git = "https://github.com/tracel-ai/cubecl" }
-burn-fusion = { git = "https://github.com/tracel-ai/burn"}
-burn-cubecl = {git = "https://github.com/tracel-ai/burn"}
-burn-wgpu = {git = "https://github.com/tracel-ai/burn"}
+cubecl = { path = "/home/basti/src/cubecl/crates/cubecl/" }
+cubecl-runtime = { path = "/home/basti/src/cubecl/crates/cubecl-runtime/" }
+cubecl-wgpu = { path = "/home/basti/src/cubecl/crates/cubecl-wgpu/" }
+burn-fusion = { path = "/home/basti/src/burn/crates/burn-fusion/" }
+burn-cubecl = { path = "/home/basti/src/burn/crates/burn-cubecl/" }
+burn-wgpu = { path = "/home/basti/src/burn/crates/burn-wgpu/" }
 bytemuck = "1.23"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = [

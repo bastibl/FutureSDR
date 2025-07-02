@@ -132,7 +132,7 @@ impl Kernel for Convert {
     ) -> Result<()> {
         if self.current.is_none() {
             if let Some(mut b) = self.output.get_empty_buffer() {
-                assert_eq!(b.num_elements(), BATCH_SIZE * FFT_SIZE * 2);
+                assert_eq!(b.num_host_elements(), BATCH_SIZE * FFT_SIZE * 2);
                 // b.resize(BATCH_SIZE * FFT_SIZE * 2);
                 b.set_valid(BATCH_SIZE * FFT_SIZE * 2);
                 self.current = Some((b, 0));
