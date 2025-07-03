@@ -28,20 +28,18 @@ use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::Runtime;
-// use whisper::audio::prep_audio;
-// use whisper::model::Whisper;
-// use whisper::model::WhisperConfig;
-// use whisper::token::Gpt2Tokenizer;
-// use whisper::token::Language;
+use whisper::audio::prep_audio;
+use whisper::model::Whisper;
+use whisper::model::WhisperConfig;
+use whisper::token::Gpt2Tokenizer;
+use whisper::token::Language;
 // use whisper::transcribe::find_chunk_overlap;
-// use whisper::transcribe::mels_to_text;
+use whisper::transcribe::mels_to_text;
 
 const PADDING: usize = 200;
 
-// type B = burn::backend::Wgpu;
+type B = burn::backend::Wgpu;
 // type B = burn::backend::Cuda;
-pub type Cube = CubeBackend<WgpuRuntime, f32, i32, u32>;
-pub type B = Fusion<Cube>;
 
 // fn load_model<B: Backend>(
 //     model_path: &str,
@@ -87,11 +85,10 @@ pub type B = Fusion<Cube>;
 struct WhisperBlock {
     #[input]
     input: burn_buffer::Reader<B, Float>,
-    device: Device<B>,
-    // language: Language,
-    // model: Whisper<B>,
-    // tokenizer: Gpt2Tokenizer,
-    // n_mels: usize,
+    language: Language,
+    model: Whisper<B>,
+    tokenizer: Gpt2Tokenizer,
+    n_mels: usize,
     // tokens: Vec<usize>,
 }
 
@@ -103,11 +100,10 @@ impl WhisperBlock {
         // let n_mels = model.encoder_mel_size();
         Self {
             input: Default::default(),
-            device: device.clone(),
-            // language: Language::German,
-            // model,
-            // tokenizer,
-            // n_mels,
+            language: Language::German,
+            model,
+            tokenizer,
+            n_mels,
             // tokens: Vec::new(),
         }
     }
@@ -121,70 +117,37 @@ impl Kernel for WhisperBlock {
         _b: &mut BlockMeta,
     ) -> Result<()> {
         if let Some(b) = self.input.get_full_buffer() {
-            let _waveform = b.into_tensor();
+            // let jit_tensor = b.into_tensor().into_primitive();
+            // let jit_tensor = jit_tensor.tensor();
+            // // let ir = jit_tensor.into_ir();
+            //
+            // let client = jit_tensor.client;
+            // let float_tensor = client.resolve_tensor_float::<B>(jit_tensor);
 
-            let tensor = Tensor::<B, 1, Float>::zeros([1024 * 256], &self.device);
+            let tensor = b.into_tensor();
             let prim = tensor.into_primitive().tensor();
-            let client = prim.client.clone();
-            let new_tensor = client.tensor_uninitialized(vec![1024], DType::F32);
-            let cube_tensor = client.resolve_tensor_float::<Cube>(new_tensor);
-            let cube_client = cube_tensor.client;
-            let cube_device = cube_tensor.device.clone();
-            let handle = cube_tensor.handle.clone();
+            let client = prim.client;
+            let resource_handle = client.get_resource(prim.handle.binding());
+            let buffer = resource_handle.resource().buffer();
 
-            let binding = cube_client.get_resource(cube_tensor.handle.binding());
-            let buffer = binding.resource().buffer();
+            // // Get the 'resource' from the client
+            // let resource = jit_tensor.client.get_resource(jit_tensor.handle.clone().binding());
+            // // Which has the wgpu buffer.
+            // let buffer = resource.buffer;
+            // // But do note it only uses a part of the buffer, see offset + size.
+            // let offset = resource.offset;
+            // // Nb: For the buffer to be in a consistent state first flush all pending work if needed.
+            // jit_tensor.client.sync(burn::tensor::backend::SyncType::Flush);
 
-            // let shape = [1024];
-            // let strides = vec![1]; // contiguous
-            // let dtype = DType::F32;
-            // let device = cube_tensor.device.clone(); // your CubeDevice
-            //
-            // let cube_tensor = CubeTensor::new(
-            //     cube_client.clone(),
-            //     handle,
-            //     shape.into(),
-            //     device.clone(),
-            //     strides,
-            //     dtype,
-            // );
-            //
-            // let fusion_prim = client.register_tensor(
-            //     cube_tensor.into(),
-            //     shape.to_vec(),
-            //     StreamId::current(),
-            //     dtype,
-            // );
-            // let primitive_enum = TensorPrimitive::Float(fusion_prim);
-            // let fusion_tensor = Tensor::<B, 1, Float>::from_primitive(primitive_enum);
 
-            let cube_tensor: CubeTensor<_> = empty_device::<WgpuRuntime, f32>(
-                cube_client.clone(),
-                cube_device.clone(),
-                [1024].into(),
-            );
 
-            let handle = cube_tensor.handle.clone();
-            let buffer = cube_client
-                .get_resource(handle.binding())
-                .resource()
-                .buffer();
 
-            // let captureable = buffer.clone();
-            //
-            // buffer.map_async(wgpu::MapMode::Write, .., move |result| {
-            //     if result.is_ok() {
-            //         let mut view = captureable.get_mapped_range_mut(..);
-            //         let floats: &mut [f32] = bytemuck::cast_slice_mut(&mut view);
-            //         floats.fill(42.0);
-            //         drop(view);
-            //         captureable.unmap();
-            //     }
-            // });
 
+
+            // let waveform = b.into_tensor();
             // let mel = prep_audio(waveform.unsqueeze(), 16000.0, self.n_mels);
             //
-            // let (new_text, new_tokens) =
+            // let (new_text, _new_tokens) =
             //     mels_to_text(&self.model, &self.tokenizer, self.language, mel, PADDING).unwrap();
 
             // if let Some((prev_index, curr_index)) =
