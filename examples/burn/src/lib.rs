@@ -1,12 +1,20 @@
 #![recursion_limit = "512"]
+mod convert;
 pub mod dataset;
 pub mod model;
 pub mod simple_cnn;
 pub mod simple_model;
+mod time_it;
+pub use convert::Convert;
+pub use time_it::TimeIt;
+pub mod fft;
 
 use burn::optim::AdamConfig;
 use burn::prelude::*;
 use model::McldnnConfig;
+
+pub const FFT_SIZE: usize = 2048;
+pub const BATCH_SIZE: usize = 100;
 
 #[derive(Config)]
 pub struct TrainingConfig {

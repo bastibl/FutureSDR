@@ -63,7 +63,7 @@ impl<T: Send + 'static, O: CpuBufferWriter<Item = T>> Kernel for FileSource<T, O
         let item_size = std::mem::size_of::<T>();
         let mut i = 0;
 
-        while i < out.len() {
+        while i < out_bytes.len() {
             match self.file.as_mut().unwrap().read(&mut out_bytes[i..]).await {
                 Ok(0) => {
                     if self.repeat {

@@ -403,6 +403,7 @@ where
         let (c, o) = self.current.as_mut().unwrap();
         debug_assert!(n <= c.num_host_elements() - *o);
         *o += n;
+
         if (c.num_host_elements() - *o) < self.min_items {
             let (mut c, o) = self.current.take().unwrap();
             c.set_valid(o);

@@ -8,13 +8,13 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0"
 burn = { path = "/home/basti/src/burn/crates/burn", features = [
+  "std",
   "ndarray",
   "tui",
   "train",
   "cuda",
   "vulkan",
   "wgpu",
-  "webgpu",
   "autotune",
   "fusion",
 ] }

@@ -4,15 +4,14 @@ use futuresdr::blocks::WebsocketSink;
 use futuresdr::blocks::WebsocketSinkMode;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
+use futuresdr_burn::BATCH_SIZE;
+use futuresdr_burn::FFT_SIZE;
 use ndarray::Array;
 use ndarray::Array1;
 use ndarray::Array2;
 use ndarray::Axis;
 use ndarray::s;
 use ndarray::stack;
-
-const FFT_SIZE: usize = 2048;
-const BATCH_SIZE: usize = 100;
 
 #[derive(Block)]
 struct Fft {

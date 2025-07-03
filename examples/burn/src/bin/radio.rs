@@ -1,16 +1,16 @@
 #![recursion_limit = "512"]
 use anyhow::Result;
-use burn::backend::wgpu::WgpuRuntime;
-use burn::prelude::*;
-use burn::backend::wgpu::init_setup;
 use burn::backend::WebGpu;
+use burn::backend::wgpu::WgpuRuntime;
+use burn::backend::wgpu::init_setup;
+use burn::prelude::*;
 use burn::record::FullPrecisionSettings;
 use burn::record::NamedMpkFileRecorder;
 use burn::record::Recorder;
-use burn_cubecl::ops::numeric::empty_device;
 use burn::tensor::DType;
 use burn::tensor::TensorPrimitive;
 use burn_cubecl::CubeBackend;
+use burn_cubecl::ops::numeric::empty_device;
 use burn_cubecl::tensor::CubeTensor;
 use burn_fusion::Fusion;
 use burn_fusion::client::FusionClient;

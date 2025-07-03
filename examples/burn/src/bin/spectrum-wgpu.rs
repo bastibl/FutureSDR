@@ -21,9 +21,9 @@ use futuresdr::blocks::WebsocketSinkMode;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 use futuresdr::runtime::buffer::burn::Buffer;
+use futuresdr_burn::BATCH_SIZE;
+use futuresdr_burn::FFT_SIZE;
 
-const FFT_SIZE: usize = 2048;
-const BATCH_SIZE: usize = 100;
 pub type Cube = CubeBackend<WgpuRuntime, f32, i32, u32>;
 pub type B = Fusion<Cube>;
 

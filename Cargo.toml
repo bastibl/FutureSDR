@@ -22,7 +22,7 @@ categories = [
 members = [".", "crates/futuredsp", "crates/macros", "crates/types"]
 
 [features]
-default = ["burn", "tracing_max_level_debug", "tracing_release_max_level_info"]
+default = ["tracing_max_level_debug", "tracing_release_max_level_info"]
 aaronia_http = ["seify/aaronia_http"]
 audio = ["dep:cpal", "dep:hound", "dep:rodio"]
 burn = ["dep:burn"]
@@ -68,11 +68,7 @@ required-features = ["seify_dummy"]
 anyhow = "1.0"
 async-lock = "3.4"
 async-trait = "0.1"
-burn = { path = "/home/basti/src/burn/crates/burn/", features = [
-  "webgpu",
-  "autotune",
-  "fusion",
-], optional = true }
+burn = { path = "/home/basti/src/burn/crates/burn/", default-features = false, optional = true }
 config = "0.15"
 dirs = "6.0"
 dyn-clone = "1.0"
