@@ -185,7 +185,8 @@ fn main() -> Result<()> {
     connect!(fg, convert < fft);
     connect!(fg, fft < snk);
 
-    Runtime::new().run(fg)?;
+    // Runtime::new().run(fg)?;
+    Runtime::with_scheduler(futuresdr::runtime::scheduler::SmolScheduler::new(1, true)).run(fg)?; 
 
     Ok(())
 }

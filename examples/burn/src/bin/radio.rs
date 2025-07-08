@@ -125,10 +125,10 @@ impl Kernel for WhisperBlock {
             // let float_tensor = client.resolve_tensor_float::<B>(jit_tensor);
 
             let tensor = b.into_tensor();
-            let prim = tensor.into_primitive().tensor();
-            let client = prim.client;
-            let resource_handle = client.get_resource(prim.handle.binding());
-            let buffer = resource_handle.resource().buffer();
+            // let prim = tensor.into_primitive().tensor();
+            // let client = prim.client;
+            // let resource_handle = client.get_resource(prim.handle.binding());
+            // let buffer = resource_handle.resource().buffer();
 
             // // Get the 'resource' from the client
             // let resource = jit_tensor.client.get_resource(jit_tensor.handle.clone().binding());

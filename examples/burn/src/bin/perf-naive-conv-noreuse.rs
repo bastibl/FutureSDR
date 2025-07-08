@@ -1,6 +1,9 @@
 #![recursion_limit = "512"]
 use anyhow::Result;
+use burn::backend::wgpu::WgpuRuntime;
 use burn::prelude::*;
+use burn_cubecl::CubeBackend;
+use burn_fusion::Fusion;
 use futuresdr::blocks::FileSource;
 use futuresdr::prelude::*;
 use futuresdr::runtime::buffer::burn::Buffer;
@@ -9,7 +12,8 @@ use futuresdr_burn::Convert;
 use futuresdr_burn::FFT_SIZE;
 use futuresdr_burn::TimeIt;
 
-type B = burn::backend::Vulkan<f32, i32>;
+pub type Cube = CubeBackend<WgpuRuntime, f32, i32, u32>;
+pub type B = Fusion<Cube>;
 
 #[derive(Block)]
 struct Fft {
@@ -133,6 +137,7 @@ fn main() -> Result<()> {
     connect!(fg, convert < fft);
     connect!(fg, fft < snk);
 
-    Runtime::new().run(fg)?;
+    // Runtime::new().run(fg)?;
+    Runtime::with_scheduler(futuresdr::runtime::scheduler::SmolScheduler::new(1, true)).run(fg)?;
     Ok(())
 }

@@ -25,8 +25,8 @@ use whisper::token::Language;
 use whisper::transcribe::find_chunk_overlap;
 use whisper::transcribe::mels_to_text;
 
-const PADDING: usize = 400;
-const CHUNK_OVERLAP: usize = 16000 * 4;
+const PADDING: usize = 200;
+const CHUNK_OVERLAP: usize = 16000 * 2;
 
 // type B = burn::backend::Wgpu;
 type B = burn::backend::Cuda;
@@ -91,7 +91,8 @@ impl WhisperBlock {
 
         let n_mels = model.encoder_mel_size();
         let n_waveform_samples_per_window =
-            max_waveform_samples(model.encoder_ctx_size() - PADDING);
+            max_waveform_samples(model.encoder_ctx_size() - PADDING) / 2;
+        println!("n_waveform_samples_per_window {n_waveform_samples_per_window}");
         let mut input: circular::Reader<f32> = Default::default();
         input.set_min_buffer_size_in_items(n_waveform_samples_per_window * 8);
 
@@ -131,16 +132,18 @@ impl Kernel for WhisperBlock {
             let end = (start + n_samples_per_tensor).min(input_len);
 
             let slice = &input[start..end];
-            // println!("iter {i}  iter_len {iter_len}   slice len {}", slice.len());
+            println!("iter {i}  iter_len {iter_len}   slice len {}", slice.len());
 
             let waveform: Tensor<B, 1> =
                 Tensor::from_data(TensorData::new(slice.to_vec(), [slice.len()]), &self.device);
             let mel = prep_audio(waveform.unsqueeze(), 16000.0, self.n_mels);
 
-            let (_new_text, new_tokens) =
+            let (new_text, new_tokens) =
                 mels_to_text(&self.model, &self.tokenizer, self.language, mel, PADDING).unwrap();
 
-            // println!("new text: {new_text}");
+
+            println!("new tokens: {new_tokens:?}");
+            println!("new text: {new_text:?}");
             if let Some((prev_index, curr_index)) =
                 find_chunk_overlap(&self.tokens[..], &new_tokens[..], 40, 3)
                 && prev_index > 0
@@ -175,7 +178,7 @@ struct Args {
     #[clap(short, long, default_value_t = 1.28e6)]
     sample_rate: f64,
     /// Intermediate rate
-    #[clap(short, long, default_value_t = 0.04e6)]
+    #[clap(short, long, default_value_t = 0.128e6)]
     intermediate_rate: f64,
     /// Seify args
     #[clap(short, long, default_value = "")]
@@ -208,8 +211,8 @@ fn main() -> Result<()> {
         arg / 8.0
     });
 
-    let cutoff = 6000.0 / args.intermediate_rate;
-    let transition = 3000.0 / args.intermediate_rate;
+    let cutoff = 4000.0 / args.intermediate_rate;
+    let transition = 2000.0 / args.intermediate_rate;
     let audio_filter_taps = firdes::kaiser::lowpass::<f32>(cutoff, transition, 0.1);
     let resamp2 = FirBuilder::resampling_with_taps::<f32, f32, _>(1, 8, audio_filter_taps);
     let whisper = WhisperBlock::new(&device);
