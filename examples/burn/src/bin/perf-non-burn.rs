@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
 
     let src = FileSource::<Complex32>::new("data.cf32", false);
-    let fft = Fft::with_options(FFT_SIZE, FftDirection::Forward, true, None);
+    let fft: Fft = Fft::with_options(FFT_SIZE, FftDirection::Forward, true, None);
     let avg = Avg::new();
     let snk = NullSink::<f32>::new();
 
