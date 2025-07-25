@@ -12,9 +12,9 @@ type B = WebGpu<f32, i32>;
 #[derive(Block)]
 struct Apply {
     #[input]
-    input: burn_buffer::Reader<B, Int>,
+    input: burn_buffer::Reader<B, Int, i32>,
     #[output]
-    output: burn_buffer::Writer<B, Int>,
+    output: burn_buffer::Writer<B, Int, i32>,
 }
 
 impl Apply {
@@ -57,9 +57,9 @@ where
     B: Backend,
 {
     #[input]
-    input: burn_buffer::Reader<B, Int>,
+    input: burn_buffer::Reader<B, Int, i32>,
     #[output]
-    output: burn_buffer::Writer<B, Int>,
+    output: burn_buffer::Writer<B, Int, i32>,
 }
 
 impl<B> ApplyTensor<B>
@@ -118,7 +118,7 @@ fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
 
     let orig = Vec::from_iter(0..999_999i32);
-    let mut src: VectorSource<i32, burn_buffer::Writer<B, Int>> = VectorSource::new(orig.clone());
+    let mut src: VectorSource<i32, burn_buffer::Writer<B, Int, i32>> = VectorSource::new(orig.clone());
     src.output().set_device(&device);
     src.output().inject_buffers(4);
     let apply = Apply::new();

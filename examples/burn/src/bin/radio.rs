@@ -28,58 +28,58 @@ use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::Runtime;
-use whisper::audio::prep_audio;
-use whisper::model::Whisper;
-use whisper::model::WhisperConfig;
-use whisper::token::Gpt2Tokenizer;
-use whisper::token::Language;
+use whisper_burn::audio::prep_audio;
+use whisper_burn::model::Whisper;
+use whisper_burn::model::WhisperConfig;
+use whisper_burn::token::Gpt2Tokenizer;
+use whisper_burn::token::Language;
 // use whisper::transcribe::find_chunk_overlap;
-use whisper::transcribe::mels_to_text;
+use whisper_burn::transcribe::mels_to_text;
 
 const PADDING: usize = 200;
 
 type B = burn::backend::Wgpu;
 // type B = burn::backend::Cuda;
 
-// fn load_model<B: Backend>(
-//     model_path: &str,
-//     model_name: &str,
-//     device: &B::Device,
-// ) -> (Gpt2Tokenizer, WhisperConfig, Whisper<B>) {
-//     let bpe = match Gpt2Tokenizer::new(model_path) {
-//         Ok(bpe) => bpe,
-//         Err(e) => {
-//             eprintln!("Failed to load tokenizer: {e}");
-//             std::process::exit(1);
-//         }
-//     };
-//
-//     println!("name {model_name}");
-//     let whisper_config = match WhisperConfig::load(format!("{model_path}/{model_name}.cfg")) {
-//         Ok(config) => config,
-//         Err(e) => {
-//             eprintln!("Failed to load whisper config: {e}");
-//             std::process::exit(1);
-//         }
-//     };
-//
-//     println!("Loading model...");
-//     let whisper: Whisper<B> = {
-//         match NamedMpkFileRecorder::<FullPrecisionSettings>::new()
-//             .load(format!("{model_path}/{model_name}").into(), device)
-//             .map(|record| whisper_config.init(device).load_record(record))
-//         {
-//             Ok(whisper_model) => whisper_model,
-//             Err(e) => {
-//                 eprintln!("Failed to load whisper model file: {e}");
-//                 std::process::exit(1);
-//             }
-//         }
-//     };
-//
-//     let whisper = whisper.to_device(device);
-//     (bpe, whisper_config, whisper)
-// }
+fn load_model<B: Backend>(
+    model_path: &str,
+    model_name: &str,
+    device: &B::Device,
+) -> (Gpt2Tokenizer, WhisperConfig, Whisper<B>) {
+    let bpe = match Gpt2Tokenizer::new(model_path) {
+        Ok(bpe) => bpe,
+        Err(e) => {
+            eprintln!("Failed to load tokenizer: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("name {model_name}");
+    let whisper_config = match WhisperConfig::load(format!("{model_path}/{model_name}.cfg")) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Failed to load whisper config: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Loading model...");
+    let whisper: Whisper<B> = {
+        match NamedMpkFileRecorder::<FullPrecisionSettings>::new()
+            .load(format!("{model_path}/{model_name}").into(), device)
+            .map(|record| whisper_config.init(device).load_record(record))
+        {
+            Ok(whisper_model) => whisper_model,
+            Err(e) => {
+                eprintln!("Failed to load whisper model file: {e}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let whisper = whisper.to_device(device);
+    (bpe, whisper_config, whisper)
+}
 
 #[derive(Block)]
 struct WhisperBlock {
@@ -94,10 +94,10 @@ struct WhisperBlock {
 
 impl WhisperBlock {
     fn new(device: &Device<B>) -> Self {
-        // let (tokenizer, _config, model) =
-        //     load_model::<B>("/home/basti/src/whisper-burn/tiny", "tiny", device);
+        let (tokenizer, _config, model) =
+            load_model::<B>("/home/basti/src/whisper-burn/tiny", "tiny", device);
 
-        // let n_mels = model.encoder_mel_size();
+        let n_mels = model.encoder_mel_size();
         Self {
             input: Default::default(),
             language: Language::German,
