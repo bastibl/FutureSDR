@@ -84,17 +84,16 @@ impl Kernel for Fft {
         {
             let data = b.slice();
             let byte_data: &[u8] = cast_slice(data);
-            let handle = self
+            let (handle, strides) = self
                 .cubecl_client
-                .create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4)
-                .0;
+                .create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4);
 
             let cube_tensor = CubeTensor::new(
                 self.cubecl_client.clone(),
                 handle,
                 [BATCH_SIZE * FFT_SIZE * 2].into(),
                 self.wgpu_device_type.clone(),
-                vec![1],
+                strides,
                 DType::F32,
             );
 
