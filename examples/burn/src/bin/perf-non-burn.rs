@@ -81,7 +81,7 @@ fn main() -> Result<()> {
     connect!(fg, src > fft > avg > snk);
 
     let now = std::time::Instant::now();
-    Runtime::with_scheduler(futuresdr::runtime::scheduler::SmolScheduler::new(1, true)).run(fg)?;
+    Runtime::new().run(fg)?;
     let elapsed = now.elapsed();
     println!("took {elapsed:?}");
 

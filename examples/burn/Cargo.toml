@@ -7,7 +7,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-burn = { version = "0.17", features = [
+burn = { version = "0.18", features = [
   "std",
   "ndarray",
   "tui",
@@ -19,12 +19,12 @@ burn = { version = "0.17", features = [
   "autotune",
   "fusion",
 ] }
-cubecl = "0.5"
-cubecl-runtime = "0.5"
-cubecl-wgpu = "0.5"
-burn-fusion = "0.17"
-burn-cubecl = "0.17"
-burn-wgpu = "0.17"
+cubecl = "0.6"
+cubecl-runtime = "0.6"
+cubecl-wgpu = "0.6"
+burn-fusion = "0.18"
+burn-cubecl = "0.18"
+burn-wgpu = "0.18"
 bytemuck = "1.23"
 clap = { version = "4", features = ["derive"] }
 futuresdr = { path = "../..", features = [
@@ -39,7 +39,7 @@ log = "0.4"
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1.0", features = ["derive"] }
-whisper-burn = { git = "ssh://git@github.com/bastibl/whisper-burn.git" }
+# whisper-burn = { git = "ssh://git@github.com/bastibl/whisper-burn.git" }
 wgpu = "25.0"
 
 [profile.release]
