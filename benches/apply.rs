@@ -6,10 +6,10 @@ use futuresdr::runtime::mocker;
 use std::iter::repeat_with;
 
 use futuresdr::blocks::Apply;
+use futuresdr::prelude::*;
 use futuresdr::runtime::mocker::Mocker;
 use futuresdr::runtime::mocker::Reader;
 use futuresdr::runtime::mocker::Writer;
-use futuresdr::prelude::*;
 
 #[derive(Block)]
 struct Add {
@@ -91,15 +91,12 @@ impl Kernel for AddChunk {
 
 #[cfg(target_feature = "avx2")]
 mod avx2 {
-    use std::arch::x86_64::{
-        __m256i,
-        _mm256_add_epi8,
-        _mm256_loadu_si256,
-        _mm256_set1_epi8,
-        _mm256_storeu_si256,
-    };
     use super::*;
-
+    use std::arch::x86_64::__m256i;
+    use std::arch::x86_64::_mm256_add_epi8;
+    use std::arch::x86_64::_mm256_loadu_si256;
+    use std::arch::x86_64::_mm256_set1_epi8;
+    use std::arch::x86_64::_mm256_storeu_si256;
 
     #[derive(Block)]
     pub struct AddAvx2 {
@@ -149,7 +146,6 @@ mod avx2 {
     }
 }
 
-
 pub fn apply(c: &mut Criterion) {
     let n_samp = 1024 * 1024 * 1024 * 2;
     let input: Vec<u8> = repeat_with(rand::random::<u8>).take(n_samp).collect();
@@ -159,44 +155,70 @@ pub fn apply(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(n_samp as u64));
 
     group.bench_function(format!("apply-u8-plus-1-{n_samp}"), |b| {
-        b.iter_batched(|| {
-            let block: Apply<_, _, _, Reader<u8>, Writer<u8>> = Apply::new(|x: &u8| x.wrapping_add(1));
-            let mut mocker = Mocker::new(block);
-            mocker.input().set(input.clone());
-            mocker.output().reserve(n_samp);
-            mocker
-        }, |mut m: _| m.run(), BatchSize::LargeInput);
+        b.iter_batched(
+            || {
+                let block: Apply<_, _, _, Reader<u8>, Writer<u8>> =
+                    Apply::new(|x: &u8| x.wrapping_add(1));
+                let mut mocker = Mocker::new(block);
+                mocker.input().set(input.clone());
+                mocker.output().reserve(n_samp);
+                mocker
+            },
+            |mut m: _| m.run(),
+            BatchSize::LargeInput,
+        );
     });
 
     group.bench_function(format!("block-u8-plus-1-{n_samp}"), |b| {
-        b.iter_batched(|| {
-            let block = Add { input: Default::default(), output: Default::default() };
-            let mut mocker = Mocker::new(block);
-            mocker.input().set(input.clone());
-            mocker.output().reserve(n_samp);
-            mocker
-        }, |mut m: _| m.run(), BatchSize::LargeInput);
+        b.iter_batched(
+            || {
+                let block = Add {
+                    input: Default::default(),
+                    output: Default::default(),
+                };
+                let mut mocker = Mocker::new(block);
+                mocker.input().set(input.clone());
+                mocker.output().reserve(n_samp);
+                mocker
+            },
+            |mut m: _| m.run(),
+            BatchSize::LargeInput,
+        );
     });
 
     group.bench_function(format!("chunks-u8-plus-1-{n_samp}"), |b| {
-        b.iter_batched(|| {
-            let block = AddChunk { input: Default::default(), output: Default::default() };
-            let mut mocker = Mocker::new(block);
-            mocker.input().set(input.clone());
-            mocker.output().reserve(n_samp);
-            mocker
-        }, |mut m: _| m.run(), BatchSize::LargeInput);
+        b.iter_batched(
+            || {
+                let block = AddChunk {
+                    input: Default::default(),
+                    output: Default::default(),
+                };
+                let mut mocker = Mocker::new(block);
+                mocker.input().set(input.clone());
+                mocker.output().reserve(n_samp);
+                mocker
+            },
+            |mut m: _| m.run(),
+            BatchSize::LargeInput,
+        );
     });
 
     #[cfg(target_feature = "avx2")]
     group.bench_function(format!("avx2-u8-plus-1-{n_samp}"), |b| {
-        b.iter_batched(|| {
-            let block = avx2::AddAvx2 { input: Default::default(), output: Default::default() };
-            let mut mocker = Mocker::new(block);
-            mocker.input().set(input.clone());
-            mocker.output().reserve(n_samp);
-            mocker
-        }, |mut m: _| m.run(), BatchSize::LargeInput);
+        b.iter_batched(
+            || {
+                let block = avx2::AddAvx2 {
+                    input: Default::default(),
+                    output: Default::default(),
+                };
+                let mut mocker = Mocker::new(block);
+                mocker.input().set(input.clone());
+                mocker.output().reserve(n_samp);
+                mocker
+            },
+            |mut m: _| m.run(),
+            BatchSize::LargeInput,
+        );
     });
 
     group.finish();

@@ -28,7 +28,8 @@ use crate::runtime::config::config;
 ///
 /// A harness to run a block without a runtime. Used for unit tests and benchmarking.
 pub struct Mocker<K: Kernel> {
-    block: WrappedKernel<K>,
+    /// Wrapped Block
+    pub block: WrappedKernel<K>,
     message_sinks: Vec<Receiver<BlockMessage>>,
     messages: Vec<Vec<Pmt>>,
 }

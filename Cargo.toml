@@ -41,11 +41,15 @@ zeromq = ["dep:zmq"]
 zynq = ["dep:xilinx-dma"]
 
 [[bench]]
+name = "apply"
+harness = false
+
+[[bench]]
 name = "flowgraph"
 harness = false
 
 [[bench]]
-name = "apply"
+name = "sync_vs_async"
 harness = false
 
 [[test]]
