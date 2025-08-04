@@ -31,12 +31,14 @@ impl Kernel for Add {
 
         let n = std::cmp::min(i_len, o.len());
 
-        for (i, o) in i.iter().zip(o.iter_mut()) {
-            *o = i.wrapping_add(1);
-        }
+        if n > 0 {
+            for (i, o) in i.iter().zip(o.iter_mut()) {
+                *o = i.wrapping_add(1);
+            }
 
-        self.input.consume(n);
-        self.output.produce(n);
+            self.input.consume(n);
+            self.output.produce(n);
+        }
 
         if self.input.finished() && i_len == n {
             io.finished = true;
@@ -67,30 +69,16 @@ impl Kernel for AddChunk {
 
         let n = std::cmp::min(i_len, o.len());
 
-        for (i, o) in i.chunks_exact(16).zip(o.chunks_exact_mut(16)) {
-            for x in 0..16 {
-                o[x] = i[x].wrapping_add(1);
+        if n > 0 {
+            for (i, o) in i.chunks_exact(32).zip(o.chunks_exact_mut(32)) {
+                for x in 0..32 {
+                    o[x] = i[x].wrapping_add(1);
+                }
             }
-            // o[0] = i[0].wrapping_add(1);
-            // o[1] = i[1].wrapping_add(1);
-            // o[2] = i[2].wrapping_add(1);
-            // o[3] = i[3].wrapping_add(1);
-            // o[4] = i[4].wrapping_add(1);
-            // o[5] = i[5].wrapping_add(1);
-            // o[6] = i[6].wrapping_add(1);
-            // o[7] = i[7].wrapping_add(1);
-            // o[8] = i[8].wrapping_add(1);
-            // o[9] = i[9].wrapping_add(1);
-            // o[10] = i[10].wrapping_add(1);
-            // o[11] = i[11].wrapping_add(1);
-            // o[12] = i[12].wrapping_add(1);
-            // o[13] = i[13].wrapping_add(1);
-            // o[14] = i[14].wrapping_add(1);
-            // o[15] = i[15].wrapping_add(1);
-        }
 
-        self.input.consume(n);
-        self.output.produce(n);
+            self.input.consume(n);
+            self.output.produce(n);
+        }
 
         if self.input.finished() && i_len == n {
             io.finished = true;
@@ -100,9 +88,71 @@ impl Kernel for AddChunk {
     }
 }
 
+#[cfg(target_feature = "avx2")]
+mod avx2 {
+    use std::arch::x86_64::{
+        __m256i,
+        _mm256_add_epi8,
+        _mm256_loadu_si256,
+        _mm256_set1_epi8,
+        _mm256_storeu_si256,
+    };
+    use super::*;
+
+
+    #[derive(Block)]
+    pub struct AddAvx2 {
+        #[input]
+        pub input: mocker::Reader<u8>,
+        #[output]
+        pub output: mocker::Writer<u8>,
+    }
+
+    impl Kernel for AddAvx2 {
+        async fn work(
+            &mut self,
+            io: &mut WorkIo,
+            _m: &mut MessageOutputs,
+            _b: &mut BlockMeta,
+        ) -> Result<()> {
+            let i = self.input.slice();
+            let o = self.output.slice();
+            let i_len = i.len();
+
+            let n = std::cmp::min(i_len, o.len());
+
+            if n > 0 {
+                unsafe {
+                    let ones: __m256i = _mm256_set1_epi8(1);
+
+                    for (i, o) in i.chunks_exact(32).zip(o.chunks_exact_mut(32)) {
+                        // load 32 bytes (unaligned)
+                        let v = _mm256_loadu_si256(i.as_ptr() as *const __m256i);
+                        // add 1 to each lane, wrapping modulo 256
+                        let r = _mm256_add_epi8(v, ones);
+                        // store back
+                        _mm256_storeu_si256(o.as_mut_ptr() as *mut __m256i, r);
+                    }
+                }
+
+                self.input.consume(n);
+                self.output.produce(n);
+            }
+
+            if self.input.finished() && i_len == n {
+                io.finished = true;
+            }
+
+            Ok(())
+        }
+    }
+}
+
+
 pub fn apply(c: &mut Criterion) {
     let n_samp = 1024 * 1024;
     let input: Vec<u8> = repeat_with(rand::random::<u8>).take(n_samp).collect();
+    let exp: Vec<u8> = input.iter().map(|v| v.wrapping_add(1)).collect();
 
     let mut group = c.benchmark_group("apply");
 
@@ -114,9 +164,11 @@ pub fn apply(c: &mut Criterion) {
         mocker.input().set(input.clone());
         mocker.output().reserve(n_samp);
 
-        b.iter(move || {
+        b.iter(|| {
             mocker.run();
         });
+        let res = mocker.output().take().0;
+        assert_eq!(res, exp);
     });
 
     group.bench_function(format!("block-u8-plus-1-{n_samp}"), |b| {
@@ -125,9 +177,11 @@ pub fn apply(c: &mut Criterion) {
         mocker.input().set(input.clone());
         mocker.output().reserve(n_samp);
 
-        b.iter(move || {
+        b.iter(|| {
             mocker.run();
         });
+        let res = mocker.output().take().0;
+        assert_eq!(res, exp);
     });
 
     group.bench_function(format!("chunks-u8-plus-1-{n_samp}"), |b| {
@@ -136,9 +190,25 @@ pub fn apply(c: &mut Criterion) {
         mocker.input().set(input.clone());
         mocker.output().reserve(n_samp);
 
-        b.iter(move || {
+        b.iter(|| {
             mocker.run();
         });
+        let res = mocker.output().take().0;
+        assert_eq!(res, exp);
+    });
+
+    #[cfg(target_feature = "avx2")]
+    group.bench_function(format!("avx2-u8-plus-1-{n_samp}"), |b| {
+        let block = avx2::AddAvx2 { input: Default::default(), output: Default::default() };
+        let mut mocker = Mocker::new(block);
+        mocker.input().set(input.clone());
+        mocker.output().reserve(n_samp);
+
+        b.iter(|| {
+            mocker.run();
+        });
+        let res = mocker.output().take().0;
+        assert_eq!(res, exp);
     });
 
     group.finish();
