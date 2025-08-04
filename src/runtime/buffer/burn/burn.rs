@@ -21,9 +21,9 @@ use burn::tensor::TensorKind;
 use futures::prelude::*;
 use std::any::Any;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::marker::PhantomData;
 
 enum BufferState<B, E = Float, S = f32>
 where
@@ -45,8 +45,8 @@ where
     fn cast<SO: CpuSample>(self) -> BufferState<B, E, SO> {
         match self {
             BufferState::Tensor(t) => BufferState::Tensor(t),
-            BufferState::Data(d)   => BufferState::Data(d),
-            BufferState::Empty(_)  => BufferState::Empty(PhantomData),
+            BufferState::Data(d) => BufferState::Data(d),
+            BufferState::Empty(_) => BufferState::Empty(PhantomData),
         }
     }
 }
@@ -104,15 +104,24 @@ where
     }
 
     fn cast<SO: CpuSample>(self) -> Buffer<B, E, SO> {
-        let Self { valid, state, device, tags } = self;
+        let Self {
+            valid,
+            state,
+            device,
+            tags,
+        } = self;
         Buffer {
-            valid, state: state.cast(), device, tags
+            valid,
+            state: state.cast(),
+            device,
+            tags,
         }
     }
 
     fn ensure_data(&mut self) {
         if matches!(self.state, BufferState::Tensor(_))
-            && let BufferState::Tensor(t) = std::mem::replace(&mut self.state, BufferState::Empty(PhantomData))
+            && let BufferState::Tensor(t) =
+                std::mem::replace(&mut self.state, BufferState::Empty(PhantomData))
         {
             self.state = BufferState::Data(t.into_data());
         }
@@ -151,10 +160,8 @@ where
             BufferState::Data(ref mut d) => {
                 let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
                 let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
-                unsafe {
-                    std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len)
-                }
-            },
+                unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len) }
+            }
             _ => unreachable!(),
         }
     }
@@ -165,14 +172,9 @@ where
             BufferState::Data(ref mut d) => {
                 let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
                 let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
-                let s = unsafe {
-                    std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len)
-                };
-                (
-                s,
-                &mut self.tags,
-            )
-            },
+                let s = unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len) };
+                (s, &mut self.tags)
+            }
             _ => unreachable!(),
         }
     }
@@ -449,7 +451,10 @@ where
     writer_output: PortId,
     inbound: Arc<Mutex<VecDeque<Buffer<B, E, SR>>>>,
     #[allow(clippy::type_complexity)]
-    circuit_start: Option<(Sender<BlockMessage>, Arc<Mutex<Vec<Option<Buffer<B, E, SR>>>>>)>,
+    circuit_start: Option<(
+        Sender<BlockMessage>,
+        Arc<Mutex<Vec<Option<Buffer<B, E, SR>>>>>,
+    )>,
     finished: bool,
     // for CPU buffer reader
     current: Option<(Buffer<B, E, SR>, usize)>,
