@@ -52,7 +52,7 @@ fn run_cpu(orig: Vec<f32>) -> Result<Vec<f32>> {
     let elapsed = now.elapsed();
     println!("cpu took {elapsed:?}");
 
-    let snk = snk.get();
+    let snk = snk.get().unwrap();
     Ok(snk.items().clone())
 }
 
@@ -82,7 +82,7 @@ fn run_vulkan(orig: Vec<f32>) -> Result<Vec<f32>> {
     let elapsed = now.elapsed();
     println!("vulkan took {elapsed:?}");
 
-    let snk = snk.get();
+    let snk = snk.get().unwrap();
     Ok(snk.items().clone())
 }
 
