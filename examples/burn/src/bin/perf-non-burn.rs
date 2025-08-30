@@ -22,10 +22,7 @@ impl Avg {
         let mut output: circular::Writer<f32> = Default::default();
         output.set_min_items(FFT_SIZE);
 
-        Self {
-            input,
-            output
-        }
+        Self { input, output }
     }
 }
 

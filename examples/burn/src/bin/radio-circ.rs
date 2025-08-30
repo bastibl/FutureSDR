@@ -141,7 +141,6 @@ impl Kernel for WhisperBlock {
             let (new_text, new_tokens) =
                 mels_to_text(&self.model, &self.tokenizer, self.language, mel, PADDING).unwrap();
 
-
             println!("new tokens: {new_tokens:?}");
             println!("new text: {new_text:?}");
             if let Some((prev_index, curr_index)) =

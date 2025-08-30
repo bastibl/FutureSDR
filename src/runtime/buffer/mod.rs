@@ -24,7 +24,7 @@ pub mod vulkan;
 pub mod wgpu;
 
 // -==================== ZYNQ ========================
-#[cfg(feature = "zynq")]
+#[cfg(all(feature = "zynq", target_os = "linux"))]
 pub mod zynq;
 
 use std::any::Any;

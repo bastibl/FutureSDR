@@ -159,7 +159,7 @@ where
         match self.state {
             BufferState::Data(ref mut d) => {
                 let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
-                let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
+                let len = size_of_val(s) / size_of::<S>();
                 unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len) }
             }
             _ => unreachable!(),
@@ -171,7 +171,7 @@ where
         match self.state {
             BufferState::Data(ref mut d) => {
                 let s = &mut d.as_mut_slice::<E::Elem>().unwrap()[0..self.valid];
-                let len = s.len() * size_of::<E::Elem>() / size_of::<S>();
+                let len = size_of_val(s) / size_of::<S>();
                 let s = unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut S, len) };
                 (s, &mut self.tags)
             }

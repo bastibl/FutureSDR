@@ -24,10 +24,7 @@ impl Avg {
         let mut output: circular::Writer<f32> = Default::default();
         output.set_min_items(FFT_SIZE);
 
-        Self {
-            input,
-            output
-        }
+        Self { input, output }
     }
 }
 
@@ -83,10 +80,7 @@ fn main() -> Result<()> {
 
     let fft: Fft = Fft::with_options(FFT_SIZE, FftDirection::Forward, true, None);
     let avg = Avg::new();
-    let snk = WebsocketSink::<f32>::new(
-        9001,
-        WebsocketSinkMode::FixedBlocking(FFT_SIZE),
-    );
+    let snk = WebsocketSink::<f32>::new(9001, WebsocketSinkMode::FixedBlocking(FFT_SIZE));
 
     connect!(fg, src.outputs[0] > fft > avg > snk);
 

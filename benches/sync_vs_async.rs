@@ -27,10 +27,10 @@ impl AsyncTest {
     ) -> Result<()> {
         let i_len = self.input.slice().len();
         let o_len = self.output.slice().len();
-        
+
         self.input.consume(i_len);
         self.output.produce(o_len);
-        
+
         Ok(())
     }
 }
@@ -52,7 +52,7 @@ pub fn sync_vs_async(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("sync-vs-async");
 
-    group.bench_function(format!("sync"), |b| {
+    group.bench_function("sync".to_string(), |b| {
         let block: AsyncTest = AsyncTest {
             input: Default::default(),
             output: Default::default(),
@@ -69,16 +69,17 @@ pub fn sync_vs_async(c: &mut Criterion) {
         b.iter(move || {
             async_io::block_on(async {
                 for _ in 0..N {
-                    let _ = black_box(mocker
-                        .block
-                        .kernel
-                        .sync_work(&mut io, &mut mocker.block.mio, &mut mocker.block.meta));
+                    let _ = black_box(mocker.block.kernel.sync_work(
+                        &mut io,
+                        &mut mocker.block.mio,
+                        &mut mocker.block.meta,
+                    ));
                 }
             })
         });
     });
 
-    group.bench_function(format!("async"), |b| {
+    group.bench_function("async".to_string(), |b| {
         let block: AsyncTest = AsyncTest {
             input: Default::default(),
             output: Default::default(),
@@ -95,11 +96,13 @@ pub fn sync_vs_async(c: &mut Criterion) {
         b.iter(move || {
             async_io::block_on(async {
                 for _ in 0..N {
-                    let _ = black_box(mocker
-                        .block
-                        .kernel
-                        .work(&mut io, &mut mocker.block.mio, &mut mocker.block.meta)
-                        .await);
+                    let _ = black_box(
+                        mocker
+                            .block
+                            .kernel
+                            .work(&mut io, &mut mocker.block.mio, &mut mocker.block.meta)
+                            .await,
+                    );
                 }
             })
         });

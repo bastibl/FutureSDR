@@ -102,9 +102,9 @@ impl Kernel for Fft {
         {
             let data = b.slice();
             let byte_data: &[u8] = cast_slice(data);
-            let (handle, strides) = self
-                .cubecl_client
-                .create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4);
+            let (handle, strides) =
+                self.cubecl_client
+                    .create_tensor(byte_data, &[BATCH_SIZE * FFT_SIZE * 2], 4);
 
             let cube_tensor = CubeTensor::new(
                 self.cubecl_client.clone(),
@@ -170,7 +170,7 @@ fn main() -> Result<()> {
     connect!(fg, src < fft);
     connect!(fg, fft < snk);
 
-    Runtime::with_scheduler(futuresdr::runtime::scheduler::SmolScheduler::new(1, true)).run(fg)?; 
+    Runtime::with_scheduler(futuresdr::runtime::scheduler::SmolScheduler::new(1, true)).run(fg)?;
     // Runtime::new().run(fg)?;
     Ok(())
 }

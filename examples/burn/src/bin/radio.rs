@@ -139,11 +139,6 @@ impl Kernel for WhisperBlock {
             // // Nb: For the buffer to be in a consistent state first flush all pending work if needed.
             // jit_tensor.client.sync(burn::tensor::backend::SyncType::Flush);
 
-
-
-
-
-
             // let waveform = b.into_tensor();
             // let mel = prep_audio(waveform.unsqueeze(), 16000.0, self.n_mels);
             //
