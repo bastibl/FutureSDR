@@ -1313,3 +1313,9 @@ impl Decoder {
         b[1] = Self::quantize(precision, c.im);
     }
 }
+
+impl Default for Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

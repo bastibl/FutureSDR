@@ -325,7 +325,7 @@ impl FrameParam {
         // n_symbols
         let bits = 16 + 8 * psdu_size + 6;
         let mut n_symbols = bits / mcs.n_dbps();
-        if bits % mcs.n_dbps() > 0 {
+        if !bits.is_multiple_of(mcs.n_dbps()) {
             n_symbols += 1;
         }
 

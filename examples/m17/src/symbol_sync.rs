@@ -1748,9 +1748,13 @@ impl State {
 
     fn update_internal_clock_outputs(&mut self) {
         // a d_interp_clock boolean output would always be true.
-        self.ted_input_clock = (self.interp_clock % self.interps_per_ted_input_n) == 0;
-        self.output_sample_clock = (self.interp_clock % self.interps_per_output_sample_n) == 0;
-        self.symbol_clock = (self.interp_clock % self.interps_per_symbol_n) == 0;
+        self.ted_input_clock = self
+            .interp_clock
+            .is_multiple_of(self.interps_per_ted_input_n);
+        self.output_sample_clock = self
+            .interp_clock
+            .is_multiple_of(self.interps_per_output_sample_n);
+        self.symbol_clock = self.interp_clock.is_multiple_of(self.interps_per_symbol_n);
     }
 
     fn advance_internal_clocks(&mut self) {

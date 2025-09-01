@@ -1,20 +1,20 @@
 #![recursion_limit = "512"]
 use anyhow::Result;
-use burn::backend::WebGpu;
-use burn::backend::wgpu::WgpuRuntime;
-use burn::backend::wgpu::init_setup;
+// use burn::backend::WebGpu;
+// use burn::backend::wgpu::WgpuRuntime;
+// use burn::backend::wgpu::init_setup;
 use burn::prelude::*;
 use burn::record::FullPrecisionSettings;
 use burn::record::NamedMpkFileRecorder;
 use burn::record::Recorder;
-use burn::tensor::DType;
-use burn::tensor::TensorPrimitive;
-use burn_cubecl::CubeBackend;
-use burn_cubecl::ops::numeric::empty_device;
-use burn_cubecl::tensor::CubeTensor;
-use burn_fusion::Fusion;
-use burn_fusion::client::FusionClient;
-use burn_fusion::stream::StreamId;
+// use burn::tensor::DType;
+// use burn::tensor::TensorPrimitive;
+// use burn_cubecl::CubeBackend;
+// use burn_cubecl::ops::numeric::empty_device;
+// use burn_cubecl::tensor::CubeTensor;
+// use burn_fusion::Fusion;
+// use burn_fusion::client::FusionClient;
+// use burn_fusion::stream::StreamId;
 use clap::Parser;
 use futuresdr::blocks::Apply;
 use futuresdr::blocks::FirBuilder;
@@ -28,15 +28,15 @@ use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::Runtime;
-use whisper_burn::audio::prep_audio;
+// use whisper_burn::audio::prep_audio;
 use whisper_burn::model::Whisper;
 use whisper_burn::model::WhisperConfig;
 use whisper_burn::token::Gpt2Tokenizer;
-use whisper_burn::token::Language;
+// use whisper_burn::token::Language;
 // use whisper::transcribe::find_chunk_overlap;
-use whisper_burn::transcribe::mels_to_text;
+// use whisper_burn::transcribe::mels_to_text;
 
-const PADDING: usize = 200;
+// const PADDING: usize = 200;
 
 type B = burn::backend::Wgpu;
 // type B = burn::backend::Cuda;
@@ -85,25 +85,25 @@ fn load_model<B: Backend>(
 struct WhisperBlock {
     #[input]
     input: burn_buffer::Reader<B, Float>,
-    language: Language,
-    model: Whisper<B>,
-    tokenizer: Gpt2Tokenizer,
-    n_mels: usize,
+    // language: Language,
+    // model: Whisper<B>,
+    // tokenizer: Gpt2Tokenizer,
+    // n_mels: usize,
     // tokens: Vec<usize>,
 }
 
 impl WhisperBlock {
     fn new(device: &Device<B>) -> Self {
-        let (tokenizer, _config, model) =
+        let (_tokenizer, _config, _model) =
             load_model::<B>("/home/basti/src/whisper-burn/tiny", "tiny", device);
 
-        let n_mels = model.encoder_mel_size();
+        // let n_mels = model.encoder_mel_size();
         Self {
             input: Default::default(),
-            language: Language::German,
-            model,
-            tokenizer,
-            n_mels,
+            // language: Language::German,
+            // model,
+            // tokenizer,
+            // n_mels,
             // tokens: Vec::new(),
         }
     }
@@ -116,7 +116,7 @@ impl Kernel for WhisperBlock {
         _m: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
-        if let Some(b) = self.input.get_full_buffer() {
+        if let Some(_b) = self.input.get_full_buffer() {
             // let jit_tensor = b.into_tensor().into_primitive();
             // let jit_tensor = jit_tensor.tensor();
             // // let ir = jit_tensor.into_ir();
@@ -124,7 +124,7 @@ impl Kernel for WhisperBlock {
             // let client = jit_tensor.client;
             // let float_tensor = client.resolve_tensor_float::<B>(jit_tensor);
 
-            let tensor = b.into_tensor();
+            // let tensor = b.into_tensor();
             // let prim = tensor.into_primitive().tensor();
             // let client = prim.client;
             // let resource_handle = client.get_resource(prim.handle.binding());
@@ -192,8 +192,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     println!("Configuration {args:?}");
     let device = Default::default();
-    let setup = init_setup::<burn_wgpu::graphics::WebGpu>(&device, Default::default());
-    let queue = setup.queue;
+    // let setup = init_setup::<burn_wgpu::graphics::WebGpu>(&device, Default::default());
+    // let queue = setup.queue;
 
     let mut fg = Flowgraph::new();
     let src = Builder::new(args.args)?

@@ -73,14 +73,16 @@ cd ${SCRIPTPATH}/crates/types && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/buffer_rand && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/buffer_size && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/fir && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/perf/fir_latency && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/msg && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/null_rand && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/perf/null_rand_latency && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/perf && cargo clippy --all-targets --all-features -- -D warnings
 cd ${SCRIPTPATH}/perf/vulkan && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/wgpu && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/perf/zynq && cargo clippy --all-targets -- -D warnings
+if [[ "$OSTYPE" == linux* ]]; then
+  cd ${SCRIPTPATH}/perf/fir_latency && cargo clippy --all-targets -- -D warnings
+  cd ${SCRIPTPATH}/perf/null_rand_latency && cargo clippy --all-targets -- -D warnings
+  cd ${SCRIPTPATH}/perf/zynq && cargo clippy --all-targets -- -D warnings
+fi
 
 # examples
 cd ${SCRIPTPATH}/examples/adsb && cargo clippy --all-targets -- -D warnings
@@ -107,7 +109,9 @@ cd ${SCRIPTPATH}/examples/wgpu && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/wlan && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/zeromq && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/zigbee && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/examples/zynq && cargo clippy --all-targets -- -D warnings
+if [[ "$OSTYPE" == linux* ]]; then
+  cd ${SCRIPTPATH}/examples/zynq && cargo clippy --all-targets -- -D warnings
+fi
 
 # WASM
 cd ${SCRIPTPATH} && cargo clippy --lib --workspace --features=burn,audio,seify_dummy,wgpu --target=wasm32-unknown-unknown -- -D warnings
@@ -136,14 +140,16 @@ cd ${SCRIPTPATH}/crates/types && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/buffer_rand && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/buffer_size && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/fir && cargo test --all-targets
-cd ${SCRIPTPATH}/perf/fir_latency && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/msg && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/null_rand && cargo test --all-targets
-cd ${SCRIPTPATH}/perf/null_rand_latency && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/perf && cargo test --all-targets --all-features
 cd ${SCRIPTPATH}/perf/vulkan && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/wgpu && cargo test --all-targets
-cd ${SCRIPTPATH}/perf/zynq && cargo test --all-targets
+if [[ "$OSTYPE" == linux* ]]; then
+  cd ${SCRIPTPATH}/perf/fir_latency && cargo test --all-targets
+  cd ${SCRIPTPATH}/perf/null_rand_latency && cargo test --all-targets
+  cd ${SCRIPTPATH}/perf/zynq && cargo test --all-targets
+fi
 
 # examples
 cd ${SCRIPTPATH}/examples/adsb && cargo test --all-targets
@@ -170,4 +176,6 @@ cd ${SCRIPTPATH}/examples/wgpu && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/wlan && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/zeromq && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/zigbee && cargo test --all-targets
-cd ${SCRIPTPATH}/examples/zynq && cargo test --all-targets
+if [[ "$OSTYPE" == linux* ]]; then
+  cd ${SCRIPTPATH}/examples/zynq && cargo test --all-targets
+fi

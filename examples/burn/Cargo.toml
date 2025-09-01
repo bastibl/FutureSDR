@@ -39,7 +39,7 @@ log = "0.4"
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1.0", features = ["derive"] }
-# whisper-burn = { git = "ssh://git@github.com/bastibl/whisper-burn.git" }
+whisper-burn = { git = "ssh://git@github.com/bastibl/whisper-burn.git" }
 wgpu = "25.0"
 
 [profile.release]
