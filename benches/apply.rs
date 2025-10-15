@@ -147,7 +147,7 @@ mod avx2 {
 }
 
 pub fn apply(c: &mut Criterion) {
-    let n_samp = 1024 * 1024 * 1024 * 2;
+    let n_samp = 1024 * 1024;
     let input: Vec<u8> = repeat_with(rand::random::<u8>).take(n_samp).collect();
 
     let mut group = c.benchmark_group("apply");

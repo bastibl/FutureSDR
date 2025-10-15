@@ -6,18 +6,13 @@ use futuresdr::blocks::audio::AudioSink;
 use futuresdr::prelude::*;
 use std::fmt;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum CWAlphabet {
+    #[default]
     Dot,
     Dash,
     LetterSpace,
     WordSpace,
-}
-
-impl Default for CWAlphabet {
-    fn default() -> Self {
-        Self::Dot
-    }
 }
 
 impl fmt::Debug for CWAlphabet {

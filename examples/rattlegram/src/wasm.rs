@@ -10,9 +10,8 @@ use gloo_timers::future::TimeoutFuture;
 use leptos::html::Input;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::wasm_bindgen;
-use leptos::wasm_bindgen::prelude::*;
 use std::collections::VecDeque;
+use wasm_bindgen::prelude::*;
 
 use crate::Encoder;
 use crate::wasm_decoder::DecoderMessage;

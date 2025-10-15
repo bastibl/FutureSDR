@@ -5,7 +5,6 @@ use adsb_demod::PreambleDetector;
 use adsb_demod::Tracker;
 use anyhow::Result;
 use clap::Parser;
-use clap::command;
 use futuresdr::blocks::Apply;
 use futuresdr::blocks::FileSource;
 use futuresdr::blocks::FirBuilder;
