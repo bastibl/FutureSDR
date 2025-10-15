@@ -1,6 +1,5 @@
 use rodio::Decoder;
 use rodio::source::Buffered;
-use rodio::source::SamplesConverter;
 use rodio::source::Source;
 use std::fs::File;
 use std::io::BufReader;
@@ -15,7 +14,7 @@ where
 {
     #[output]
     output: O,
-    src: Buffered<SamplesConverter<Decoder<BufReader<File>>, f32>>,
+    src: Buffered<Decoder<BufReader<File>>>,
 }
 
 impl<O> FileSource<O>
@@ -29,7 +28,7 @@ where
 
         FileSource {
             output: O::default(),
-            src: source.convert_samples().buffered(),
+            src: source.buffered(),
         }
     }
     /// Get sample rate

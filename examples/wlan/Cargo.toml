@@ -26,7 +26,7 @@ soapy = ["futuresdr/soapy"]
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
-crc32fast = "1.4"
+crc32fast = "1.5"
 futuresdr = { path = "../..", features = ["seify"] }
 rand = "0.9"
 rand_distr = "0.5"

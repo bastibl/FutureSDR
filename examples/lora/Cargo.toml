@@ -18,7 +18,7 @@ futuredsp = { path = "../../crates/futuredsp" }
 futuresdr = { path = "../..", features = ["seify", "soapy"] }
 meshtastic = "0.1"
 num-traits = "0.2"
-rustfft = "6.3"
+rustfft = "6.4"
 scilib = "1.0"
 semtech-udp = { version = "0.12.0", features = ["client"] }
 structopt = "0.3.26"
