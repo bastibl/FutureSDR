@@ -3,6 +3,7 @@ use async_lock::Barrier;
 use async_task::Runnable;
 use async_task::Task;
 use concurrent_queue::ConcurrentQueue;
+use crossfire::MAsyncTx;
 use futures::channel::oneshot;
 use futures::future;
 use futures::future::Either;
@@ -22,7 +23,6 @@ use std::task::Poll;
 use std::task::Waker;
 use std::thread;
 
-use crate::channel::mpsc::Sender;
 use crate::runtime::Block;
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
@@ -134,7 +134,7 @@ impl Scheduler for FlowScheduler {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<async_lock::Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     ) {
         let n_blocks = blocks.len();
         let n_cores = self.inner.workers.len();

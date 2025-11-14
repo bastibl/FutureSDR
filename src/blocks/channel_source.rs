@@ -1,4 +1,4 @@
-use crate::futures::StreamExt;
+use crate::crossfire::AsyncRx;
 use crate::prelude::*;
 
 /// Push samples through a channel into a stream connection.
@@ -9,12 +9,12 @@ use crate::prelude::*;
 ///
 /// # Usage
 /// ```
-/// use futuresdr::futures::channel::mpsc;
 /// use futuresdr::blocks::ChannelSource;
+/// use futuresdr::crossfire::mpsc;
 /// use futuresdr::runtime::Flowgraph;
 ///
 /// let mut fg = Flowgraph::new();
-/// let (mut tx, rx) = mpsc::channel(10);
+/// let (tx, rx) = mpsc::bounded_async(10);
 ///
 /// let cs = fg.add_block(ChannelSource::<u32>::new(rx));
 /// // start flowgraph
@@ -28,7 +28,7 @@ where
 {
     #[output]
     output: O,
-    receiver: mpsc::Receiver<Box<[T]>>,
+    receiver: AsyncRx<Box<[T]>>,
     current: Option<(Box<[T]>, usize)>,
 }
 
@@ -38,7 +38,7 @@ where
     O: CpuBufferWriter<Item = T>,
 {
     /// Create ChannelSource block
-    pub fn new(receiver: mpsc::Receiver<Box<[T]>>) -> Self {
+    pub fn new(receiver: AsyncRx<Box<[T]>>) -> Self {
         Self {
             output: O::default(),
             receiver,
@@ -65,12 +65,12 @@ where
         }
 
         if self.current.is_none() {
-            match self.receiver.by_ref().next().await {
-                Some(data) => {
+            match self.receiver.recv().await {
+                Ok(data) => {
                     debug!("received data chunk on channel");
                     self.current = Some((data, 0));
                 }
-                None => {
+                _ => {
                     debug!("sender-end of channel was closed");
                     io.finished = true;
                     return Ok(());

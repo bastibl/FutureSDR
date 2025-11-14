@@ -1,5 +1,5 @@
-use futures::SinkExt;
-use futures::StreamExt;
+use crossfire::MAsyncTx;
+use crossfire::mpsc;
 use gloo_net::websocket::Message;
 use gloo_net::websocket::WebSocketError::ConnectionClose;
 use gloo_net::websocket::WebSocketError::ConnectionError;
@@ -20,7 +20,7 @@ where
 {
     #[input]
     input: slab::Reader<T>,
-    data_sender: mpsc::Sender<Vec<u8>>,
+    data_sender: MAsyncTx<Vec<u8>>,
     data_storage: Vec<u8>,
     iterations_per_send: usize,
     ws_error: Arc<RwLock<bool>>,
@@ -33,7 +33,7 @@ where
 {
     /// Create WASM Websocket Sink block
     pub fn new(url: String, iterations_per_send: usize) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(1);
+        let (sender, receiver) = mpsc::bounded_async::<Vec<u8>>(1);
 
         let ws_error = Arc::new(RwLock::new(false));
         let ws_error_clone = ws_error.clone();
@@ -42,7 +42,7 @@ where
         // following processing attempt (call to `work`).
         spawn_local(async move {
             if let Ok(mut conn) = WebSocket::open(&url) {
-                while let Some(v) = receiver.next().await {
+                while let Ok(v) = receiver.recv().await {
                     if let Err(error) = conn.send(Message::Bytes(v)).await {
                         // On error, set `ws_error` to true.
                         match error {
@@ -121,7 +121,6 @@ where
                 );
                 std::mem::swap(&mut self.data_storage, &mut movable_vector);
                 // If send fails, we cannot gracefully recover so we panic.
-                // https://docs.rs/futures-channel/latest/futures_channel/mpsc/struct.Sender.html#method.poll_ready
                 self.data_sender
                     .send(movable_vector)
                     .await

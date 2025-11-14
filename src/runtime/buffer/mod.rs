@@ -27,10 +27,10 @@ pub mod wgpu;
 #[cfg(all(feature = "zynq", target_os = "linux"))]
 pub mod zynq;
 
+use crossfire::MAsyncTx;
 use std::any::Any;
 use std::future::Future;
 
-use futuresdr::channel::mpsc::Sender;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::BlockMessage;
 use futuresdr::runtime::Error;
@@ -51,7 +51,7 @@ pub trait BufferReader: Any {
     ///
     /// This sets the own block ID, Port ID, and message receiver so that it can
     /// be communicated the the other end when making connections.
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>);
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>);
     /// Check if connected
     fn validate(&self) -> Result<(), Error>;
     /// notify upstream that we are done
@@ -79,7 +79,7 @@ pub trait BufferWriter {
     ///
     /// This sets the own block ID, Port ID, and message receiver so that it can
     /// be communicated the the other end when making connections.
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>);
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>);
     /// Check if connected
     fn validate(&self) -> Result<(), Error>;
     /// Connect the writer to (another) reader.

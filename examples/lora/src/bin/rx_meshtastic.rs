@@ -4,6 +4,7 @@ use futuredsp::firdes;
 use futuresdr::blocks::MessagePipe;
 use futuresdr::blocks::XlatingFir;
 use futuresdr::blocks::seify::Builder;
+use futuresdr::crossfire::mpsc;
 use futuresdr::prelude::*;
 
 use lora::Decoder;
@@ -95,7 +96,7 @@ fn main() -> Result<()> {
     let header_decoder = HeaderDecoder::new(HeaderMode::Explicit, ldro);
     let decoder = Decoder::new();
 
-    let (tx_frame, mut rx_frame) = mpsc::channel::<Pmt>(100);
+    let (tx_frame, rx_frame) = mpsc::bounded_async::<Pmt>(100);
     let message_pipe = MessagePipe::new(tx_frame);
 
     let mut fg = Flowgraph::new();
@@ -116,7 +117,7 @@ fn main() -> Result<()> {
         for c in channels {
             chans.add_channel(MeshtasticChannel::new(&c.0, &c.1));
         }
-        while let Some(x) = rx_frame.next().await {
+        while let Ok(x) = rx_frame.recv().await {
             match x {
                 Pmt::Blob(data) => {
                     chans.decode(&data[..data.len() - 2]);

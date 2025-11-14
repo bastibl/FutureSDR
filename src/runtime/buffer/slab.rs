@@ -1,11 +1,10 @@
-use futures::prelude::*;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::channel::mpsc::Sender;
-use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
@@ -52,9 +51,9 @@ pub struct Writer<D: CpuSample> {
     current: Option<CurrentBuffer<D>>,
     state: Arc<Mutex<State<D>>>,
     reserved_items: usize,
-    reader_inbox: Sender<BlockMessage>,
+    reader_inbox: MAsyncTx<BlockMessage>,
     reader_input_id: PortId,
-    inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
     port_id: PortId,
     block_id: BlockId,
     tags: Vec<ItemTag>,
@@ -68,7 +67,7 @@ where
 {
     /// Create Slab writer
     pub fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             current: None,
             state: Arc::new(Mutex::new(State {
@@ -103,14 +102,14 @@ where
 {
     type Reader = Reader<D>;
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if !self.reader_inbox.is_closed() {
+        if !self.reader_inbox.is_disconnected() {
             Ok(())
         } else {
             Err(Error::ValidationError(format!(
@@ -254,14 +253,14 @@ where
     }
 
     fn set_min_items(&mut self, n: usize) {
-        if !self.reader_inbox.is_closed() {
+        if !self.reader_inbox.is_disconnected() {
             warn!("set_min_items called after buffer is created. this has no effect");
         }
         self.min_items = n;
     }
 
     fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        if !self.reader_inbox.is_closed() {
+        if !self.reader_inbox.is_disconnected() {
             warn!(
                 "set_min_buffer_size_in_items called after buffer is created. this has no effect"
             );
@@ -279,10 +278,10 @@ pub struct Reader<D: CpuSample> {
     current: Option<CurrentBuffer<D>>,
     state: Arc<Mutex<State<D>>>,
     reserved_items: usize,
-    reader_inbox: Sender<BlockMessage>,
+    reader_inbox: MAsyncTx<BlockMessage>,
     block_id: BlockId,
     port_id: PortId,
-    writer_inbox: Sender<BlockMessage>,
+    writer_inbox: MAsyncTx<BlockMessage>,
     writer_output_id: PortId,
     finished: bool,
     min_items: Option<usize>,
@@ -295,8 +294,8 @@ where
 {
     /// Create Slab Buffer Reader
     pub fn new() -> Self {
-        let (reader_inbox, _) = channel(0);
-        let (writer_inbox, _) = channel(0);
+        let (reader_inbox, _) = bounded_async(0);
+        let (writer_inbox, _) = bounded_async(0);
         Self {
             current: None,
             state: Arc::new(Mutex::new(State {
@@ -334,13 +333,13 @@ where
         self
     }
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.reader_inbox = inbox;
     }
     fn validate(&self) -> Result<(), Error> {
-        if !self.writer_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() {
             Ok(())
         } else {
             Err(Error::ValidationError(format!(
@@ -461,14 +460,14 @@ where
     }
 
     fn set_min_items(&mut self, n: usize) {
-        if !self.writer_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() {
             warn!("buffer size configured after buffer is connected. This has no effect");
         }
         self.min_items = Some(n);
     }
 
     fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        if !self.writer_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() {
             warn!("buffer size configured after buffer is connected. This has no effect");
         }
         self.min_buffer_size_in_items = Some(n);

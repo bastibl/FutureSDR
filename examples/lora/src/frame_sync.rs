@@ -1,3 +1,6 @@
+use futuresdr::crossfire::AsyncRx;
+use futuresdr::crossfire::MAsyncTx;
+use futuresdr::crossfire::mpsc;
 use futuresdr::prelude::*;
 use futuresdr::runtime::buffer::Tags;
 use rustfft::Fft;
@@ -135,7 +138,7 @@ struct State {
     // net_id_off: i32,                    //< offset of the network identifier
     // m_should_log: bool, //< indicate that the sync values should be logged
     // off_by_one_id: f32, //< Indicate that the network identifiers where off by one and corrected (float used as saved in a float32 bin file)
-    tag_from_msg_handler_to_work_channel: (mpsc::Sender<Pmt>, mpsc::Receiver<Pmt>),
+    tag_from_msg_handler_to_work_channel: (MAsyncTx<Pmt>, AsyncRx<Pmt>),
     known_valid_net_ids: [[bool; 256]; 256],
     known_valid_net_ids_reverse: [[bool; 256]; 256],
     net_id: [u16; 2],
@@ -949,8 +952,8 @@ impl State {
         out: &mut [Complex32],
         tags: &mut Tags,
     ) -> (isize, usize) {
-        if let Ok(Some(Pmt::MapStrPmt(mut frame_info))) =
-            self.tag_from_msg_handler_to_work_channel.1.try_next()
+        if let Ok(Pmt::MapStrPmt(mut frame_info)) =
+            self.tag_from_msg_handler_to_work_channel.1.try_recv()
         {
             // info!("new frame_info tag: {:?}", frame_info_tag);
             if self.collect_receive_statistics {
@@ -1103,7 +1106,7 @@ impl State {
         self.m_sto_frac = 0.;
         self.sfo_hat = 0.;
         self.sfo_cum = 0.;
-        let _ = self.tag_from_msg_handler_to_work_channel.1.try_next();
+        let _ = self.tag_from_msg_handler_to_work_channel.1.try_recv();
         self.cfo_frac_sto_frac_est = false;
         self.ready_to_detect = true;
     }
@@ -1265,7 +1268,7 @@ where
                 // net_id_off: i32,                    //< offset of the network identifier  // local to work
                 // m_should_log: false, //< indicate that the sync values should be logged
                 // off_by_one_id: f32  // local to work
-                tag_from_msg_handler_to_work_channel: mpsc::channel::<Pmt>(1),
+                tag_from_msg_handler_to_work_channel: mpsc::bounded_async(1),
                 known_valid_net_ids,
                 known_valid_net_ids_reverse,
                 net_id: [0; 2],

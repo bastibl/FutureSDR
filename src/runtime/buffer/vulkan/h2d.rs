@@ -1,4 +1,5 @@
-use futures::prelude::*;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use ouroboros::self_referencing;
 use std::any::Any;
 use std::ops::DerefMut;
@@ -8,8 +9,6 @@ use vulkano::buffer::BufferWriteGuard;
 use vulkano::buffer::Subbuffer;
 use vulkano::buffer::subbuffer::BufferContents;
 
-use crate::channel::mpsc::Sender;
-use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
@@ -41,11 +40,11 @@ pub struct Writer<T: BufferContents + CpuSample> {
     current: Option<CurrentBuffer<T>>,
     inbound: Arc<Mutex<Vec<Buffer<T>>>>,
     outbound: Arc<Mutex<Vec<Buffer<T>>>>,
-    inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
     block_id: BlockId,
     port_id: PortId,
     tags: Vec<ItemTag>,
-    reader_inbox: Sender<BlockMessage>,
+    reader_inbox: MAsyncTx<BlockMessage>,
     reader_port_id: PortId,
 }
 
@@ -55,7 +54,7 @@ where
 {
     /// Create buffer writer
     pub fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             current: None,
             inbound: Arc::new(Mutex::new(Vec::new())),
@@ -95,14 +94,14 @@ where
 {
     type Reader = Reader<T>;
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if !self.reader_inbox.is_closed() {
+        if !self.reader_inbox.is_disconnected() {
             Ok(())
         } else {
             Err(Error::ValidationError(format!(
@@ -225,11 +224,11 @@ where
 #[derive(Debug)]
 pub struct Reader<T: BufferContents + CpuSample> {
     inbound: Arc<Mutex<Vec<Buffer<T>>>>,
-    inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
     block_id: BlockId,
     port_id: PortId,
     writer_port_id: PortId,
-    writer_inbox: Sender<BlockMessage>,
+    writer_inbox: MAsyncTx<BlockMessage>,
     finished: bool,
 }
 
@@ -239,7 +238,7 @@ where
 {
     /// Create a Reader
     pub fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             inbound: Arc::new(Mutex::new(Vec::new())),
             inbox: rx.clone(),
@@ -276,14 +275,14 @@ where
         self
     }
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if self.writer_inbox.is_closed() {
+        if self.writer_inbox.is_disconnected() {
             Err(Error::ValidationError(format!(
                 "{:?}:{:?} not connected",
                 self.block_id, self.port_id

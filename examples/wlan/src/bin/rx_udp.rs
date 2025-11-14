@@ -7,6 +7,7 @@ use futuresdr::blocks::Fft;
 use futuresdr::blocks::MessagePipe;
 use futuresdr::blocks::UdpSource;
 use futuresdr::blocks::WebsocketPmtSink;
+use futuresdr::crossfire::mpsc;
 use futuresdr::prelude::*;
 
 use wlan::Decoder;
@@ -63,7 +64,7 @@ fn main() -> Result<()> {
     connect!(fg, sync_long > fft > frame_equalizer > decoder;
         frame_equalizer.symbols | r#in.symbol_sink);
 
-    let (tx_frame, mut rx_frame) = mpsc::channel::<Pmt>(100);
+    let (tx_frame, rx_frame) = mpsc::bounded_async::<Pmt>(100);
     let message_pipe = MessagePipe::new(tx_frame);
     let udp1 = futuresdr::blocks::BlobToUdp::new("127.0.0.1:55555");
     let udp2 = futuresdr::blocks::BlobToUdp::new("127.0.0.1:55556");
@@ -73,7 +74,7 @@ fn main() -> Result<()> {
 
     let (_fg, _handle) = rt.start_sync(fg)?;
     rt.block_on(async move {
-        while let Some(x) = rx_frame.next().await {
+        while let Ok(x) = rx_frame.recv().await {
             match x {
                 Pmt::Blob(data) => {
                     println!("received frame ({:?} bytes)", data.len());

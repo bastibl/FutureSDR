@@ -69,6 +69,7 @@ async-lock = "3.4"
 async-trait = "0.1"
 burn = { version = "0.19", default-features = false, optional = true }
 config = "0.15"
+crossfire = "2.1"
 dirs = "6.0"
 dyn-clone = "1.0"
 futures = "0.3"
@@ -127,7 +128,7 @@ rodio = { version = "0.21", default-features = false, features = [
 tokio = { version = "1", features = ["rt"] }
 tower-http = { version = "0.6", features = ["add-extension", "cors", "fs"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-vmcircbuffer = "0.0.10"
+vmcircbuffer = "0.0.11"
 vulkano = { version = "0.35", optional = true }
 zmq = { version = "0.10", optional = true }
 

@@ -3,10 +3,10 @@ use async_io::block_on;
 use async_lock::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use axum::Router;
+use crossfire::AsyncRx;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use futures::FutureExt;
-use futures::channel::mpsc::Receiver;
-use futures::channel::mpsc::Sender;
-use futures::channel::mpsc::channel;
 use futures::channel::oneshot;
 use futures::prelude::*;
 use std::fmt;
@@ -220,7 +220,7 @@ impl<'a, S: Scheduler + Sync> Runtime<'a, S> {
         'a: 'b,
     {
         let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
+        let (fg_inbox, fg_inbox_rx) = bounded_async(queue_size);
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
         let task = self.scheduler.spawn(run_flowgraph(
@@ -288,11 +288,10 @@ impl<S: Scheduler + Sync + 'static> Spawn for S {
     async fn start(&self, fg: Flowgraph) -> Result<FlowgraphHandle, Error> {
         use crate::runtime::FlowgraphMessage;
         use crate::runtime::runtime::run_flowgraph;
-        use futures::channel::mpsc::channel;
         use futures::channel::oneshot;
 
         let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
+        let (fg_inbox, fg_inbox_rx) = bounded_async::<FlowgraphMessage>(queue_size);
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
         self.spawn(run_flowgraph(
@@ -368,8 +367,8 @@ impl RuntimeHandle {
 pub(crate) async fn run_flowgraph<S: Scheduler>(
     fg: Flowgraph,
     scheduler: S,
-    mut main_channel: Sender<FlowgraphMessage>,
-    mut main_rx: Receiver<FlowgraphMessage>,
+    main_channel: MAsyncTx<FlowgraphMessage>,
+    main_rx: AsyncRx<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
 ) -> Result<Flowgraph, Error> {
     debug!("in run_flowgraph");
@@ -403,7 +402,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
             break;
         }
 
-        let m = main_rx.next().await.ok_or_else(|| {
+        let m = main_rx.recv().await.map_err(|_| {
             Error::RuntimeError("no reply from blocks during init phase".to_string())
         })?;
         match m {
@@ -450,7 +449,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
             break;
         }
 
-        let m = main_rx.next().await.ok_or_else(|| {
+        let m = main_rx.recv().await.map_err(|_| {
             Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
         })?;
         match m {

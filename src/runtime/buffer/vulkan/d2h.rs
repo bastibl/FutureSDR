@@ -1,4 +1,5 @@
-use futures::prelude::*;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use ouroboros::self_referencing;
 use std::any::Any;
 use std::collections::VecDeque;
@@ -9,8 +10,6 @@ use vulkano::buffer::BufferReadGuard;
 use vulkano::buffer::Subbuffer;
 use vulkano::buffer::subbuffer::BufferContents;
 
-use crate::channel::mpsc::Sender;
-use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
@@ -39,8 +38,8 @@ pub struct Writer<T: BufferContents + CpuSample> {
     outbound: Arc<Mutex<VecDeque<Buffer<T>>>>,
     block_id: BlockId,
     port_id: PortId,
-    inbox: Sender<BlockMessage>,
-    reader_inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
+    reader_inbox: MAsyncTx<BlockMessage>,
     reader_port_id: PortId,
 }
 
@@ -50,7 +49,7 @@ where
 {
     /// Create buffer writer
     pub fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             outbound: Arc::new(Mutex::new(VecDeque::new())),
             block_id: BlockId(0),
@@ -83,14 +82,14 @@ where
 {
     type Reader = Reader<T>;
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if self.reader_inbox.is_closed() {
+        if self.reader_inbox.is_disconnected() {
             Err(Error::ValidationError(format!(
                 "{:?}:{:?} not connected",
                 self.block_id, self.port_id
@@ -135,9 +134,9 @@ pub struct Reader<T: BufferContents + CpuSample> {
     outbound: Arc<Mutex<Vec<Buffer<T>>>>,
     block_id: BlockId,
     port_id: PortId,
-    inbox: Sender<BlockMessage>,
-    writer_inbox: Sender<BlockMessage>,
-    circuit_start_inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
+    writer_inbox: MAsyncTx<BlockMessage>,
+    circuit_start_inbox: MAsyncTx<BlockMessage>,
     writer_port_id: PortId,
     tags: Vec<ItemTag>,
     finished: bool,
@@ -148,7 +147,7 @@ where
 {
     /// Create Vulkan Device-to-Host Reader
     pub fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             current: None,
             inbound: Arc::new(Mutex::new(VecDeque::new())),
@@ -167,7 +166,7 @@ where
     /// Close Circuit
     pub fn close_circuit(
         &mut self,
-        circuit_start_inbox: Sender<BlockMessage>,
+        circuit_start_inbox: MAsyncTx<BlockMessage>,
         outbound: Arc<Mutex<Vec<Buffer<T>>>>,
     ) {
         self.circuit_start_inbox = circuit_start_inbox;
@@ -193,14 +192,14 @@ where
         self
     }
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if !self.writer_inbox.is_closed() && !self.circuit_start_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() && !self.circuit_start_inbox.is_disconnected() {
             Ok(())
         } else {
             Err(Error::ValidationError(format!(

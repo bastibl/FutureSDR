@@ -1,5 +1,5 @@
 use async_lock::Mutex;
-use futures::channel::mpsc::Sender;
+use crossfire::MAsyncTx;
 use futures::future::Future;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ pub trait Scheduler: Clone + Send + 'static {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     );
 
     /// Spawn a task
@@ -41,7 +41,7 @@ pub trait Scheduler: Clone + Send + 'static {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     );
 
     /// Spawn a task

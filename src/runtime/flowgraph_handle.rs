@@ -1,7 +1,5 @@
-use futures::SinkExt;
-use futures::channel::mpsc::Sender;
+use crossfire::MAsyncTx;
 use futures::channel::oneshot;
-use std::cmp::PartialEq;
 use std::fmt::Debug;
 
 use futuresdr::runtime::BlockDescription;
@@ -15,17 +13,17 @@ use futuresdr::runtime::PortId;
 /// Handle to interact with running [`Flowgraph`]
 #[derive(Debug, Clone)]
 pub struct FlowgraphHandle {
-    inbox: Sender<FlowgraphMessage>,
+    inbox: MAsyncTx<FlowgraphMessage>,
 }
 
-impl PartialEq for FlowgraphHandle {
-    fn eq(&self, other: &Self) -> bool {
-        self.inbox.same_receiver(&other.inbox)
-    }
-}
+// impl PartialEq for FlowgraphHandle {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.inbox.same_receiver(&other.inbox)
+//     }
+// }
 
 impl FlowgraphHandle {
-    pub(crate) fn new(inbox: Sender<FlowgraphMessage>) -> FlowgraphHandle {
+    pub(crate) fn new(inbox: MAsyncTx<FlowgraphMessage>) -> FlowgraphHandle {
         FlowgraphHandle { inbox }
     }
 
@@ -113,7 +111,7 @@ impl FlowgraphHandle {
         self.terminate()
             .await
             .map_err(|_| Error::FlowgraphTerminated)?;
-        while !self.inbox.is_closed() {
+        while !self.inbox.is_disconnected() {
             #[cfg(not(target_arch = "wasm32"))]
             async_io::Timer::after(std::time::Duration::from_millis(200)).await;
             #[cfg(target_arch = "wasm32")]

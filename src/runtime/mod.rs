@@ -1,6 +1,5 @@
 //! ## SDR Runtime
-use futuresdr::channel::mpsc;
-use futuresdr::channel::oneshot;
+use ::futures::channel::oneshot;
 use futuresdr_types::PmtConversionError;
 use std::fmt;
 use std::fmt::Display;
@@ -245,16 +244,16 @@ impl From<oneshot::Canceled> for Error {
     }
 }
 
-impl From<mpsc::SendError> for Error {
-    fn from(_value: mpsc::SendError) -> Self {
+impl<T> From<crossfire::SendError<T>> for Error {
+    fn from(_value: crossfire::SendError<T>) -> Self {
         Error::RuntimeError(
-            "Couldn't send to mpsc channel, receiver dropped unexpectedly".to_string(),
+            "Couldn't send to crossfire mpsc channel, receiver dropped unexpectedly".to_string(),
         )
     }
 }
 
-impl<T> From<mpsc::TrySendError<T>> for Error {
-    fn from(_value: mpsc::TrySendError<T>) -> Self {
+impl<T> From<crossfire::TrySendError<T>> for Error {
+    fn from(_value: crossfire::TrySendError<T>) -> Self {
         Error::RuntimeError(
             "Couldn't send to mpsc channel, receiver dropped unexpectedly".to_string(),
         )

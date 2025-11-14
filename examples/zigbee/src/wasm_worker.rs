@@ -4,9 +4,8 @@ use futuresdr::blocks::Apply;
 use futuresdr::blocks::MessagePipe;
 use futuresdr::blocks::NullSink;
 use futuresdr::blocks::wasm::HackRf;
-use futuresdr::futures::SinkExt;
-use futuresdr::futures::StreamExt;
-use futuresdr::futures::channel::mpsc::Receiver;
+use futuresdr::crossfire::AsyncRx;
+use futuresdr::crossfire::mpsc;
 use futuresdr::prelude::*;
 use gloo_worker::HandlerId;
 use gloo_worker::WorkerScope;
@@ -24,7 +23,7 @@ pub enum WorkerMessage {
 
 enum Handle {
     None,
-    Receiver(Receiver<FlowgraphHandle>),
+    Receiver(AsyncRx<FlowgraphHandle>),
     Flowgraph(FlowgraphHandle),
 }
 
@@ -55,7 +54,7 @@ impl gloo_worker::Worker for Worker {
                     return;
                 }
                 self.started = true;
-                let (mut set_handler, get_handle) = mpsc::channel::<FlowgraphHandle>(1);
+                let (set_handler, get_handle) = mpsc::bounded_async(1);
                 self.handle = Handle::Receiver(get_handle);
                 let scope = scope.clone();
                 spawn_local(async move {
@@ -91,7 +90,7 @@ impl gloo_worker::Worker for Worker {
                         let mac: Mac = Mac::new();
                         let snk = NullSink::<u8>::new();
 
-                        let (tx_frame, mut rx_frame) = mpsc::channel::<Pmt>(100);
+                        let (tx_frame, rx_frame) = mpsc::bounded_async(100);
                         let message_pipe = MessagePipe::new(tx_frame);
 
                         connect!(fg, src > avg > mm > decoder;
@@ -105,7 +104,7 @@ impl gloo_worker::Worker for Worker {
                         set_handler.send(handle).await.unwrap();
 
                         futuresdr::tracing::info!("waiting for frames");
-                        while let Some(x) = rx_frame.next().await {
+                        while let Ok(x) = rx_frame.recv().await {
                             info!("rxed {:?}", x);
                             match x {
                                 Pmt::Blob(data) => scope.respond(id, Frame::new(data)),
@@ -121,7 +120,7 @@ impl gloo_worker::Worker for Worker {
             WorkerMessage::Freq(f) => match &mut self.handle {
                 Handle::None => {}
                 Handle::Receiver(r) => {
-                    if let Ok(Some(mut h)) = r.try_next() {
+                    if let Ok(mut h) = r.try_recv() {
                         self.handle = Handle::Flowgraph(h.clone());
                         spawn_local(async move {
                             h.call(BlockId(6), "freq", Pmt::U64(f)).await.unwrap();

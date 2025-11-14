@@ -1,3 +1,4 @@
+use crate::crossfire::MAsyncTx;
 use crate::prelude::*;
 
 /// Get samples out of a Flowgraph into a channel.
@@ -8,12 +9,12 @@ use crate::prelude::*;
 ///
 /// # Usage
 /// ```
-/// use futuresdr::futures::channel::mpsc;
 /// use futuresdr::blocks::{VectorSource, ChannelSink};
+/// use futuresdr::crossfire::mpsc;
 /// use futuresdr::runtime::Flowgraph;
 ///
 /// let mut fg = Flowgraph::new();
-/// let (mut tx, rx) = mpsc::channel(10);
+/// let (mut tx, rx) = mpsc::bounded_async(10);
 /// let vec = vec![0, 1, 2];
 /// let src = fg.add_block(VectorSource::<u32>::new(vec));
 /// let cs = fg.add_block(ChannelSink::<u32>::new(tx));
@@ -27,7 +28,7 @@ where
 {
     #[input]
     input: I,
-    sender: mpsc::Sender<Box<[T]>>,
+    sender: MAsyncTx<Box<[T]>>,
 }
 
 impl<T, I> ChannelSink<T, I>
@@ -36,7 +37,7 @@ where
     I: CpuBufferReader<Item = T>,
 {
     /// Create ChannelSink block
-    pub fn new(sender: mpsc::Sender<Box<[T]>>) -> Self {
+    pub fn new(sender: MAsyncTx<Box<[T]>>) -> Self {
         Self {
             input: I::default(),
             sender,

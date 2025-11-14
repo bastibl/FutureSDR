@@ -6,7 +6,7 @@ use futures::task::Poll;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::channel::mpsc::Sender;
+use crate::crossfire::MAsyncTx;
 use crate::runtime::Block;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::scheduler::Scheduler;
@@ -26,7 +26,7 @@ impl Scheduler for WasmScheduler {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<async_lock::Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     ) {
         // spawn block executors
         for block in blocks.iter() {

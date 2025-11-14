@@ -10,7 +10,9 @@ use futuresdr::blocks::Fft;
 use futuresdr::blocks::FftDirection;
 use futuresdr::blocks::MovingAvg;
 use futuresdr::blocks::seify::Builder;
-use futuresdr::futures::StreamExt;
+use futuresdr::crossfire::AsyncRx;
+use futuresdr::crossfire::MAsyncTx;
+use futuresdr::crossfire::mpsc;
 use futuresdr::prelude::*;
 use std::sync::Arc;
 use std::thread;
@@ -38,11 +40,11 @@ enum GuiAction {
 }
 
 async fn process_gui_actions(
-    mut rx: mpsc::Receiver<GuiAction>,
+    rx: AsyncRx<GuiAction>,
     mut handle: FlowgraphHandle,
     seify_src: BlockId,
 ) -> anyhow::Result<()> {
-    while let Some(m) = rx.next().await {
+    while let Ok(m) = rx.recv().await {
         match m {
             GuiAction::SetFreq(f) => {
                 println!("setting frequency to {f}MHz");
@@ -59,14 +61,14 @@ struct MyApp {
     freq: u64,
     min: f32,
     max: f32,
-    actions: mpsc::Sender<GuiAction>,
+    actions: MAsyncTx<GuiAction>,
     spectrum: Arc<Mutex<Spectrum>>,
 }
 
 impl MyApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let (tx, rx) = mpsc::channel(10);
-        let (tx_samples, rx_samples) = mpsc::channel(10);
+        let (tx, rx) = mpsc::bounded_async(10);
+        let (tx_samples, rx_samples) = mpsc::bounded_async(10);
         thread::spawn(move || -> Result<()> {
             let mut fg = Flowgraph::new();
 
@@ -171,7 +173,7 @@ impl eframe::App for MyApp {
 }
 
 struct Spectrum {
-    rx_samples: mpsc::Receiver<Box<[f32; FFT_SIZE]>>,
+    rx_samples: AsyncRx<Box<[f32; FFT_SIZE]>>,
     program: glow::Program,
     vertex_array: glow::VertexArray,
     array_buffer: glow::NativeBuffer,
@@ -181,7 +183,7 @@ struct Spectrum {
 }
 
 impl Spectrum {
-    fn new(gl: &glow::Context, rx_samples: mpsc::Receiver<Box<[f32; FFT_SIZE]>>) -> Self {
+    fn new(gl: &glow::Context, rx_samples: AsyncRx<Box<[f32; FFT_SIZE]>>) -> Self {
         use glow::HasContext as _;
 
         let shader_version = if cfg!(target_arch = "wasm32") {
@@ -323,9 +325,9 @@ impl Spectrum {
                 gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_max").as_ref(), m);
             }
 
-            if let Ok(Some(v)) = self.rx_samples.try_next() {
+            if let Ok(v) = self.rx_samples.try_recv() {
                 let mut samples = *v;
-                while let Ok(Some(v)) = self.rx_samples.try_next() {
+                while let Ok(v) = self.rx_samples.try_recv() {
                     samples = *v;
                 }
 

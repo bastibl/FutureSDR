@@ -1,13 +1,12 @@
-use futures::SinkExt;
-use futures::StreamExt;
+use crossfire::AsyncRx;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use futures::future::Either;
 use std::any::Any;
 use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
-use futuresdr::channel::mpsc;
-use futuresdr::channel::mpsc::Sender;
 use futuresdr::runtime::BlockDescription;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::BlockMessage;
@@ -32,9 +31,9 @@ pub trait Block: Send + Any {
 
     // ##### BLOCK
     /// Run the block.
-    async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>);
+    async fn run(&mut self, main_inbox: MAsyncTx<FlowgraphMessage>);
     /// Get the inbox of the block
-    fn inbox(&self) -> Sender<BlockMessage>;
+    fn inbox(&self) -> MAsyncTx<BlockMessage>;
     /// Get the ID of the block
     fn id(&self) -> BlockId;
 
@@ -55,7 +54,7 @@ pub trait Block: Send + Any {
     fn connect(
         &mut self,
         src_port: &PortId,
-        sender: Sender<BlockMessage>,
+        sender: MAsyncTx<BlockMessage>,
         dst_port: &PortId,
     ) -> Result<(), Error>;
 
@@ -90,15 +89,15 @@ pub struct WrappedKernel<K: Kernel> {
     /// Block ID
     pub id: BlockId,
     /// Inbox for Actor Model
-    pub inbox: mpsc::Receiver<BlockMessage>,
+    pub inbox: AsyncRx<BlockMessage>,
     /// Sending-side of Inbox
-    pub inbox_tx: mpsc::Sender<BlockMessage>,
+    pub inbox_tx: MAsyncTx<BlockMessage>,
 }
 
 impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
     /// Create Typed Block
     pub fn new(mut kernel: K, id: BlockId) -> Self {
-        let (tx, rx) = mpsc::channel(config::config().queue_size);
+        let (tx, rx) = bounded_async(config::config().queue_size);
         kernel.stream_ports_init(id, tx.clone());
         Self {
             meta: BlockMeta::new(),
@@ -113,7 +112,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
         }
     }
 
-    async fn run_impl(&mut self, mut main_inbox: Sender<FlowgraphMessage>) -> Result<(), Error> {
+    async fn run_impl(&mut self, main_inbox: MAsyncTx<FlowgraphMessage>) -> Result<(), Error> {
         let instance_name = self.instance_name().unwrap_or(self.type_name()).to_owned();
         let WrappedKernel {
             meta,
@@ -135,9 +134,9 @@ impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
         // setup phase
         loop {
             match inbox
-                .next()
+                .recv()
                 .await
-                .ok_or_else(|| Error::RuntimeError("no msg".to_string()))?
+                .map_err(|_| Error::RuntimeError("no msg".to_string()))?
             {
                 BlockMessage::Initialize => {
                     match kernel.init(mio, meta).await {
@@ -166,7 +165,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
         // main loop
         loop {
             // ================== non blocking
-            let mut msg = peek.take().or_else(|| inbox.try_next().ok().flatten());
+            let mut msg = peek.take().or_else(|| inbox.try_recv().ok());
             while let Some(m) = msg {
                 match m {
                     BlockMessage::Notify => {}
@@ -245,7 +244,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
                 };
                 // received at least one message
                 work_io.call_again = true;
-                msg = inbox.try_next().ok().flatten();
+                msg = inbox.try_recv().ok();
             }
 
             // ================== shutdown
@@ -272,21 +271,21 @@ impl<K: KernelInterface + Kernel + Send + 'static> WrappedKernel<K> {
             if !work_io.call_again {
                 match work_io.block_on.take() {
                     Some(f) => {
-                        let p = inbox.next();
+                        let p = inbox.recv();
 
                         match futures::future::select(f, p).await {
                             Either::Left(_) => {
                                 work_io.call_again = true;
                             }
                             Either::Right((p, f)) => {
-                                peek = p;
+                                peek = p.ok();
                                 work_io.block_on = Some(f);
                                 continue;
                             }
                         };
                     }
                     _ => {
-                        peek = inbox.next().await;
+                        peek = inbox.recv().await.ok();
                         continue;
                     }
                 }
@@ -312,7 +311,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> Block for WrappedKernel<K> {
         self
     }
     // ##### Block
-    fn inbox(&self) -> Sender<BlockMessage> {
+    fn inbox(&self) -> MAsyncTx<BlockMessage> {
         self.inbox_tx.clone()
     }
     fn id(&self) -> BlockId {
@@ -338,7 +337,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> Block for WrappedKernel<K> {
     fn connect(
         &mut self,
         src_port: &PortId,
-        dst_box: Sender<BlockMessage>,
+        dst_box: MAsyncTx<BlockMessage>,
         dst_port: &PortId,
     ) -> Result<(), Error> {
         self.mio.connect(src_port, dst_box, dst_port)
@@ -359,7 +358,7 @@ impl<K: KernelInterface + Kernel + Send + 'static> Block for WrappedKernel<K> {
     }
 
     // ##### KERNEL
-    async fn run(&mut self, mut main_inbox: Sender<FlowgraphMessage>) {
+    async fn run(&mut self, main_inbox: MAsyncTx<FlowgraphMessage>) {
         match self.run_impl(main_inbox.clone()).await {
             Ok(_) => {
                 let _ = main_inbox

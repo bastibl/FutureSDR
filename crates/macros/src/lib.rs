@@ -1047,7 +1047,7 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 names
             }
 
-            fn stream_ports_init(&mut self, block_id: ::futuresdr::runtime::BlockId, inbox: ::futuresdr::channel::mpsc::Sender<::futuresdr::runtime::BlockMessage>) {
+            fn stream_ports_init(&mut self, block_id: ::futuresdr::runtime::BlockId, inbox: ::futuresdr::crossfire::MAsyncTx<::futuresdr::runtime::BlockMessage>) {
                 use ::futuresdr::runtime::PortId;
                 #(#stream_inputs_init)*
                 #(#stream_outputs_init)*

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use futuresdr::blocks::ChannelSource;
 use futuresdr::blocks::audio::AudioSink;
-use futuresdr::futures::channel::mpsc;
+use futuresdr::crossfire::MAsyncTx;
+use futuresdr::crossfire::mpsc;
 use futuresdr::macros::connect;
 use futuresdr::runtime::Flowgraph;
 use futuresdr::runtime::Runtime;
@@ -98,7 +99,7 @@ fn Gui() -> impl IntoView {
         </div>
     }
 }
-async fn run_fg(set_tx: WriteSignal<Option<mpsc::Sender<Box<[f32]>>>>) {
+async fn run_fg(set_tx: WriteSignal<Option<MAsyncTx<Box<[f32]>>>>) {
     let res = run_fg_inner(set_tx).await;
     warn!("fg terminated {:?}", res);
 }
@@ -127,10 +128,10 @@ async fn start_rx(messages: WriteSignal<VecDeque<DecoderMessage>>) {
     setupAudio(MessageSetter::new(messages)).await;
 }
 
-async fn run_fg_inner(set_tx: WriteSignal<Option<mpsc::Sender<Box<[f32]>>>>) -> Result<()> {
+async fn run_fg_inner(set_tx: WriteSignal<Option<MAsyncTx<Box<[f32]>>>>) -> Result<()> {
     let mut fg = Flowgraph::new();
 
-    let (tx, rx) = mpsc::channel(10);
+    let (tx, rx) = mpsc::bounded_async(10);
     let src = ChannelSource::<f32>::new(rx);
     let snk = AudioSink::new(48000, 1);
     connect!(fg, src > snk);

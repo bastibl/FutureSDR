@@ -1,6 +1,5 @@
 //! Message/Event/RPC-based Ports
-use futures::SinkExt;
-use futuresdr::channel::mpsc::Sender;
+use crossfire::MAsyncTx;
 use futuresdr_types::BlockId;
 
 use crate::runtime::BlockMessage;
@@ -13,7 +12,7 @@ use crate::runtime::PortId;
 #[derive(Debug)]
 pub struct MessageOutput {
     name: String,
-    handlers: Vec<(PortId, Sender<BlockMessage>)>,
+    handlers: Vec<(PortId, MAsyncTx<BlockMessage>)>,
 }
 
 impl MessageOutput {
@@ -31,7 +30,7 @@ impl MessageOutput {
     }
 
     /// Connect port to downstream message input
-    pub fn connect(&mut self, port: PortId, sender: Sender<BlockMessage>) {
+    pub fn connect(&mut self, port: PortId, sender: MAsyncTx<BlockMessage>) {
         self.handlers.push((port, sender));
     }
 
@@ -86,7 +85,7 @@ impl MessageOutputs {
     pub fn connect(
         &mut self,
         src_port: &PortId,
-        dst_block_inbox: Sender<BlockMessage>,
+        dst_block_inbox: MAsyncTx<BlockMessage>,
         dst_port: &PortId,
     ) -> Result<(), Error> {
         let block_id = self.block_id;

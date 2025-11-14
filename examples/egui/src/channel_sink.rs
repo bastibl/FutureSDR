@@ -1,3 +1,4 @@
+use futuresdr::crossfire::MAsyncTx;
 use futuresdr::prelude::*;
 
 use crate::FFT_SIZE;
@@ -9,14 +10,14 @@ where
 {
     #[input]
     input: I,
-    tx: mpsc::Sender<Box<[f32; FFT_SIZE]>>,
+    tx: MAsyncTx<Box<[f32; FFT_SIZE]>>,
 }
 
 impl<I> ChannelSink<I>
 where
     I: CpuBufferReader<Item = f32>,
 {
-    pub fn new(tx: mpsc::Sender<Box<[f32; FFT_SIZE]>>) -> Self {
+    pub fn new(tx: MAsyncTx<Box<[f32; FFT_SIZE]>>) -> Self {
         Self {
             input: I::default(),
             tx,

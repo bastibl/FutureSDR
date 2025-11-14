@@ -1,7 +1,7 @@
 use async_executor::Executor;
 use async_executor::Task;
 use futuresdr::async_io;
-use futuresdr::futures::channel::mpsc::Sender;
+use futuresdr::crossfire::MAsyncTx;
 use futuresdr::futures::channel::oneshot;
 use futuresdr::futures::future::Future;
 use futuresdr::runtime::Block;
@@ -88,7 +88,7 @@ impl Scheduler for TpbScheduler {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<async_lock::Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     ) {
         // spawn block executors
         for block in blocks.iter() {

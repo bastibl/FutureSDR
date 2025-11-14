@@ -1,6 +1,6 @@
 use async_executor::Executor;
 use async_executor::Task;
-use futures::channel::mpsc::Sender;
+use crossfire::MAsyncTx;
 use futures::channel::oneshot;
 use futures::future::Future;
 use once_cell::sync::Lazy;
@@ -107,7 +107,7 @@ impl Scheduler for SmolScheduler {
     fn run_flowgraph(
         &self,
         blocks: Vec<Arc<async_lock::Mutex<dyn Block>>>,
-        main_channel: &Sender<FlowgraphMessage>,
+        main_channel: &MAsyncTx<FlowgraphMessage>,
     ) {
         // spawn block executors
         for block in blocks.iter() {

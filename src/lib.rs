@@ -44,6 +44,7 @@ pub extern crate tracing;
 pub use async_io;
 #[cfg(not(target_arch = "wasm32"))]
 pub use async_net;
+pub use crossfire;
 pub use futuredsp;
 pub use futures;
 #[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
@@ -55,13 +56,6 @@ pub use seify;
 
 pub mod blocks;
 pub mod runtime;
-/// FutureSDR Async Channels
-///
-/// At the moment this uses the channels from the `futures` crate.
-pub mod channel {
-    pub use futures::channel::mpsc;
-    pub use futures::channel::oneshot;
-}
 
 /// Macros
 pub mod macros {
@@ -76,8 +70,6 @@ pub mod macros {
 /// Prelude with common structs and traits
 pub mod prelude {
     pub use futures::prelude::*;
-    pub use futuresdr::channel::mpsc;
-    pub use futuresdr::channel::oneshot;
     pub use futuresdr::macros::Block;
     pub use futuresdr::macros::async_trait;
     pub use futuresdr::macros::connect;

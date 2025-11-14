@@ -1,6 +1,6 @@
-use futures::channel::mpsc::Receiver;
-use futures::channel::mpsc::Sender;
-use futures::channel::mpsc::channel;
+use crossfire::AsyncRx;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use futuresdr_types::BlockId;
 use std::any::Any;
 use std::fmt::Debug;
@@ -30,7 +30,7 @@ use crate::runtime::config::config;
 pub struct Mocker<K: Kernel> {
     /// Wrapped Block
     pub block: WrappedKernel<K>,
-    message_sinks: Vec<Receiver<BlockMessage>>,
+    message_sinks: Vec<AsyncRx<BlockMessage>>,
     messages: Vec<Vec<Pmt>>,
 }
 
@@ -57,7 +57,7 @@ impl<K: KernelInterface + Kernel + 'static> Mocker<K> {
 
         for n in K::message_outputs() {
             messages.push(Vec::new());
-            let (tx, rx) = channel(msg_len);
+            let (tx, rx) = bounded_async(msg_len);
             message_sinks.push(rx);
             block
                 .mio
@@ -141,7 +141,7 @@ impl<K: KernelInterface + Kernel + 'static> Mocker<K> {
                 .unwrap();
 
             for (n, r) in self.message_sinks.iter_mut().enumerate() {
-                while let Ok(Some(m)) = r.try_next() {
+                while let Ok(m) = r.try_recv() {
                     match m {
                         BlockMessage::Call { data, .. } => {
                             self.messages[n].push(data);
@@ -204,7 +204,7 @@ impl<T: Debug + Send + 'static> BufferReader for Reader<T> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn init(&mut self, block_id: BlockId, port_id: PortId, _inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, _inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
     }
@@ -299,7 +299,7 @@ impl<T: Clone + Debug + Send + 'static> Writer<T> {
 impl<T: Clone + Debug + Send + 'static> BufferWriter for Writer<T> {
     type Reader = Reader<T>;
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, _inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, _inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
     }

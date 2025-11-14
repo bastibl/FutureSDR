@@ -1,11 +1,10 @@
-use futures::prelude::*;
+use crossfire::MAsyncTx;
+use crossfire::mpsc::bounded_async;
 use std::any::Any;
 use std::fmt;
 use std::mem::size_of;
 use vmcircbuffer::generic;
 
-use crate::channel::mpsc::Sender;
-use crate::channel::mpsc::channel;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
@@ -19,7 +18,7 @@ use crate::runtime::buffer::CpuSample;
 use crate::runtime::buffer::Tags;
 
 struct MyNotifier {
-    sender: Sender<BlockMessage>,
+    sender: MAsyncTx<BlockMessage>,
 }
 
 impl generic::Notifier for MyNotifier {
@@ -64,11 +63,11 @@ pub struct Writer<D>
 where
     D: CpuSample,
 {
-    inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
     block_id: BlockId,
     port_id: PortId,
     writer: Option<generic::Writer<D, MyNotifier, MyMetadata>>,
-    readers: Vec<(PortId, Sender<BlockMessage>)>,
+    readers: Vec<(PortId, MAsyncTx<BlockMessage>)>,
     finished: bool,
     tags: Vec<ItemTag>,
     min_items: Option<usize>,
@@ -80,7 +79,7 @@ where
     D: CpuSample,
 {
     fn new() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             inbox: rx,
             block_id: BlockId::default(),
@@ -110,7 +109,7 @@ where
 {
     type Reader = Reader<D>;
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
@@ -275,11 +274,11 @@ where
 {
     reader: Option<generic::Reader<D, MyNotifier, MyMetadata>>,
     finished: bool,
-    writer_inbox: Sender<BlockMessage>,
+    writer_inbox: MAsyncTx<BlockMessage>,
     writer_output_id: PortId,
     block_id: BlockId,
     port_id: PortId,
-    inbox: Sender<BlockMessage>,
+    inbox: MAsyncTx<BlockMessage>,
     tags: Vec<ItemTag>,
     min_items: Option<usize>,
     min_buffer_size_in_items: Option<usize>,
@@ -290,7 +289,7 @@ where
     D: CpuSample,
 {
     fn default() -> Self {
-        let (rx, _) = channel(0);
+        let (rx, _) = bounded_async(0);
         Self {
             reader: None,
             finished: false,
@@ -315,7 +314,7 @@ where
         self
     }
 
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: Sender<BlockMessage>) {
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: MAsyncTx<BlockMessage>) {
         self.block_id = block_id;
         self.port_id = port_id;
         self.inbox = inbox;
@@ -375,14 +374,14 @@ where
     }
 
     fn set_min_items(&mut self, n: usize) {
-        if !self.writer_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() {
             warn!("buffer size configured after buffer is connected. This has no effect");
         }
         self.min_items = Some(n);
     }
 
     fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        if !self.writer_inbox.is_closed() {
+        if !self.writer_inbox.is_disconnected() {
             warn!("buffer size configured after buffer is connected. This has no effect");
         }
         self.min_buffer_size_in_items = Some(n);

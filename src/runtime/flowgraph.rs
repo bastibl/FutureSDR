@@ -133,7 +133,7 @@ impl Flowgraph {
     ///     Runtime::new().run(fg)?;
     ///
     ///     // typed-access to the block
-    ///     let snk = snk.get();
+    ///     let snk = snk.get()?;
     ///     let n = snk.n_received();
     ///     assert_eq!(n, 1234);
     ///
@@ -176,7 +176,7 @@ impl Flowgraph {
     ///     connect!(fg, src > head);
     ///     // explicit use
     ///     let snk = fg.add_block(snk);
-    ///     fg.connect_stream(head.get().output(), snk.get().input());
+    ///     fg.connect_stream(head.get()?.output(), snk.get()?.input());
     ///
     ///     Runtime::new().run(fg)?;
     ///     Ok(())

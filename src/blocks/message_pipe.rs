@@ -1,5 +1,4 @@
-use futures::SinkExt;
-use futures::channel::mpsc;
+use crossfire::MAsyncTx;
 
 use crate::runtime::BlockMeta;
 use crate::runtime::MessageOutputs;
@@ -12,12 +11,12 @@ use crate::runtime::WorkIo;
 #[message_inputs(r#in)]
 #[null_kernel]
 pub struct MessagePipe {
-    sender: mpsc::Sender<Pmt>,
+    sender: MAsyncTx<Pmt>,
 }
 
 impl MessagePipe {
     /// Create MessagePipe block
-    pub fn new(sender: mpsc::Sender<Pmt>) -> Self {
+    pub fn new(sender: MAsyncTx<Pmt>) -> Self {
         Self { sender }
     }
 
