@@ -12,7 +12,10 @@ fn connect_type_error() -> Result<()> {
     let mut fg = Flowgraph::new();
     let fft: BlockId = fg.add(Fft::new(16) as Fft)?.into();
     let sink: BlockId = fg.add(NullSink::<[Complex<f32>; 16]>::new())?.into();
-    let result = fg.connect_dyn(fft.dyn_stream_output("output")?, sink.dyn_stream_input("input")?);
+    let result = fg.connect_dyn(
+        fft.dyn_stream_output("output")?,
+        sink.dyn_stream_input("input")?,
+    );
 
     match result {
         Err(Error::ValidationError(_)) => Ok(()),

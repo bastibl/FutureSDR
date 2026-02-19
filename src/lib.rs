@@ -86,6 +86,7 @@ pub mod prelude {
     pub use futuresdr::runtime::BlockId;
     pub use futuresdr::runtime::BlockMeta;
     pub use futuresdr::runtime::BlockRef;
+    pub use futuresdr::runtime::DynStreamAccess;
     pub use futuresdr::runtime::Error;
     pub use futuresdr::runtime::Flowgraph;
     pub use futuresdr::runtime::FlowgraphHandle;
@@ -94,7 +95,6 @@ pub mod prelude {
     pub use futuresdr::runtime::Kernel;
     pub use futuresdr::runtime::MegaBlock;
     pub use futuresdr::runtime::MessageOutputs;
-    pub use futuresdr::runtime::DynStreamAccess;
     pub use futuresdr::runtime::Pmt;
     pub use futuresdr::runtime::PortId;
     pub use futuresdr::runtime::Result;

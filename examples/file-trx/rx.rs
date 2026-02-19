@@ -54,7 +54,7 @@ fn main() -> Result<()> {
 
     let mut fg = Flowgraph::new();
 
-    let (src, output_name): (BlockId, _) = if let Some(input) = args.input {
+    let (src, output_name): (BlockId, &'static str) = if let Some(input) = args.input {
         let format = args
             .format_in
             .or_else(|| {
@@ -90,9 +90,12 @@ fn main() -> Result<()> {
         )
     };
 
-    let (src, output_name) = if let Some(samples) = args.samples {
-        let sample_counter = fg.add(Head::<Complex<f32>>::new(samples))?.into();
-        fg.connect_dyn(src.dyn_stream_output(output_name)?, sample_counter.dyn_stream_input("input")?)?;
+    let (src, output_name): (BlockId, &'static str) = if let Some(samples) = args.samples {
+        let sample_counter: BlockId = fg.add(Head::<Complex<f32>>::new(samples))?.into();
+        fg.connect_dyn(
+            src.dyn_stream_output(output_name)?,
+            sample_counter.dyn_stream_input("input")?,
+        )?;
         (sample_counter, "output")
     } else {
         (src, output_name)
@@ -120,7 +123,10 @@ fn main() -> Result<()> {
         *i
     }))?;
 
-    fg.connect_dyn(src.dyn_stream_output(output_name)?, powermeter.dyn_stream_input("input")?)?;
+    fg.connect_dyn(
+        src.dyn_stream_output(output_name)?,
+        powermeter.dyn_stream_input("input")?,
+    )?;
 
     let format = args
         .format_out

@@ -73,7 +73,10 @@ fn main() -> Result<()> {
         phase - iir
     }))?;
 
-    fg.connect_dyn(src.dyn_stream_output(output)?, avg.dyn_stream_input("input")?)?;
+    fg.connect_dyn(
+        src.dyn_stream_output(output)?,
+        avg.dyn_stream_input("input")?,
+    )?;
 
     let omega = 2.0;
     let gain_omega = 0.000225;

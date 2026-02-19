@@ -73,7 +73,7 @@ cd ${SCRIPTPATH}/crates/types && cargo clippy --all-targets -- -D warnings
 # perf
 cd ${SCRIPTPATH}/perf/buffer_rand && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/buffer_size && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/perf/burn && cargo clippy --all-targets -- -D warnings
+cd ${SCRIPTPATH}/perf/burn && CUDARC_CUDA_VERSION=13000 cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/fir && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/msg && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/perf/null_rand && cargo clippy --all-targets -- -D warnings
@@ -90,7 +90,7 @@ fi
 cd ${SCRIPTPATH}/examples/adsb && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/android && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/audio && cargo clippy --all-targets -- -D warnings
-cd ${SCRIPTPATH}/examples/burn && cargo clippy --all-targets -- -D warnings
+cd ${SCRIPTPATH}/examples/burn && CUDARC_CUDA_VERSION=13000 cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/custom-routes && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/cw && cargo clippy --all-targets -- -D warnings
 cd ${SCRIPTPATH}/examples/egui && cargo clippy --all-targets -- -D warnings
@@ -141,7 +141,7 @@ cd ${SCRIPTPATH}/crates/types && cargo test --all-targets
 # perf
 cd ${SCRIPTPATH}/perf/buffer_rand && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/buffer_size && cargo test --all-targets
-cd ${SCRIPTPATH}/perf/burn && cargo test --all-targets
+cd ${SCRIPTPATH}/perf/burn && CUDARC_CUDA_VERSION=13000 cargo test --all-targets
 cd ${SCRIPTPATH}/perf/fir && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/msg && cargo test --all-targets
 cd ${SCRIPTPATH}/perf/null_rand && cargo test --all-targets
@@ -158,7 +158,7 @@ fi
 cd ${SCRIPTPATH}/examples/adsb && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/android && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/audio && cargo test --all-targets
-cd ${SCRIPTPATH}/examples/burn && cargo test --all-targets
+cd ${SCRIPTPATH}/examples/burn && CUDARC_CUDA_VERSION=13000 cargo test --all-targets
 cd ${SCRIPTPATH}/examples/custom-routes && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/cw && cargo test --all-targets
 cd ${SCRIPTPATH}/examples/egui && cargo test --all-targets

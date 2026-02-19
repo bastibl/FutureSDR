@@ -49,9 +49,18 @@ fn main() -> Result<()> {
             .build_sink()?,
     )?;
 
-    fg.connect_dyn(mac.dyn_stream_output("output")?, modulator.dyn_stream_input("input")?)?;
-    fg.connect_dyn(modulator.dyn_stream_output("output")?, iq_delay.dyn_stream_input("input")?)?;
-    fg.connect_dyn(iq_delay.dyn_stream_output("output")?, snk.dyn_stream_input("inputs[0]")?)?;
+    fg.connect_dyn(
+        mac.dyn_stream_output("output")?,
+        modulator.dyn_stream_input("input")?,
+    )?;
+    fg.connect_dyn(
+        modulator.dyn_stream_output("output")?,
+        iq_delay.dyn_stream_input("input")?,
+    )?;
+    fg.connect_dyn(
+        iq_delay.dyn_stream_output("output")?,
+        snk.dyn_stream_input("inputs[0]")?,
+    )?;
 
     // ========================================
     // Receiver

@@ -31,7 +31,6 @@ impl<K: Kernel> BlockRef<K> {
     pub fn get(&self) -> Result<MutexGuard<'_, WrappedKernel<K>>, Error> {
         self.block.try_lock().ok_or(Error::LockError)
     }
-
 }
 impl<K: Kernel> Clone for BlockRef<K> {
     fn clone(&self) -> Self {
@@ -274,11 +273,7 @@ impl Flowgraph {
     ///     Ok(())
     /// }
     /// ```
-    pub fn connect_dyn(
-        &mut self,
-        src: BlockStreamPort,
-        dst: BlockStreamPort,
-    ) -> Result<(), Error> {
+    pub fn connect_dyn(&mut self, src: BlockStreamPort, dst: BlockStreamPort) -> Result<(), Error> {
         let src_block = self
             .blocks
             .get(src.block.0)
@@ -293,7 +288,10 @@ impl Flowgraph {
         let mut dst_block = dst_block.try_lock().ok_or(Error::LockError)?;
         let reader = dst_block
             .stream_input(dst.port.name())
-            .ok_or(Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst.block), dst.port.clone()))?;
+            .ok_or(Error::InvalidStreamPort(
+                crate::runtime::BlockPortCtx::Id(dst.block),
+                dst.port.clone(),
+            ))?;
 
         src_block
             .try_lock()

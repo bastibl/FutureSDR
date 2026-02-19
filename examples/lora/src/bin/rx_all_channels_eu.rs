@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     let stream_start_time = SystemTime::now();
 
     let packet_forwarder = match args.forward_addr {
-        Some(addr) => Some(fg.add(PacketForwarderClient::new("0200.0000.0403.0201", addr))?),
+        Some(addr) => Some(fg.add(PacketForwarderClient::new("0200.0000.0403.0201", &addr))?),
         None => None,
     };
 
@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     .map(|x| x as f32)
     .collect();
     let channelizer: PfbChannelizer =
-        PfbChannelizer::new(NUM_CHANNELS_PADDED, channelizer_taps, 1.0);
+        PfbChannelizer::new(NUM_CHANNELS_PADDED, &channelizer_taps, 1.0);
     // let channelizer = fg.add_block(channelizer);
     connect!(fg, src.outputs[0] > channelizer);
     for n_out in 0..NUM_CHANNELS_PADDED {
@@ -121,7 +121,10 @@ fn main() -> Result<()> {
         if n_chan.is_none() {
             let null_sink_extra_channel = fg.add(NullSink::<Complex32>::new())?;
             // map highest channel to null-sink (channel numbering starts at center and wraps around)
-            fg.connect_dyn(channelizer.dyn_stream_output(format!("out{n_out}"))?, null_sink_extra_channel.dyn_stream_input("in")?)?;
+            fg.connect_dyn(
+                channelizer.dyn_stream_output(format!("out{n_out}"))?,
+                null_sink_extra_channel.dyn_stream_input("in")?,
+            )?;
             println!("connecting channel {n_out} to NullSink");
             continue;
         }
@@ -141,8 +144,11 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|x| x as f32)
         .collect();
-        let resampler = fg.add(PfbArbResampler::new(2.5, resampler_taps, 5))?;
-        fg.connect_dyn(channelizer.dyn_stream_output(format!("out{n_out}"))?, resampler.dyn_stream_input("in")?)?;
+        let resampler = fg.add(PfbArbResampler::new(2.5, &resampler_taps, 5))?;
+        fg.connect_dyn(
+            channelizer.dyn_stream_output(format!("out{n_out}"))?,
+            resampler.dyn_stream_input("in")?,
+        )?;
         let channel = CHANNELS[n_chan];
         println!(
             "connecting {:.1}MHz chain to channel {}",
@@ -167,7 +173,10 @@ fn main() -> Result<()> {
                 Some(stream_start_time),
             );
             let frame_sync = fg.add(frame_sync)?;
-            fg.connect_dyn(resampler.dyn_stream_output("out")?, frame_sync.dyn_stream_input("in")?)?;
+            fg.connect_dyn(
+                resampler.dyn_stream_output("out")?,
+                frame_sync.dyn_stream_input("in")?,
+            )?;
             let fft_demod: FftDemod = FftDemod::new(sf, ldro(sf));
             let gray_mapping: GrayMapping = GrayMapping::new();
             let deinterleaver: Deinterleaver = Deinterleaver::new(ldro(sf), sf);

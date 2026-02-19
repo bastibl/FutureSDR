@@ -77,7 +77,10 @@ fn main() -> Result<()> {
         .build_sink()?;
     let snk = fg.add(snk)?;
 
-    fg.connect_dyn(src.dyn_stream_output("output")?, snk.dyn_stream_input("inputs[0]")?)?;
+    fg.connect_dyn(
+        src.dyn_stream_output("output")?,
+        snk.dyn_stream_input("inputs[0]")?,
+    )?;
 
     Runtime::new().run(fg)?;
 
