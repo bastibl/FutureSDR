@@ -87,10 +87,7 @@ fn main() -> Result<()> {
     let stream_start_time = SystemTime::now();
 
     let packet_forwarder = match args.forward_addr {
-        Some(addr) => Some(fg.add(PacketForwarderClient::new(
-            "0200.0000.0403.0201",
-            &addr,
-        ))?),
+        Some(addr) => Some(fg.add(PacketForwarderClient::new("0200.0000.0403.0201", &addr))?),
         None => None,
     };
 

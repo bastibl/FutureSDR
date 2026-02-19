@@ -444,25 +444,24 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     }
 
-    let unconstraint_params: Vec<proc_macro2::TokenStream> =
-        generics
-            .params
-            .iter()
-            .map(|param| match param {
-                GenericParam::Type(ty) => {
-                    let ident = &ty.ident;
-                    quote! { #ident }
-                }
-                GenericParam::Lifetime(lt) => {
-                    let lifetime = &lt.lifetime;
-                    quote! { #lifetime }
-                }
-                GenericParam::Const(c) => {
-                    let ident = &c.ident;
-                    quote! { #ident }
-                }
-            })
-            .collect();
+    let unconstraint_params: Vec<proc_macro2::TokenStream> = generics
+        .params
+        .iter()
+        .map(|param| match param {
+            GenericParam::Type(ty) => {
+                let ident = &ty.ident;
+                quote! { #ident }
+            }
+            GenericParam::Lifetime(lt) => {
+                let lifetime = &lt.lifetime;
+                quote! { #lifetime }
+            }
+            GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+        })
+        .collect();
 
     // Surround the parameters with angle brackets if they exist
     let unconstraint_generics = if generics.params.is_empty() {
@@ -1144,25 +1143,24 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         }
     }
 
-    let unconstraint_params: Vec<proc_macro2::TokenStream> =
-        generics
-            .params
-            .iter()
-            .map(|param| match param {
-                GenericParam::Type(ty) => {
-                    let ident = &ty.ident;
-                    quote! { #ident }
-                }
-                GenericParam::Lifetime(lt) => {
-                    let lifetime = &lt.lifetime;
-                    quote! { #lifetime }
-                }
-                GenericParam::Const(c) => {
-                    let ident = &c.ident;
-                    quote! { #ident }
-                }
-            })
-            .collect();
+    let unconstraint_params: Vec<proc_macro2::TokenStream> = generics
+        .params
+        .iter()
+        .map(|param| match param {
+            GenericParam::Type(ty) => {
+                let ident = &ty.ident;
+                quote! { #ident }
+            }
+            GenericParam::Lifetime(lt) => {
+                let lifetime = &lt.lifetime;
+                quote! { #lifetime }
+            }
+            GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+        })
+        .collect();
 
     let unconstraint_generics = if generics.params.is_empty() {
         quote! {}
@@ -1179,21 +1177,21 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     let struct_data = match input.data {
         Data::Struct(data) => data,
         _ => {
-            return syn::Error::new_spanned(input.ident, "MegaBlock can only be derived for structs")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                input.ident,
+                "MegaBlock can only be derived for structs",
+            )
+            .to_compile_error()
+            .into();
         }
     };
 
     let fields = match struct_data.fields {
         Fields::Named(ref fields) => &fields.named,
         _ => {
-            return syn::Error::new_spanned(
-                input.ident,
-                "MegaBlock requires named struct fields",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(input.ident, "MegaBlock requires named struct fields")
+                .to_compile_error()
+                .into();
         }
     };
 
@@ -1469,7 +1467,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 &self,
                 _fg: &::futuresdr::runtime::Flowgraph,
                 port: &::futuresdr::runtime::PortId,
-            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynBlockPort, ::futuresdr::runtime::Error> {
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynStreamPort, ::futuresdr::runtime::Error> {
                 #(#input_resolve_arms)*
                 Err(::futuresdr::runtime::Error::InvalidStreamPort(
                     ::futuresdr::runtime::BlockPortCtx::None,
@@ -1481,7 +1479,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 &self,
                 _fg: &::futuresdr::runtime::Flowgraph,
                 port: &::futuresdr::runtime::PortId,
-            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynBlockPort, ::futuresdr::runtime::Error> {
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynStreamPort, ::futuresdr::runtime::Error> {
                 #(#output_resolve_arms)*
                 Err(::futuresdr::runtime::Error::InvalidStreamPort(
                     ::futuresdr::runtime::BlockPortCtx::None,
@@ -1495,31 +1493,25 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 }
 
 fn unwrap_option_type(ty: &Type) -> (bool, &Type) {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "Option" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                        return (true, inner_ty);
-                    }
-                }
-            }
-        }
+    if let Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+        && seg.ident == "Option"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+    {
+        return (true, inner_ty);
     }
     (false, ty)
 }
 
 fn extract_block_ref_inner(ty: &Type) -> Option<Type> {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "BlockRef" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                        return Some(inner_ty.clone());
-                    }
-                }
-            }
-        }
+    if let Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+        && seg.ident == "BlockRef"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+    {
+        return Some(inner_ty.clone());
     }
     None
 }
@@ -1542,13 +1534,13 @@ fn parse_mapping_str(s: &str) -> (Ident, Ident, Option<Index>) {
         (port, None)
     };
 
-    let field_ident = if field.starts_with("r#") {
-        Ident::new_raw(&field[2..], proc_macro2::Span::call_site())
+    let field_ident = if let Some(stripped) = field.strip_prefix("r#") {
+        Ident::new_raw(stripped, proc_macro2::Span::call_site())
     } else {
         Ident::new(field, proc_macro2::Span::call_site())
     };
-    let port_ident = if port_name.starts_with("r#") {
-        Ident::new_raw(&port_name[2..], proc_macro2::Span::call_site())
+    let port_ident = if let Some(stripped) = port_name.strip_prefix("r#") {
+        Ident::new_raw(stripped, proc_macro2::Span::call_site())
     } else {
         Ident::new(port_name, proc_macro2::Span::call_site())
     };

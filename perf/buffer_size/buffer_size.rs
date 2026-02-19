@@ -70,8 +70,7 @@ where
         fg.connect_dyn(head, "output", last, "input")?;
 
         for _ in 1..stages {
-            let block =
-                fg.add(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(1024))?;
+            let block = fg.add(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(1024))?;
             fg.connect_dyn(last, "output", &block, "input")?;
             last = block.into();
         }
