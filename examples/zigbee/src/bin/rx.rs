@@ -46,19 +46,19 @@ fn main() -> Result<()> {
 
     let (src, output): (BlockId, _) = match args.file {
         Some(file) => (
-            fg.add_block(FileSource::<Complex32>::new(file, false))
+            fg.add(FileSource::<Complex32>::new(file, false))?
                 .into(),
             "output",
         ),
         None => (
-            fg.add_block(
+            fg.add(
                 Builder::new(args.args)?
                     .frequency(args.freq)
                     .sample_rate(args.sample_rate)
                     .gain(args.gain)
                     .antenna(args.antenna)
                     .build_source()?,
-            )
+            )?
             .into(),
             "outputs[0]",
         ),
@@ -67,12 +67,12 @@ fn main() -> Result<()> {
     let mut last: Complex32 = Complex32::new(0.0, 0.0);
     let mut iir: f32 = 0.0;
     let alpha = 0.00016;
-    let avg = fg.add_block(Apply::<_, _, _>::new(move |i: &Complex32| -> f32 {
+    let avg = fg.add(Apply::<_, _, _>::new(move |i: &Complex32| -> f32 {
         let phase = (last.conj() * i).arg();
         last = *i;
         iir = (1.0 - alpha) * iir + alpha * phase;
         phase - iir
-    }));
+    }))?;
 
     fg.connect_dyn(src, output, &avg, "input")?;
 

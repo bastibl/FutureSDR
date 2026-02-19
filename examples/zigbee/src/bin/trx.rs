@@ -37,17 +37,17 @@ fn main() -> Result<()> {
     // TRANSMITTER
     // ========================================
     let mac: Mac = Mac::new();
-    let mac = fg.add_block(mac);
+    let mac = fg.add(mac)?;
     let modulator = modulator(&mut fg);
     let iq_delay: IqDelay = IqDelay::new();
-    let iq_delay = fg.add_block(iq_delay);
-    let snk = fg.add_block(
+    let iq_delay = fg.add(iq_delay)?;
+    let snk = fg.add(
         Builder::new("")?
             .frequency(args.tx_freq)
             .sample_rate(4e6)
             .gain(args.tx_gain)
             .build_sink()?,
-    );
+    )?;
 
     fg.connect_dyn(&mac, "output", modulator, "input")?;
     fg.connect_dyn(modulator, "output", &iq_delay, "input")?;

@@ -64,24 +64,24 @@ where
         connect!(fg, src > head);
 
         let mut last: BlockId = fg
-            .add_block(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(
+            .add(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(
                 max_copy,
-            ))
+            ))?
             .into();
 
         fg.connect_dyn(head, "output", last, "input")?;
 
         for _ in 1..stages {
             let block = fg
-                .add_block(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(
+                .add(CopyRand::<f32, ReaderOf<B, f32>, B::Writer<f32>>::new(
                     max_copy,
-                ))
+                ))?
                 .into();
             fg.connect_dyn(last, "output", block, "input")?;
             last = block;
         }
 
-        let snk = fg.add_block(NullSink::<f32, ReaderOf<B, f32>>::new());
+        let snk = fg.add(NullSink::<f32, ReaderOf<B, f32>>::new())?;
         fg.connect_dyn(last, "output", &snk, "input")?;
         snks.push(snk.into());
     }

@@ -31,6 +31,7 @@ mod logging;
 mod flowgraph;
 mod flowgraph_handle;
 mod kernel;
+mod megablock;
 mod message_io;
 #[cfg(not(target_arch = "wasm32"))]
 /// Mocker for unit testing and benchmarking
@@ -46,9 +47,11 @@ pub use block::WrappedKernel;
 pub use block_meta::BlockMeta;
 pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
+pub use flowgraph::AddToFlowgraph;
 pub use flowgraph_handle::FlowgraphHandle;
 pub use kernel::Kernel;
 pub use kernel::KernelInterface;
+pub use megablock::MegaBlock;
 pub use message_io::MessageOutput;
 pub use message_io::MessageOutputs;
 pub use runtime::Runtime;

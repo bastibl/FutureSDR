@@ -39,12 +39,12 @@ use syn::token;
 ///
 /// ```ignore
 /// // Add all the blocks to the `Flowgraph`...
-/// let src = fg.add_block(src)?;
-/// let shift = fg.add_block(shift)?;
-/// let resamp1 = fg.add_block(resamp1)?;
-/// let demod = fg.add_block(demod)?;
-/// let resamp2 = fg.add_block(resamp2)?;
-/// let snk = fg.add_block(snk)?;
+/// let src = fg.add(src)?;
+/// let shift = fg.add(shift)?;
+/// let resamp1 = fg.add(resamp1)?;
+/// let demod = fg.add(demod)?;
+/// let resamp2 = fg.add(resamp2)?;
+/// let snk = fg.add(snk)?;
 ///
 /// // ... and connect the ports appropriately
 /// fg.connect_stream(src, "out", shift, "in")?;
@@ -194,7 +194,7 @@ pub fn connect(input: TokenStream) -> TokenStream {
     // Generate block declarations
     let block_decls = blocks.iter().map(|block| {
         quote! {
-            let #block = #fg.add(#block);
+            let #block = #fg.add(#block)?;
         }
     });
 
@@ -205,35 +205,6 @@ pub fn connect(input: TokenStream) -> TokenStream {
         use futuresdr::runtime::Kernel;
         use futuresdr::runtime::KernelInterface;
         use std::result::Result;
-
-        pub trait AddToFg<K: Kernel + KernelInterface + 'static> {
-            fn add_to_fg(self, fg: &mut Flowgraph) -> BlockRef<K>;
-        }
-        impl<K: Kernel + KernelInterface + 'static> AddToFg<K> for K {
-            fn add_to_fg(self, fg: &mut Flowgraph) -> BlockRef<K> {
-                fg.add_block(self)
-            }
-        }
-        impl<K: Kernel + KernelInterface + 'static> AddToFg<K> for BlockRef<K> {
-            fn add_to_fg(self, _fg: &mut Flowgraph) -> BlockRef<K> {
-                self
-            }
-        }
-        pub trait FgOps {
-            fn add<T, K>(&mut self, item: T) -> BlockRef<K>
-            where
-                T: AddToFg<K>,
-                K: Kernel + KernelInterface + 'static;
-        }
-        impl FgOps for Flowgraph {
-            fn add<T, K>(&mut self, item: T) -> BlockRef<K>
-            where
-                T: AddToFg<K>,
-                K: Kernel + KernelInterface + 'static,
-            {
-                item.add_to_fg(self)
-            }
-        }
 
         #(#block_decls)*
         #(#connections)*
@@ -1117,6 +1088,283 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     };
     // println!("{}", pretty_print(&expanded));
     proc_macro::TokenStream::from(expanded)
+}
+
+//=========================================================================
+// MEGABLOCK MACRO
+//=========================================================================
+#[proc_macro_derive(MegaBlock, attributes(stream_inputs, stream_outputs))]
+pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = &input.ident;
+
+    let struct_data = match input.data {
+        Data::Struct(data) => data,
+        _ => {
+            return syn::Error::new_spanned(input.ident, "MegaBlock can only be derived for structs")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let fields = match struct_data.fields {
+        Fields::Named(ref fields) => &fields.named,
+        _ => {
+            return syn::Error::new_spanned(
+                input.ident,
+                "MegaBlock requires named struct fields",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    #[derive(Clone)]
+    struct FieldInfo {
+        ident: Ident,
+        block_ty: Type,
+        is_option: bool,
+    }
+
+    let mut field_map = std::collections::HashMap::<String, FieldInfo>::new();
+    for field in fields {
+        let ident = field.ident.clone().unwrap();
+        let (is_option, inner_ty) = unwrap_option_type(&field.ty);
+        let block_ty = match extract_block_ref_inner(inner_ty) {
+            Some(t) => t,
+            None => continue,
+        };
+        field_map.insert(
+            ident.to_string(),
+            FieldInfo {
+                ident,
+                block_ty,
+                is_option,
+            },
+        );
+    }
+
+    #[derive(Clone)]
+    struct PortMapping {
+        public_name: Ident,
+        port_ty: Type,
+        field: Ident,
+        port: Ident,
+        index: Option<Index>,
+    }
+
+    struct StreamPortAttr {
+        name: Ident,
+        ty: Type,
+        _eq: Token![=],
+        mapping: syn::LitStr,
+    }
+    impl Parse for StreamPortAttr {
+        fn parse(input: ParseStream) -> Result<Self> {
+            let name: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let ty: Type = input.parse()?;
+            let _eq: Token![=] = input.parse()?;
+            let mapping: syn::LitStr = input.parse()?;
+            Ok(Self {
+                name,
+                ty,
+                _eq,
+                mapping,
+            })
+        }
+    }
+
+    let mut stream_inputs: Vec<PortMapping> = Vec::new();
+    let mut stream_outputs: Vec<PortMapping> = Vec::new();
+
+    for attr in &input.attrs {
+        if attr.path().is_ident("stream_inputs") || attr.path().is_ident("stream_outputs") {
+            let is_input = attr.path().is_ident("stream_inputs");
+            let nested = attr
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<StreamPortAttr, syn::Token![,]>::parse_terminated,
+                )
+                .unwrap();
+            for m in nested {
+                let public_name = m.name;
+                let port_ty = m.ty;
+                let (field, port, index) = parse_mapping_str(&m.mapping.value());
+                let mapping = PortMapping {
+                    public_name,
+                    port_ty,
+                    field,
+                    port,
+                    index,
+                };
+                if is_input {
+                    stream_inputs.push(mapping);
+                } else {
+                    stream_outputs.push(mapping);
+                }
+            }
+        }
+    }
+
+    let mut used_fields: Vec<Ident> = Vec::new();
+    for m in stream_inputs.iter().chain(stream_outputs.iter()) {
+        if !used_fields.iter().any(|f| f == &m.field) {
+            used_fields.push(m.field.clone());
+        }
+    }
+
+    let mut guard_fields = Vec::new();
+    let mut guard_inits = Vec::new();
+    for field_ident in &used_fields {
+        let info = match field_map.get(&field_ident.to_string()) {
+            Some(v) => v.clone(),
+            None => {
+                return syn::Error::new_spanned(
+                    field_ident,
+                    "stream mapping refers to unknown or unsupported field",
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
+        let guard_field = quote! {
+            #field_ident: ::async_lock::MutexGuard<'a, ::futuresdr::runtime::WrappedKernel<#info.block_ty>>
+        };
+        guard_fields.push(guard_field);
+
+        let init = if info.is_option {
+            let name = info.ident.to_string();
+            quote! {
+                let #field_ident = self.#field_ident.as_ref().ok_or_else(|| ::futuresdr::runtime::Error::RuntimeError(format!("MegaBlock field '{}' is None", #name)))?;
+                let #field_ident = #field_ident.get()?;
+            }
+        } else {
+            quote! {
+                let #field_ident = self.#field_ident.get()?;
+            }
+        };
+        guard_inits.push(init);
+    }
+
+    let guard_ident = Ident::new(&format!("{struct_name}Guard"), struct_name.span());
+
+    let input_methods = stream_inputs.iter().map(|m| {
+        let field_ident = &m.field;
+        let port_ident = &m.port;
+        let public_name = &m.public_name;
+        let ret_ty = &m.port_ty;
+        let accessor = if let Some(i) = m.index {
+            quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
+        } else {
+            quote! { self.#field_ident.#port_ident() }
+        };
+        quote! {
+            pub fn #public_name(&mut self) -> &mut #ret_ty {
+                #accessor
+            }
+        }
+    });
+
+    let output_methods = stream_outputs.iter().map(|m| {
+        let field_ident = &m.field;
+        let port_ident = &m.port;
+        let public_name = &m.public_name;
+        let ret_ty = &m.port_ty;
+        let accessor = if let Some(i) = m.index {
+            quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
+        } else {
+            quote! { self.#field_ident.#port_ident() }
+        };
+        quote! {
+            pub fn #public_name(&mut self) -> &mut #ret_ty {
+                #accessor
+            }
+        }
+    });
+
+    let expanded = quote! {
+        pub struct #guard_ident<'a> {
+            #(#guard_fields),*
+        }
+
+        impl #struct_name {
+            pub fn get(&self) -> ::futuresdr::runtime::Result<#guard_ident<'_>, ::futuresdr::runtime::Error> {
+                #(#guard_inits)*
+                Ok(#guard_ident {
+                    #(#used_fields),*
+                })
+            }
+        }
+
+        impl<'a> #guard_ident<'a> {
+            #(#input_methods)*
+            #(#output_methods)*
+        }
+    };
+
+    proc_macro::TokenStream::from(expanded)
+}
+
+fn unwrap_option_type(ty: &Type) -> (bool, &Type) {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            if seg.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return (true, inner_ty);
+                    }
+                }
+            }
+        }
+    }
+    (false, ty)
+}
+
+fn extract_block_ref_inner(ty: &Type) -> Option<Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            if seg.ident == "BlockRef" {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return Some(inner_ty.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_mapping_str(s: &str) -> (Ident, Ident, Option<Index>) {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 2 {
+        panic!("stream mapping must be in the form \"field.port\"");
+    }
+    let field = parts[0];
+    let port = parts[1];
+
+    let (port_name, index) = if let Some(start) = port.find('[') {
+        let end = port.find(']').expect("invalid port index");
+        let name = &port[..start];
+        let idx_str = &port[start + 1..end];
+        let idx: usize = idx_str.parse().expect("invalid port index");
+        (name, Some(Index::from(idx)))
+    } else {
+        (port, None)
+    };
+
+    let field_ident = if field.starts_with("r#") {
+        Ident::new_raw(&field[2..], proc_macro2::Span::call_site())
+    } else {
+        Ident::new(field, proc_macro2::Span::call_site())
+    };
+    let port_ident = if port_name.starts_with("r#") {
+        Ident::new_raw(&port_name[2..], proc_macro2::Span::call_site())
+    } else {
+        Ident::new(port_name, proc_macro2::Span::call_site())
+    };
+
+    (field_ident, port_ident, index)
 }
 
 #[allow(dead_code)]

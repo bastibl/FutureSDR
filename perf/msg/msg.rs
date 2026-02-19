@@ -44,12 +44,12 @@ fn main() -> Result<()> {
             let mut prev = block;
 
             for _ in 2..stages {
-                let block = fg.add_block(MessageCopy::new());
+                let block = fg.add(MessageCopy::new())?;
                 fg.connect_message(&prev, "out", &block, "in")?;
                 prev = block;
             }
 
-            let snk = fg.add_block(MessageSink::new());
+            let snk = fg.add(MessageSink::new())?;
             fg.connect_message(&prev, "out", &snk, "in")?;
             snks.push(snk);
         }

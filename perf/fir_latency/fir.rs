@@ -51,23 +51,23 @@ fn main() -> Result<()> {
     let mut snks = Vec::new();
 
     for _ in 0..pipes {
-        let src = fg.add_block(LttngSource::<f32>::new(GRANULARITY));
-        let head = fg.add_block(Head::<f32>::new(samples));
+        let src = fg.add(LttngSource::<f32>::new(GRANULARITY))?;
+        let head = fg.add(Head::<f32>::new(samples))?;
         fg.connect_dyn(src, "output", &head, "input")?;
 
-        let copy = fg.add_block(CopyRand::<f32>::new(max_copy));
-        let mut last = fg.add_block(FirBuilder::fir::<f32, f32, _>(taps.to_owned()));
+        let copy = fg.add(CopyRand::<f32>::new(max_copy))?;
+        let mut last = fg.add(FirBuilder::fir::<f32, f32, _>(taps.to_owned()))?;
         fg.connect_dyn(head, "output", &copy, "input")?;
         fg.connect_dyn(copy, "output", &last, "input")?;
 
         for _ in 1..stages {
-            let copy = fg.add_block(CopyRand::<f32>::new(max_copy));
+            let copy = fg.add(CopyRand::<f32>::new(max_copy))?;
             fg.connect_dyn(last, "output", &copy, "input")?;
-            last = fg.add_block(FirBuilder::fir::<f32, f32, _>(taps.to_owned()));
+            last = fg.add(FirBuilder::fir::<f32, f32, _>(taps.to_owned()))?;
             fg.connect_dyn(copy, "output", &last, "input")?;
         }
 
-        let snk = fg.add_block(LttngSink::<f32>::new(GRANULARITY));
+        let snk = fg.add(LttngSink::<f32>::new(GRANULARITY))?;
         fg.connect_dyn(last, "output", &snk, "input")?;
         snks.push(snk);
     }
