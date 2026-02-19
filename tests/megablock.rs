@@ -1,5 +1,6 @@
 use anyhow::Result;
 use futuresdr::blocks::Copy;
+use futuresdr::blocks::StreamDuplicator;
 use futuresdr::blocks::VectorSink;
 use futuresdr::blocks::VectorSource;
 use futuresdr::prelude::*;
@@ -47,5 +48,43 @@ fn stream_megablock_two_inputs_two_outputs() -> Result<()> {
     assert_eq!(snk0.items(), &[1, 2, 3, 4]);
     let snk1 = snk1.get()?;
     assert_eq!(snk1.items(), &[10, 20, 30, 40]);
+    Ok(())
+}
+
+#[derive(MegaBlock)]
+#[stream_inputs(in0: DefaultCpuReader<u32> = "dup.input")]
+#[stream_outputs(
+    out0: DefaultCpuWriter<u32> = "dup.outputs[0]",
+    out1: DefaultCpuWriter<u32> = "dup.outputs[1]"
+)]
+struct MultiOutMega {
+    dup: Option<BlockRef<StreamDuplicator<u32, 2>>>,
+}
+
+impl MegaBlock for MultiOutMega {
+    fn add_megablock(mut self, fg: &mut Flowgraph) -> Result<Self, Error> {
+        let dup = StreamDuplicator::<u32, 2>::new();
+        connect!(fg, dup);
+        self.dup = Some(dup);
+        Ok(self)
+    }
+}
+
+#[test]
+fn stream_megablock_indexed_outputs() -> Result<()> {
+    let mut fg = Flowgraph::new();
+
+    let src = VectorSource::<u32>::new(vec![1, 2, 3, 4]);
+    let mega = MultiOutMega { dup: None };
+    let snk0 = VectorSink::<u32>::new(4);
+    let snk1 = VectorSink::<u32>::new(4);
+
+    connect!(fg, src > in0.mega.out0 > snk0; src > in0.mega.out1 > snk1);
+    Runtime::new().run(fg)?;
+
+    let snk0 = snk0.get()?;
+    assert_eq!(snk0.items(), &[1, 2, 3, 4]);
+    let snk1 = snk1.get()?;
+    assert_eq!(snk1.items(), &[1, 2, 3, 4]);
     Ok(())
 }
