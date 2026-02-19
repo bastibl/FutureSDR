@@ -1,10 +1,14 @@
 use anyhow::Result;
 use futuresdr::blocks::Copy;
+use futuresdr::blocks::MessageCopy;
+use futuresdr::blocks::MessageSink;
+use futuresdr::blocks::MessageSource;
 use futuresdr::blocks::StreamDuplicator;
 use futuresdr::blocks::VectorSink;
 use futuresdr::blocks::VectorSource;
 use futuresdr::prelude::*;
 use futuresdr::runtime::Error;
+use std::time::Duration;
 
 #[derive(MegaBlock)]
 #[stream_inputs(
@@ -128,5 +132,37 @@ fn stream_megablock_indexed_outputs() -> Result<()> {
     assert_eq!(snk0.items(), &[1, 2, 3, 4]);
     let snk1 = snk1.get()?;
     assert_eq!(snk1.items(), &[1, 2, 3, 4]);
+    Ok(())
+}
+
+#[derive(MegaBlock)]
+#[message_inputs(r#in = "copy.in")]
+#[message_outputs(out = "copy.out")]
+struct MessageMega {
+    copy: Option<BlockRef<MessageCopy>>,
+}
+
+impl MegaBlock for MessageMega {
+    fn add_megablock(mut self, fg: &mut Flowgraph) -> Result<Self, Error> {
+        let copy = MessageCopy::new();
+        connect!(fg, copy);
+        self.copy = Some(copy);
+        Ok(self)
+    }
+}
+
+#[test]
+fn message_megablock_input_output() -> Result<()> {
+    let mut fg = Flowgraph::new();
+
+    let src = MessageSource::new(Pmt::Ok, Duration::from_secs(1), Some(1));
+    let mega = MessageMega { copy: None };
+    let snk = MessageSink::new();
+
+    connect!(fg, src | mega | snk);
+    Runtime::new().run(fg)?;
+
+    let snk = snk.get()?;
+    assert_eq!(snk.received(), 1);
     Ok(())
 }

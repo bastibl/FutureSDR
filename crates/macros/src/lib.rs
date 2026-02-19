@@ -1229,7 +1229,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     #[derive(Clone)]
     struct PortMapping {
         public_name: Ident,
-        port_ty: Type,
+        port_ty: Option<Type>,
         field: Ident,
         port: Ident,
         index: Option<Index>,
@@ -1237,15 +1237,19 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 
     struct PortAttr {
         name: Ident,
-        ty: Type,
+        ty: Option<Type>,
         _eq: Token![=],
         mapping: syn::LitStr,
     }
     impl Parse for PortAttr {
         fn parse(input: ParseStream) -> Result<Self> {
             let name: Ident = input.parse()?;
-            input.parse::<Token![:]>()?;
-            let ty: Type = input.parse()?;
+            let ty = if input.peek(Token![:]) {
+                input.parse::<Token![:]>()?;
+                Some(input.parse()?)
+            } else {
+                None
+            };
             let _eq: Token![=] = input.parse()?;
             let mapping: syn::LitStr = input.parse()?;
             Ok(Self {
@@ -1281,6 +1285,14 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 let public_name = m.name;
                 let port_ty = m.ty;
                 let (field, port, index) = parse_mapping_str(&m.mapping.value());
+                if is_stream && port_ty.is_none() {
+                    return syn::Error::new_spanned(
+                        public_name,
+                        "stream mappings require a type annotation: name: Type = \"field.port\"",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
                 let mapping = PortMapping {
                     public_name,
                     port_ty,
@@ -1358,7 +1370,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         let field_ident = &m.field;
         let port_ident = &m.port;
         let public_name = &m.public_name;
-        let ret_ty = &m.port_ty;
+        let ret_ty = m.port_ty.as_ref().unwrap();
         let accessor = if let Some(i) = &m.index {
             quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
         } else {
@@ -1375,7 +1387,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         let field_ident = &m.field;
         let port_ident = &m.port;
         let public_name = &m.public_name;
-        let ret_ty = &m.port_ty;
+        let ret_ty = m.port_ty.as_ref().unwrap();
         let accessor = if let Some(i) = &m.index {
             quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
         } else {
@@ -1390,8 +1402,8 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 
     let input_resolve_arms = stream_inputs.iter().map(|m| {
         let field_ident = &m.field;
-        let public_name = m.public_name.to_string();
-        let port_name = m.port.to_string();
+        let public_name = ident_to_port_name(&m.public_name);
+        let port_name = ident_to_port_name(&m.port);
         let internal_name = if let Some(i) = &m.index {
             format!("{port_name}[{}]", i.index)
         } else {
@@ -1422,8 +1434,8 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 
     let output_resolve_arms = stream_outputs.iter().map(|m| {
         let field_ident = &m.field;
-        let public_name = m.public_name.to_string();
-        let port_name = m.port.to_string();
+        let public_name = ident_to_port_name(&m.public_name);
+        let port_name = ident_to_port_name(&m.port);
         let internal_name = if let Some(i) = &m.index {
             format!("{port_name}[{}]", i.index)
         } else {
@@ -1454,8 +1466,8 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 
     let message_input_resolve_arms = message_inputs.iter().map(|m| {
         let field_ident = &m.field;
-        let public_name = m.public_name.to_string();
-        let port_name = m.port.to_string();
+        let public_name = ident_to_port_name(&m.public_name);
+        let port_name = ident_to_port_name(&m.port);
         let internal_name = if let Some(i) = &m.index {
             format!("{port_name}[{}]", i.index)
         } else {
@@ -1486,8 +1498,8 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 
     let message_output_resolve_arms = message_outputs.iter().map(|m| {
         let field_ident = &m.field;
-        let public_name = m.public_name.to_string();
-        let port_name = m.port.to_string();
+        let public_name = ident_to_port_name(&m.public_name);
+        let port_name = ident_to_port_name(&m.port);
         let internal_name = if let Some(i) = &m.index {
             format!("{port_name}[{}]", i.index)
         } else {
@@ -1668,6 +1680,10 @@ fn parse_mapping_str(s: &str) -> (Ident, Ident, Option<Index>) {
     };
 
     (field_ident, port_ident, index)
+}
+
+fn ident_to_port_name(ident: &Ident) -> String {
+    ident.to_string().trim_start_matches("r#").to_string()
 }
 
 #[allow(dead_code)]
