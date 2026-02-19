@@ -1388,7 +1388,10 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         quote! {
             if port.name() == #public_name {
                 #access
-                return Ok(block_ref.dyn_port(::futuresdr::runtime::PortId::new(#internal_lit.to_string())));
+                return ::futuresdr::runtime::DynStreamAccess::dyn_stream_input(
+                    block_ref,
+                    ::futuresdr::runtime::PortId::new(#internal_lit.to_string()),
+                );
             }
         }
     });
@@ -1417,7 +1420,10 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         quote! {
             if port.name() == #public_name {
                 #access
-                return Ok(block_ref.dyn_port(::futuresdr::runtime::PortId::new(#internal_lit.to_string())));
+                return ::futuresdr::runtime::DynStreamAccess::dyn_stream_output(
+                    block_ref,
+                    ::futuresdr::runtime::PortId::new(#internal_lit.to_string()),
+                );
             }
         }
     });
@@ -1460,30 +1466,30 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
             }
         }
 
-        impl #generics ::futuresdr::runtime::DynPortResolve for &#struct_name #unconstraint_generics
+        impl #generics ::futuresdr::runtime::DynStreamAccess for #struct_name #unconstraint_generics
             #where_clause
         {
-            fn resolve_stream_input(
+            fn dyn_stream_input(
                 &self,
-                _fg: &::futuresdr::runtime::Flowgraph,
-                port: &::futuresdr::runtime::PortId,
-            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynStreamPort, ::futuresdr::runtime::Error> {
+                port: impl Into<::futuresdr::runtime::PortId>,
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::BlockStreamPort, ::futuresdr::runtime::Error> {
+                let port = port.into();
                 #(#input_resolve_arms)*
                 Err(::futuresdr::runtime::Error::InvalidStreamPort(
                     ::futuresdr::runtime::BlockPortCtx::None,
-                    port.clone(),
+                    port,
                 ))
             }
 
-            fn resolve_stream_output(
+            fn dyn_stream_output(
                 &self,
-                _fg: &::futuresdr::runtime::Flowgraph,
-                port: &::futuresdr::runtime::PortId,
-            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynStreamPort, ::futuresdr::runtime::Error> {
+                port: impl Into<::futuresdr::runtime::PortId>,
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::BlockStreamPort, ::futuresdr::runtime::Error> {
+                let port = port.into();
                 #(#output_resolve_arms)*
                 Err(::futuresdr::runtime::Error::InvalidStreamPort(
                     ::futuresdr::runtime::BlockPortCtx::None,
-                    port.clone(),
+                    port,
                 ))
             }
         }

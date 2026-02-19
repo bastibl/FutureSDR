@@ -94,9 +94,9 @@ fn main() -> Result<()> {
         interp, decim,
     ))?;
     if args.file.is_some() {
-        fg.connect_dyn(src, "output", &interp_block, "input")?;
+        fg.connect_dyn(src.dyn_stream_output("output")?, interp_block.dyn_stream_input("input")?)?;
     } else {
-        fg.connect_dyn(src, "outputs[0]", &interp_block, "input")?;
+        fg.connect_dyn(src.dyn_stream_output("outputs[0]")?, interp_block.dyn_stream_input("input")?)?;
     }
 
     let complex_to_mag_2: Apply<_, _, _> = Apply::new(|i: &Complex32| i.norm_sqr());

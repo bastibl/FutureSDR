@@ -94,6 +94,7 @@ pub mod prelude {
     pub use futuresdr::runtime::Kernel;
     pub use futuresdr::runtime::MegaBlock;
     pub use futuresdr::runtime::MessageOutputs;
+    pub use futuresdr::runtime::DynStreamAccess;
     pub use futuresdr::runtime::Pmt;
     pub use futuresdr::runtime::PortId;
     pub use futuresdr::runtime::Result;

@@ -32,18 +32,6 @@ impl<K: Kernel> BlockRef<K> {
         self.block.try_lock().ok_or(Error::LockError)
     }
 
-    /// Create a dyn block port reference for use with dyn connections.
-    pub fn dyn_port(&self, port: impl Into<PortId>) -> DynStreamPort
-    where
-        K: KernelInterface + 'static,
-    {
-        let block: Arc<Mutex<dyn Block>> = self.block.clone();
-        DynStreamPort {
-            block,
-            port: port.into(),
-            ctx: BlockPortCtx::Id(self.id),
-        }
-    }
 }
 impl<K: Kernel> Clone for BlockRef<K> {
     fn clone(&self) -> Self {
@@ -112,84 +100,69 @@ pub struct Flowgraph {
     pub(crate) message_edges: Vec<(BlockId, PortId, BlockId, PortId)>,
 }
 
-/// Dyn block port reference for type-erased connections.
-pub struct DynStreamPort {
-    pub(crate) block: Arc<Mutex<dyn Block>>,
+/// Block stream port reference for type-erased stream connections.
+pub struct BlockStreamPort {
+    pub(crate) block: BlockId,
     pub(crate) port: PortId,
-    pub(crate) ctx: BlockPortCtx,
 }
 
-/// Resolve a stream port to a dyn block reference and port id.
-pub trait DynPortResolve {
-    /// Resolve the destination stream input port.
-    fn resolve_stream_input(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error>;
-    /// Resolve the source stream output port.
-    fn resolve_stream_output(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error>;
+/// Access stream ports for type-erased connections.
+pub trait DynStreamAccess {
+    /// Get a stream input port.
+    fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error>;
+    /// Get a stream output port.
+    fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error>;
 }
 
-impl DynPortResolve for BlockId {
-    fn resolve_stream_input(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        let block = fg
-            .blocks
-            .get(self.0)
-            .ok_or(Error::InvalidBlock(*self))?
-            .clone();
-        Ok(DynStreamPort {
-            block,
-            port: port.clone(),
-            ctx: BlockPortCtx::Id(*self),
+impl DynStreamAccess for BlockId {
+    fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        Ok(BlockStreamPort {
+            block: *self,
+            port: port.into(),
         })
     }
 
-    fn resolve_stream_output(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        let block = fg
-            .blocks
-            .get(self.0)
-            .ok_or(Error::InvalidBlock(*self))?
-            .clone();
-        Ok(DynStreamPort {
-            block,
-            port: port.clone(),
-            ctx: BlockPortCtx::Id(*self),
+    fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        Ok(BlockStreamPort {
+            block: *self,
+            port: port.into(),
         })
     }
 }
 
-impl DynPortResolve for &BlockId {
-    fn resolve_stream_input(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        (*self).resolve_stream_input(fg, port)
+impl DynStreamAccess for &BlockId {
+    fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        (*self).dyn_stream_input(port)
     }
 
-    fn resolve_stream_output(&self, fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        (*self).resolve_stream_output(fg, port)
-    }
-}
-
-impl<K: Kernel + KernelInterface + 'static> DynPortResolve for BlockRef<K> {
-    fn resolve_stream_input(&self, _fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        Ok(self.dyn_port(port.clone()))
-    }
-
-    fn resolve_stream_output(
-        &self,
-        _fg: &Flowgraph,
-        port: &PortId,
-    ) -> Result<DynStreamPort, Error> {
-        Ok(self.dyn_port(port.clone()))
+    fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        (*self).dyn_stream_output(port)
     }
 }
 
-impl<K: Kernel + KernelInterface + 'static> DynPortResolve for &BlockRef<K> {
-    fn resolve_stream_input(&self, _fg: &Flowgraph, port: &PortId) -> Result<DynStreamPort, Error> {
-        Ok(self.dyn_port(port.clone()))
+impl<K: Kernel> DynStreamAccess for BlockRef<K> {
+    fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        Ok(BlockStreamPort {
+            block: self.id,
+            port: port.into(),
+        })
     }
 
-    fn resolve_stream_output(
-        &self,
-        _fg: &Flowgraph,
-        port: &PortId,
-    ) -> Result<DynStreamPort, Error> {
-        Ok(self.dyn_port(port.clone()))
+    fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        Ok(BlockStreamPort {
+            block: self.id,
+            port: port.into(),
+        })
+    }
+}
+
+impl<K: Kernel> DynStreamAccess for &BlockRef<K> {
+    fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        (*self).dyn_stream_input(port)
+    }
+
+    fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
+        (*self).dyn_stream_output(port)
     }
 }
 
@@ -293,7 +266,7 @@ impl Flowgraph {
     ///     let head = fg.add(head)?;
     ///
     ///     // untyped connect
-    ///     fg.connect_dyn(src, "output", &head, "input")?;
+    ///     fg.connect_dyn(src.dyn_stream_output("output")?, head.dyn_stream_input("input")?)?;
     ///     // typed connect
     ///     connect!(fg, head > snk);
     ///
@@ -303,22 +276,26 @@ impl Flowgraph {
     /// ```
     pub fn connect_dyn(
         &mut self,
-        src: impl DynPortResolve,
-        src_port: impl Into<PortId>,
-        dst: impl DynPortResolve,
-        dst_port: impl Into<PortId>,
+        src: BlockStreamPort,
+        dst: BlockStreamPort,
     ) -> Result<(), Error> {
-        let src_port = src_port.into();
-        let dst_port: PortId = dst_port.into();
-        let src = src.resolve_stream_output(self, &src_port)?;
-        let dst = dst.resolve_stream_input(self, &dst_port)?;
+        let src_block = self
+            .blocks
+            .get(src.block.0)
+            .ok_or(Error::InvalidBlock(src.block))?
+            .clone();
+        let dst_block = self
+            .blocks
+            .get(dst.block.0)
+            .ok_or(Error::InvalidBlock(dst.block))?
+            .clone();
 
-        let mut dst_block = dst.block.try_lock().ok_or(Error::LockError)?;
+        let mut dst_block = dst_block.try_lock().ok_or(Error::LockError)?;
         let reader = dst_block
             .stream_input(dst.port.name())
-            .ok_or(Error::InvalidStreamPort(dst.ctx, dst.port.clone()))?;
+            .ok_or(Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst.block), dst.port.clone()))?;
 
-        src.block
+        src_block
             .try_lock()
             .ok_or(Error::LockError)?
             .connect_stream_output(src.port.name(), reader)

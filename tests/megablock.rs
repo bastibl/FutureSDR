@@ -67,10 +67,10 @@ fn stream_megablock_dyn_connect() -> Result<()> {
     let snk0 = fg.add(snk0)?;
     let snk1 = fg.add(snk1)?;
 
-    fg.connect_dyn(&src0, "output", &mega, "in0")?;
-    fg.connect_dyn(&src1, "output", &mega, "in1")?;
-    fg.connect_dyn(&mega, "out0", &snk0, "input")?;
-    fg.connect_dyn(&mega, "out1", &snk1, "input")?;
+    fg.connect_dyn(src0.dyn_stream_output("output")?, mega.dyn_stream_input("in0")?)?;
+    fg.connect_dyn(src1.dyn_stream_output("output")?, mega.dyn_stream_input("in1")?)?;
+    fg.connect_dyn(mega.dyn_stream_output("out0")?, snk0.dyn_stream_input("input")?)?;
+    fg.connect_dyn(mega.dyn_stream_output("out1")?, snk1.dyn_stream_input("input")?)?;
 
     Runtime::new().run(fg)?;
 
