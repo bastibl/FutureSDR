@@ -14,7 +14,6 @@ use crate::runtime::KernelInterface;
 use crate::runtime::PortId;
 use crate::runtime::Result;
 use crate::runtime::WrappedKernel;
-use crate::runtime::MegaBlock;
 
 /// Reference to a [Block] that was added to the [Flowgraph].
 ///
@@ -115,6 +114,20 @@ impl Flowgraph {
         item.add_to_flowgraph(self)
     }
 
+    #[doc(hidden)]
+    pub fn add_kernel<K: Kernel + KernelInterface + 'static>(&mut self, block: K) -> BlockRef<K> {
+        let block_id = BlockId(self.blocks.len());
+        let mut b = WrappedKernel::new(block, block_id);
+        let block_name = b.type_name();
+        b.set_instance_name(&format!("{}-{}", block_name, block_id.0));
+        let b = Arc::new(Mutex::new(b));
+        self.blocks.push(b.clone());
+        BlockRef {
+            id: block_id,
+            block: b,
+        }
+    }
+
     /// Make a stream connection
     ///
     /// This is the prefered way to connect stream ports. Usually, this function is not called
@@ -138,7 +151,7 @@ impl Flowgraph {
     ///     connect!(fg, src > head);
     ///     // explicit use
     ///     let snk = fg.add(snk)?;
-    ///     fg.connect_stream(head.get().output(), snk.get().input());
+    ///     fg.connect_stream(head.get()?.output(), snk.get()?.input());
     ///
     ///     Runtime::new().run(fg)?;
     ///     Ok(())
@@ -315,36 +328,11 @@ pub trait AddToFlowgraph {
     fn add_to_flowgraph(self, fg: &mut Flowgraph) -> Result<Self::Added, Error>;
 }
 
-impl<K: Kernel + KernelInterface + 'static> AddToFlowgraph for K {
-    type Added = BlockRef<K>;
-
-    fn add_to_flowgraph(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        let block_id = BlockId(fg.blocks.len());
-        let mut b = WrappedKernel::new(self, block_id);
-        let block_name = b.type_name();
-        b.set_instance_name(&format!("{}-{}", block_name, block_id.0));
-        let b = Arc::new(Mutex::new(b));
-        fg.blocks.push(b.clone());
-        Ok(BlockRef {
-            id: block_id,
-            block: b,
-        })
-    }
-}
-
 impl<K: Kernel> AddToFlowgraph for BlockRef<K> {
     type Added = BlockRef<K>;
 
     fn add_to_flowgraph(self, _fg: &mut Flowgraph) -> Result<Self::Added, Error> {
         Ok(self)
-    }
-}
-
-impl<T: MegaBlock> AddToFlowgraph for T {
-    type Added = T;
-
-    fn add_to_flowgraph(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        self.add_megablock(fg)
     }
 }
 

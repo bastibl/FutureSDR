@@ -17,6 +17,7 @@ use syn::bracketed;
 use syn::parse::Parse;
 use syn::parse::ParseStream;
 use syn::parse_macro_input;
+use syn::parse_quote;
 use syn::punctuated::Punctuated;
 use syn::token;
 
@@ -443,20 +444,25 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     }
 
-    let unconstraint_params = generics.params.iter().map(|param| match param {
-        GenericParam::Type(ty) => {
-            let ident = &ty.ident;
-            quote! { #ident }
-        }
-        GenericParam::Lifetime(lt) => {
-            let lifetime = &lt.lifetime;
-            quote! { #lifetime }
-        }
-        GenericParam::Const(c) => {
-            let ident = &c.ident;
-            quote! { #ident }
-        }
-    });
+    let unconstraint_params: Vec<proc_macro2::TokenStream> =
+        generics
+            .params
+            .iter()
+            .map(|param| match param {
+                GenericParam::Type(ty) => {
+                    let ident = &ty.ident;
+                    quote! { #ident }
+                }
+                GenericParam::Lifetime(lt) => {
+                    let lifetime = &lt.lifetime;
+                    quote! { #lifetime }
+                }
+                GenericParam::Const(c) => {
+                    let ident = &c.ident;
+                    quote! { #ident }
+                }
+            })
+            .collect();
 
     // Surround the parameters with angle brackets if they exist
     let unconstraint_generics = if generics.params.is_empty() {
@@ -989,12 +995,38 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
             });
 
+    let add_where_clause = {
+        let mut preds = where_clause
+            .as_ref()
+            .map(|w| w.predicates.clone())
+            .unwrap_or_default();
+        preds.push(parse_quote!(
+            #struct_name #unconstraint_generics: ::futuresdr::runtime::Kernel
+                + ::futuresdr::runtime::KernelInterface
+                + 'static
+        ));
+        quote!(where #preds)
+    };
+
     let expanded = quote! {
 
         impl #generics #struct_name #unconstraint_generics
             #where_clause
         {
             #(#port_getter_fns)*
+        }
+
+        impl #generics ::futuresdr::runtime::AddToFlowgraph for #struct_name #unconstraint_generics
+            #add_where_clause
+        {
+            type Added = ::futuresdr::runtime::BlockRef<#struct_name #unconstraint_generics>;
+
+            fn add_to_flowgraph(
+                self,
+                fg: &mut ::futuresdr::runtime::Flowgraph,
+            ) -> ::futuresdr::runtime::Result<Self::Added, ::futuresdr::runtime::Error> {
+                Ok(fg.add_kernel(self))
+            }
         }
 
         impl #generics ::futuresdr::runtime::KernelInterface for #struct_name #unconstraint_generics
@@ -1097,6 +1129,52 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
+    let mut generics = input.generics.clone();
+    let where_clause = &input.generics.where_clause;
+
+    for param in &mut generics.params {
+        match param {
+            GenericParam::Type(type_param) => {
+                type_param.default = None;
+            }
+            GenericParam::Const(const_param) => {
+                const_param.default = None;
+            }
+            GenericParam::Lifetime(_) => {}
+        }
+    }
+
+    let unconstraint_params: Vec<proc_macro2::TokenStream> =
+        generics
+            .params
+            .iter()
+            .map(|param| match param {
+                GenericParam::Type(ty) => {
+                    let ident = &ty.ident;
+                    quote! { #ident }
+                }
+                GenericParam::Lifetime(lt) => {
+                    let lifetime = &lt.lifetime;
+                    quote! { #lifetime }
+                }
+                GenericParam::Const(c) => {
+                    let ident = &c.ident;
+                    quote! { #ident }
+                }
+            })
+            .collect();
+
+    let unconstraint_generics = if generics.params.is_empty() {
+        quote! {}
+    } else {
+        quote! { <#(#unconstraint_params),*> }
+    };
+
+    let guard_generics = if generics.params.is_empty() {
+        quote! { <'a> }
+    } else {
+        quote! { <'a, #(#unconstraint_params),*> }
+    };
 
     let struct_data = match input.data {
         Data::Struct(data) => data,
@@ -1227,8 +1305,9 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 .into();
             }
         };
+        let block_ty = &info.block_ty;
         let guard_field = quote! {
-            #field_ident: ::async_lock::MutexGuard<'a, ::futuresdr::runtime::WrappedKernel<#info.block_ty>>
+            #field_ident: ::async_lock::MutexGuard<'a, ::futuresdr::runtime::WrappedKernel<#block_ty>>
         };
         guard_fields.push(guard_field);
 
@@ -1247,13 +1326,18 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     }
 
     let guard_ident = Ident::new(&format!("{struct_name}Guard"), struct_name.span());
+    let guard_type = if generics.params.is_empty() {
+        quote! { #guard_ident<'_> }
+    } else {
+        quote! { #guard_ident<'_, #(#unconstraint_params),*> }
+    };
 
     let input_methods = stream_inputs.iter().map(|m| {
         let field_ident = &m.field;
         let port_ident = &m.port;
         let public_name = &m.public_name;
         let ret_ty = &m.port_ty;
-        let accessor = if let Some(i) = m.index {
+        let accessor = if let Some(i) = &m.index {
             quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
         } else {
             quote! { self.#field_ident.#port_ident() }
@@ -1270,7 +1354,7 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         let port_ident = &m.port;
         let public_name = &m.public_name;
         let ret_ty = &m.port_ty;
-        let accessor = if let Some(i) = m.index {
+        let accessor = if let Some(i) = &m.index {
             quote! { self.#field_ident.#port_ident().get_mut(#i).unwrap() }
         } else {
             quote! { self.#field_ident.#port_ident() }
@@ -1283,12 +1367,16 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     });
 
     let expanded = quote! {
-        pub struct #guard_ident<'a> {
+        pub struct #guard_ident #guard_generics
+            #where_clause
+        {
             #(#guard_fields),*
         }
 
-        impl #struct_name {
-            pub fn get(&self) -> ::futuresdr::runtime::Result<#guard_ident<'_>, ::futuresdr::runtime::Error> {
+        impl #generics #struct_name #unconstraint_generics
+            #where_clause
+        {
+            pub fn get(&self) -> ::futuresdr::runtime::Result<#guard_type, ::futuresdr::runtime::Error> {
                 #(#guard_inits)*
                 Ok(#guard_ident {
                     #(#used_fields),*
@@ -1296,9 +1384,24 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
             }
         }
 
-        impl<'a> #guard_ident<'a> {
+        impl #guard_generics #guard_ident #guard_generics
+            #where_clause
+        {
             #(#input_methods)*
             #(#output_methods)*
+        }
+
+        impl #generics ::futuresdr::runtime::AddToFlowgraph for #struct_name #unconstraint_generics
+            #where_clause
+        {
+            type Added = #struct_name #unconstraint_generics;
+
+            fn add_to_flowgraph(
+                self,
+                fg: &mut ::futuresdr::runtime::Flowgraph,
+            ) -> ::futuresdr::runtime::Result<Self::Added, ::futuresdr::runtime::Error> {
+                ::futuresdr::runtime::MegaBlock::add_megablock(self, fg)
+            }
         }
     };
 
