@@ -136,6 +136,48 @@ fn stream_megablock_indexed_outputs() -> Result<()> {
 }
 
 #[derive(MegaBlock)]
+#[stream_inputs(in0: I = "copy.input")]
+#[stream_outputs(out0: O = "copy.output")]
+struct GenericCopyMega<T, I, O>
+where
+    T: std::marker::Copy + Send + Sync + 'static,
+    I: CpuBufferReader<Item = T> + Default + 'static,
+    O: CpuBufferWriter<Item = T> + Default + 'static,
+{
+    copy: Option<BlockRef<Copy<T, I, O>>>,
+}
+
+impl<T, I, O> MegaBlock for GenericCopyMega<T, I, O>
+where
+    T: std::marker::Copy + Send + Sync + 'static,
+    I: CpuBufferReader<Item = T> + Default + 'static,
+    O: CpuBufferWriter<Item = T> + Default + 'static,
+{
+    fn add_megablock(mut self, fg: &mut Flowgraph) -> Result<Self, Error> {
+        let copy = Copy::<T, I, O>::new();
+        connect!(fg, copy);
+        self.copy = Some(copy);
+        Ok(self)
+    }
+}
+
+#[test]
+fn stream_megablock_generic_copy_io() -> Result<()> {
+    let mut fg = Flowgraph::new();
+
+    let src = VectorSource::<u32>::new(vec![1, 2, 3, 4]);
+    let mega = GenericCopyMega::<u32, DefaultCpuReader<u32>, DefaultCpuWriter<u32>> { copy: None };
+    let snk = VectorSink::<u32>::new(4);
+
+    connect!(fg, src > in0.mega.out0 > snk);
+    Runtime::new().run(fg)?;
+
+    let snk = snk.get()?;
+    assert_eq!(snk.items(), &[1, 2, 3, 4]);
+    Ok(())
+}
+
+#[derive(MegaBlock)]
 #[message_inputs(r#in = "copy.in")]
 #[message_outputs(out = "copy.out")]
 struct MessageMega {
