@@ -46,6 +46,8 @@ pub use block::Block;
 pub use block::WrappedKernel;
 pub use block_meta::BlockMeta;
 pub use flowgraph::BlockRef;
+pub use flowgraph::DynBlockPort;
+pub use flowgraph::DynPortResolve;
 pub use flowgraph::Flowgraph;
 pub use flowgraph::AddToFlowgraph;
 pub use flowgraph_handle::FlowgraphHandle;

@@ -1366,6 +1366,64 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         }
     });
 
+    let input_resolve_arms = stream_inputs.iter().map(|m| {
+        let field_ident = &m.field;
+        let public_name = m.public_name.to_string();
+        let port_name = m.port.to_string();
+        let internal_name = if let Some(i) = &m.index {
+            format!("{port_name}[{}]", i.index)
+        } else {
+            port_name
+        };
+        let internal_lit = syn::LitStr::new(&internal_name, m.public_name.span());
+        let info = field_map.get(&field_ident.to_string()).unwrap();
+        let access = if info.is_option {
+            let name = info.ident.to_string();
+            quote! {
+                let block_ref = self.#field_ident.as_ref().ok_or_else(|| ::futuresdr::runtime::Error::RuntimeError(format!("MegaBlock field '{}' is None", #name)))?;
+            }
+        } else {
+            quote! {
+                let block_ref = &self.#field_ident;
+            }
+        };
+        quote! {
+            if port.name() == #public_name {
+                #access
+                return Ok(block_ref.dyn_port(::futuresdr::runtime::PortId::new(#internal_lit.to_string())));
+            }
+        }
+    });
+
+    let output_resolve_arms = stream_outputs.iter().map(|m| {
+        let field_ident = &m.field;
+        let public_name = m.public_name.to_string();
+        let port_name = m.port.to_string();
+        let internal_name = if let Some(i) = &m.index {
+            format!("{port_name}[{}]", i.index)
+        } else {
+            port_name
+        };
+        let internal_lit = syn::LitStr::new(&internal_name, m.public_name.span());
+        let info = field_map.get(&field_ident.to_string()).unwrap();
+        let access = if info.is_option {
+            let name = info.ident.to_string();
+            quote! {
+                let block_ref = self.#field_ident.as_ref().ok_or_else(|| ::futuresdr::runtime::Error::RuntimeError(format!("MegaBlock field '{}' is None", #name)))?;
+            }
+        } else {
+            quote! {
+                let block_ref = &self.#field_ident;
+            }
+        };
+        quote! {
+            if port.name() == #public_name {
+                #access
+                return Ok(block_ref.dyn_port(::futuresdr::runtime::PortId::new(#internal_lit.to_string())));
+            }
+        }
+    });
+
     let expanded = quote! {
         pub struct #guard_ident #guard_generics
             #where_clause
@@ -1401,6 +1459,34 @@ pub fn derive_megablock(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                 fg: &mut ::futuresdr::runtime::Flowgraph,
             ) -> ::futuresdr::runtime::Result<Self::Added, ::futuresdr::runtime::Error> {
                 ::futuresdr::runtime::MegaBlock::add_megablock(self, fg)
+            }
+        }
+
+        impl #generics ::futuresdr::runtime::DynPortResolve for &#struct_name #unconstraint_generics
+            #where_clause
+        {
+            fn resolve_stream_input(
+                &self,
+                _fg: &::futuresdr::runtime::Flowgraph,
+                port: &::futuresdr::runtime::PortId,
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynBlockPort, ::futuresdr::runtime::Error> {
+                #(#input_resolve_arms)*
+                Err(::futuresdr::runtime::Error::InvalidStreamPort(
+                    ::futuresdr::runtime::BlockPortCtx::None,
+                    port.clone(),
+                ))
+            }
+
+            fn resolve_stream_output(
+                &self,
+                _fg: &::futuresdr::runtime::Flowgraph,
+                port: &::futuresdr::runtime::PortId,
+            ) -> ::futuresdr::runtime::Result<::futuresdr::runtime::DynBlockPort, ::futuresdr::runtime::Error> {
+                #(#output_resolve_arms)*
+                Err(::futuresdr::runtime::Error::InvalidStreamPort(
+                    ::futuresdr::runtime::BlockPortCtx::None,
+                    port.clone(),
+                ))
             }
         }
     };

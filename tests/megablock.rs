@@ -51,6 +51,36 @@ fn stream_megablock_two_inputs_two_outputs() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn stream_megablock_dyn_connect() -> Result<()> {
+    let mut fg = Flowgraph::new();
+
+    let src0 = VectorSource::<u32>::new(vec![1, 2, 3, 4]);
+    let src1 = VectorSource::<u32>::new(vec![10, 20, 30, 40]);
+    let mega = MultiStreamMega { a: None, b: None };
+    let snk0 = VectorSink::<u32>::new(4);
+    let snk1 = VectorSink::<u32>::new(4);
+
+    let src0 = fg.add(src0)?;
+    let src1 = fg.add(src1)?;
+    let mega = fg.add(mega)?;
+    let snk0 = fg.add(snk0)?;
+    let snk1 = fg.add(snk1)?;
+
+    fg.connect_dyn(&src0, "output", &mega, "in0")?;
+    fg.connect_dyn(&src1, "output", &mega, "in1")?;
+    fg.connect_dyn(&mega, "out0", &snk0, "input")?;
+    fg.connect_dyn(&mega, "out1", &snk1, "input")?;
+
+    Runtime::new().run(fg)?;
+
+    let snk0 = snk0.get()?;
+    assert_eq!(snk0.items(), &[1, 2, 3, 4]);
+    let snk1 = snk1.get()?;
+    assert_eq!(snk1.items(), &[10, 20, 30, 40]);
+    Ok(())
+}
+
 #[derive(MegaBlock)]
 #[stream_inputs(in0: DefaultCpuReader<u32> = "dup.input")]
 #[stream_outputs(
