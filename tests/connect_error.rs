@@ -31,7 +31,10 @@ fn message_invalid_in_port() -> Result<()> {
     let sink = MessageSink::new();
     let sink = fg.add(sink)?;
 
-    let result = fg.connect_message(&source, "out", sink, "non_existent");
+    let result = fg.connect_message(
+        source.dyn_message_output("out")?,
+        sink.dyn_message_input("non_existent")?,
+    );
     assert!(result.is_err());
 
     let error = result.unwrap_err();
@@ -56,7 +59,10 @@ fn message_invalid_out_port() -> Result<()> {
     let sink = MessageSink::new();
     let sink = fg.add(sink)?;
 
-    let result = fg.connect_message(&source, "fictitious", sink, "in");
+    let result = fg.connect_message(
+        source.dyn_message_output("fictitious")?,
+        sink.dyn_message_input("in")?,
+    );
     assert!(result.is_err());
 
     let error = result.unwrap_err();

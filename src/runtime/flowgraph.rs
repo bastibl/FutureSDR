@@ -105,12 +105,26 @@ pub struct BlockStreamPort {
     pub(crate) port: PortId,
 }
 
+/// Block message port reference for type-erased message connections.
+pub struct BlockMessagePort {
+    pub(crate) block: BlockId,
+    pub(crate) port: PortId,
+}
+
 /// Access stream ports for type-erased connections.
 pub trait DynStreamAccess {
     /// Get a stream input port.
     fn dyn_stream_input(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error>;
     /// Get a stream output port.
     fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error>;
+}
+
+/// Access message ports for type-erased connections.
+pub trait DynMessageAccess {
+    /// Get a message input port.
+    fn dyn_message_input(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error>;
+    /// Get a message output port.
+    fn dyn_message_output(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error>;
 }
 
 impl DynStreamAccess for BlockId {
@@ -162,6 +176,58 @@ impl<K: Kernel> DynStreamAccess for &BlockRef<K> {
 
     fn dyn_stream_output(&self, port: impl Into<PortId>) -> Result<BlockStreamPort, Error> {
         (*self).dyn_stream_output(port)
+    }
+}
+
+impl DynMessageAccess for BlockId {
+    fn dyn_message_input(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        Ok(BlockMessagePort {
+            block: *self,
+            port: port.into(),
+        })
+    }
+
+    fn dyn_message_output(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        Ok(BlockMessagePort {
+            block: *self,
+            port: port.into(),
+        })
+    }
+}
+
+impl DynMessageAccess for &BlockId {
+    fn dyn_message_input(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        (*self).dyn_message_input(port)
+    }
+
+    fn dyn_message_output(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        (*self).dyn_message_output(port)
+    }
+}
+
+impl<K: Kernel> DynMessageAccess for BlockRef<K> {
+    fn dyn_message_input(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        Ok(BlockMessagePort {
+            block: self.id,
+            port: port.into(),
+        })
+    }
+
+    fn dyn_message_output(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        Ok(BlockMessagePort {
+            block: self.id,
+            port: port.into(),
+        })
+    }
+}
+
+impl<K: Kernel> DynMessageAccess for &BlockRef<K> {
+    fn dyn_message_input(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        (*self).dyn_message_input(port)
+    }
+
+    fn dyn_message_output(&self, port: impl Into<PortId>) -> Result<BlockMessagePort, Error> {
+        (*self).dyn_message_output(port)
     }
 }
 
@@ -302,40 +368,34 @@ impl Flowgraph {
     /// Make message connection
     pub fn connect_message(
         &mut self,
-        src_block: impl Into<BlockId>,
-        src_port: impl Into<PortId>,
-        dst_block: impl Into<BlockId>,
-        dst_port: impl Into<PortId>,
+        src: BlockMessagePort,
+        dst: BlockMessagePort,
     ) -> Result<(), Error> {
-        let src_id = src_block.into();
-        let dst_id = dst_block.into();
-        let src_port = src_port.into();
-        let dst_port = dst_port.into();
-        debug_assert_ne!(src_id, dst_id);
+        debug_assert_ne!(src.block, dst.block);
 
         let mut src_block = self
             .blocks
-            .get(src_id.0)
-            .ok_or(Error::InvalidBlock(src_id))?
+            .get(src.block.0)
+            .ok_or(Error::InvalidBlock(src.block))?
             .try_lock()
-            .ok_or_else(|| Error::RuntimeError(format!("unable to lock block {src_id:?}")))?;
+            .ok_or_else(|| Error::RuntimeError(format!("unable to lock block {:?}", src.block)))?;
         let dst_block = self
             .blocks
-            .get(dst_id.0)
-            .ok_or(Error::InvalidBlock(dst_id))?
+            .get(dst.block.0)
+            .ok_or(Error::InvalidBlock(dst.block))?
             .try_lock()
-            .ok_or_else(|| Error::RuntimeError(format!("unable to lock block {dst_id:?}")))?;
+            .ok_or_else(|| Error::RuntimeError(format!("unable to lock block {:?}", dst.block)))?;
         let dst_box = dst_block.inbox();
 
-        src_block.connect(&src_port, dst_box, &dst_port)?;
-        if !dst_block.message_inputs().contains(&dst_port.name()) {
+        src_block.connect(&src.port, dst_box, &dst.port)?;
+        if !dst_block.message_inputs().contains(&dst.port.name()) {
             return Err(Error::InvalidMessagePort(
-                BlockPortCtx::Id(dst_id),
-                dst_port,
+                BlockPortCtx::Id(dst.block),
+                dst.port,
             ));
         }
         self.message_edges
-            .push((src_id, src_port, dst_id, dst_port));
+            .push((src.block, src.port, dst.block, dst.port));
         Ok(())
     }
 

@@ -45,12 +45,18 @@ fn main() -> Result<()> {
 
             for _ in 2..stages {
                 let block = fg.add(MessageCopy::new())?;
-                fg.connect_message(&prev, "out", &block, "in")?;
+                fg.connect_message(
+                    prev.dyn_message_output("out")?,
+                    block.dyn_message_input("in")?,
+                )?;
                 prev = block;
             }
 
             let snk = fg.add(MessageSink::new())?;
-            fg.connect_message(&prev, "out", &snk, "in")?;
+            fg.connect_message(
+                prev.dyn_message_output("out")?,
+                snk.dyn_message_input("in")?,
+            )?;
             snks.push(snk);
         }
 
