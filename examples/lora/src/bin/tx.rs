@@ -15,7 +15,7 @@ use lora::utils::Channel;
 use lora::utils::CodeRate;
 use lora::utils::SpreadingFactor;
 use lora::utils::sample_count;
-use rand::RngCore;
+use rand::Rng;
 
 #[derive(Parser, Debug)]
 struct Args {
