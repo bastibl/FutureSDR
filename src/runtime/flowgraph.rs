@@ -114,8 +114,10 @@ impl Flowgraph {
         item.add_to_flowgraph(self)
     }
 
-    #[doc(hidden)]
-    pub fn add_kernel<K: Kernel + KernelInterface + 'static>(&mut self, block: K) -> BlockRef<K> {
+    pub(crate) fn add_kernel<K: Kernel + KernelInterface + 'static>(
+        &mut self,
+        block: K,
+    ) -> BlockRef<K> {
         let block_id = BlockId(self.blocks.len());
         let mut b = WrappedKernel::new(block, block_id);
         let block_name = b.type_name();
