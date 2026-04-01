@@ -95,7 +95,7 @@ fn main() -> Result<()> {
     let header_decoder: HeaderDecoder = HeaderDecoder::new(HeaderMode::Explicit, ldro);
     let decoder: Decoder = Decoder::new();
 
-    let (tx_frame, mut rx_frame) = mpsc::channel::<Pmt>(100);
+    let (tx_frame, rx_frame) = mpsc::channel::<Pmt>(100);
     let message_pipe = MessagePipe::new(tx_frame);
 
     let mut fg = Flowgraph::new();
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
         for c in channels {
             chans.add_channel(MeshtasticChannel::new(&c.0, &c.1));
         }
-        while let Some(x) = rx_frame.next().await {
+        while let Some(x) = rx_frame.recv().await {
             match x {
                 Pmt::Blob(data) => {
                     chans.decode(&data[..data.len() - 2]);
