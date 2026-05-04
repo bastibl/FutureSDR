@@ -2,7 +2,6 @@ use crate::runtime::BlockRef;
 use crate::runtime::Error;
 use crate::runtime::Flowgraph;
 use crate::runtime::Result;
-#[cfg(target_arch = "wasm32")]
 use crate::runtime::dev::Kernel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
@@ -42,17 +41,6 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl<K: SendKernel + 'static> ConnectAdd for BlockRef<K> {
-    type Added = BlockRef<K>;
-
-    fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        self.with(&*fg, |_| ())?;
-        Ok(self)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 impl<K: Kernel + 'static> ConnectAdd for BlockRef<K> {
     type Added = BlockRef<K>;
 

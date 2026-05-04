@@ -17,6 +17,7 @@ use crate::runtime::buffer::BufferReader;
 use crate::runtime::config;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
+use crate::runtime::dev::Kernel;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::SendKernel;
 use crate::runtime::dev::WorkIo;
@@ -25,7 +26,7 @@ use crate::runtime::kernel_interface::SendKernelInterface;
 use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.
-pub(crate) struct WrappedKernel<K: SendKernel> {
+pub(crate) struct WrappedKernel<K: Kernel> {
     /// Block metadata
     pub meta: BlockMeta,
     /// Message outputs
@@ -313,7 +314,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     }
 }
 
-impl<K: SendKernel> Deref for WrappedKernel<K> {
+impl<K: Kernel> Deref for WrappedKernel<K> {
     type Target = K;
 
     fn deref(&self) -> &Self::Target {
@@ -321,7 +322,7 @@ impl<K: SendKernel> Deref for WrappedKernel<K> {
     }
 }
 
-impl<K: SendKernel> DerefMut for WrappedKernel<K> {
+impl<K: Kernel> DerefMut for WrappedKernel<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.kernel
     }
