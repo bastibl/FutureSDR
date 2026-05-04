@@ -1,8 +1,8 @@
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::size_of;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::rc::Rc;
 
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
@@ -30,7 +30,6 @@ struct BufferEmpty<D: CpuSample> {
 #[derive(Debug)]
 struct BufferFull<D: CpuSample> {
     buffer: Box<[D]>,
-    /// number of items, starting at reserved space
     items: usize,
     tags: Vec<ItemTag>,
 }
@@ -49,7 +48,7 @@ struct State<D: CpuSample> {
     reader_input: VecDeque<BufferFull<D>>,
 }
 
-/// Slab writer
+/// Local single-thread CPU writer.
 #[derive(Debug)]
 pub struct Writer<D: CpuSample> {
     core: PortCore,
@@ -60,7 +59,7 @@ pub struct Writer<D: CpuSample> {
 
 #[derive(Debug)]
 struct ConnectedWriter<D: CpuSample> {
-    state: Arc<Mutex<State<D>>>,
+    state: Rc<RefCell<State<D>>>,
     reserved_items: usize,
     reader: PortEndpoint,
 }
@@ -69,7 +68,7 @@ impl<D> Writer<D>
 where
     D: CpuSample,
 {
-    /// Create Slab writer
+    /// Create a local CPU writer.
     pub fn new() -> Self {
         Self {
             core: PortCore::with_config(PortConfig::with_min_items(1)),
@@ -122,17 +121,15 @@ where
 
         min_items = std::cmp::max(min_items, reserved_items + 1);
 
-        let state = Arc::new(Mutex::new(State {
+        let state = Rc::new(RefCell::new(State {
             writer_input: VecDeque::new(),
             reader_input: VecDeque::new(),
         }));
-        let mut s = state.lock().unwrap();
         for _ in 0..4 {
-            s.writer_input.push_back(BufferEmpty {
+            state.borrow_mut().writer_input.push_back(BufferEmpty {
                 buffer: vec![D::default(); min_items].into_boxed_slice(),
             });
         }
-        drop(s);
 
         self.core
             .set_min_buffer_size_in_items(min_items - reserved_items);
@@ -161,13 +158,16 @@ where
         }) = self.current.take()
             && offset > reserved_items
         {
-            let mut state = self.state.connected().state.lock().unwrap();
-
-            state.reader_input.push_back(BufferFull {
-                buffer,
-                items: offset - reserved_items,
-                tags,
-            });
+            self.state
+                .connected()
+                .state
+                .borrow_mut()
+                .reader_input
+                .push_back(BufferFull {
+                    buffer,
+                    items: offset - reserved_items,
+                    tags,
+                });
         }
 
         let _ = self
@@ -198,8 +198,14 @@ where
 
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>) {
         if self.current.is_none() {
-            let mut state = self.state.connected().state.lock().unwrap();
-            match state.writer_input.pop_front() {
+            let next = self
+                .state
+                .connected()
+                .state
+                .borrow_mut()
+                .writer_input
+                .pop_front();
+            match next {
                 Some(b) => {
                     let end_offset = b.buffer.len();
                     self.current = Some(CurrentBuffer {
@@ -209,14 +215,11 @@ where
                         tags: Vec::new(),
                     });
                 }
-                _ => {
-                    return (&mut [], Tags::new(&mut self.tags, 0));
-                }
+                None => return (&mut [], Tags::new(&mut self.tags, 0)),
             }
         }
 
         let c = self.current.as_mut().unwrap();
-
         (&mut c.buffer[c.offset..], Tags::new(&mut self.tags, 0))
     }
 
@@ -233,9 +236,10 @@ where
         }
         c.tags.append(&mut self.tags);
         c.offset += n;
+
         if (c.end_offset - c.offset) < self.core.min_items().unwrap_or(1) {
             let c = self.current.take().unwrap();
-            let mut state = self.state.connected().state.lock().unwrap();
+            let mut state = self.state.connected().state.borrow_mut();
 
             state.reader_input.push_back(BufferFull {
                 buffer: c.buffer,
@@ -244,8 +248,6 @@ where
             });
 
             self.state.connected().reader.inbox().notify();
-
-            // make sure to be called again, if we have another buffer queued
             if !state.writer_input.is_empty() {
                 self.core.inbox().notify();
             }
@@ -267,12 +269,13 @@ where
         }
         self.core.set_min_buffer_size_in_items(n);
     }
+
     fn max_items(&self) -> usize {
         self.core.min_buffer_size_in_items().unwrap_or(usize::MAX)
     }
 }
 
-/// Slab reader
+/// Local single-thread CPU reader.
 #[derive(Debug)]
 pub struct Reader<D: CpuSample> {
     core: PortCore,
@@ -283,7 +286,7 @@ pub struct Reader<D: CpuSample> {
 
 #[derive(Debug)]
 struct ConnectedReader<D: CpuSample> {
-    state: Arc<Mutex<State<D>>>,
+    state: Rc<RefCell<State<D>>>,
     reserved_items: usize,
     writer: PortEndpoint,
 }
@@ -292,7 +295,7 @@ impl<D> Reader<D>
 where
     D: CpuSample,
 {
-    /// Create Slab Buffer Reader
+    /// Create a local CPU reader.
     pub fn new() -> Self {
         Self {
             core: PortCore::new_disconnected(),
@@ -323,6 +326,7 @@ where
     fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox) {
         self.core.init(block_id, port_id, inbox);
     }
+
     fn validate(&self) -> Result<(), Error> {
         if self.state.is_connected() {
             Ok(())
@@ -330,6 +334,7 @@ where
             Err(self.core.not_connected_error())
         }
     }
+
     async fn notify_finished(&mut self) {
         let _ = self
             .state
@@ -341,19 +346,23 @@ where
             })
             .await;
     }
+
     fn finish(&mut self) {
         self.finished = true;
     }
+
     fn finished(&self) -> bool {
         self.finished
             && self
                 .state
                 .as_ref()
-                .is_none_or(|state| state.state.lock().unwrap().reader_input.is_empty())
+                .is_none_or(|state| state.state.borrow().reader_input.is_empty())
     }
+
     fn block_id(&self) -> BlockId {
         self.core.block_id()
     }
+
     fn port_id(&self) -> PortId {
         self.core.port_id()
     }
@@ -366,20 +375,27 @@ where
     type Item = D;
 
     fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
-        let reserved_items = self.state.as_ref().map_or(
-            futuresdr::runtime::config::config().slab_reserved,
-            |state| state.reserved_items,
-        );
+        let reserved_items = self
+            .state
+            .as_ref()
+            .map_or(config::config().slab_reserved, |state| state.reserved_items);
+
         if let Some(cur) = self.current.as_mut() {
             let left = cur.end_offset - cur.offset;
             debug_assert!(left > 0);
             if left <= reserved_items {
-                let mut state = self.state.connected().state.lock().unwrap();
+                let next = self
+                    .state
+                    .connected()
+                    .state
+                    .borrow_mut()
+                    .reader_input
+                    .pop_front();
                 if let Some(BufferFull {
                     mut buffer,
                     mut tags,
                     items,
-                }) = state.reader_input.pop_front()
+                }) = next
                 {
                     buffer[(reserved_items - left)..reserved_items]
                         .clone_from_slice(&cur.buffer[cur.offset..(cur.offset + left)]);
@@ -390,7 +406,12 @@ where
                     cur.tags.append(&mut tags);
 
                     let old = std::mem::replace(&mut cur.buffer, buffer);
-                    state.writer_input.push_back(BufferEmpty { buffer: old });
+                    self.state
+                        .connected()
+                        .state
+                        .borrow_mut()
+                        .writer_input
+                        .push_back(BufferEmpty { buffer: old });
                     self.state.connected().writer.inbox().notify();
 
                     cur.end_offset = reserved_items + items;
@@ -398,8 +419,14 @@ where
                 }
             }
         } else {
-            let mut state = self.state.connected().state.lock().unwrap();
-            match state.reader_input.pop_front() {
+            let next = self
+                .state
+                .connected()
+                .state
+                .borrow_mut()
+                .reader_input
+                .pop_front();
+            match next {
                 Some(b) => {
                     let end_offset = b.items + reserved_items;
                     self.current = Some(CurrentBuffer {
@@ -409,7 +436,7 @@ where
                         tags: b.tags,
                     });
                 }
-                _ => {
+                None => {
                     static V: Vec<ItemTag> = vec![];
                     return (&[], &V);
                 }
@@ -432,24 +459,34 @@ where
 
         if c.offset == c.end_offset {
             let b = self.current.take().unwrap();
-            let mut state = self.state.connected().state.lock().unwrap();
-
-            state
+            self.state
+                .connected()
+                .state
+                .borrow_mut()
                 .writer_input
                 .push_back(BufferEmpty { buffer: b.buffer });
 
             self.state.connected().writer.inbox().notify();
-
-            // make sure to be called again, if we have another buffer queued
-            if !state.reader_input.is_empty() {
+            if !self
+                .state
+                .connected()
+                .state
+                .borrow()
+                .reader_input
+                .is_empty()
+            {
                 self.core.inbox().notify();
             }
-        // we call ourselfs again, since the buffer might be able to get merged
-        } else if c.end_offset - c.offset <= reserved_items {
-            let state = self.state.connected().state.lock().unwrap();
-            if !state.reader_input.is_empty() {
-                self.core.inbox().notify();
-            }
+        } else if c.end_offset - c.offset <= reserved_items
+            && !self
+                .state
+                .connected()
+                .state
+                .borrow()
+                .reader_input
+                .is_empty()
+        {
+            self.core.inbox().notify();
         }
     }
 
@@ -466,6 +503,7 @@ where
         }
         self.core.set_min_buffer_size_in_items(n);
     }
+
     fn max_items(&self) -> usize {
         self.core.min_buffer_size_in_items().unwrap_or(usize::MAX)
     }

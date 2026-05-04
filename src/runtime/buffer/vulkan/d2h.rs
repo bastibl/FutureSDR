@@ -184,7 +184,6 @@ where
     }
 }
 
-#[async_trait]
 impl<T> BufferReader for Reader<T>
 where
     T: BufferContents + CpuSample,

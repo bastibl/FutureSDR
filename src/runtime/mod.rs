@@ -18,6 +18,7 @@ use thiserror::Error;
 use crate::runtime::channel::mpsc;
 use crate::runtime::channel::oneshot;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod block;
 mod block_inbox;
 mod block_meta;
@@ -51,6 +52,8 @@ mod flowgraph_handle;
 mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
+mod local_block;
+mod local_wrapped_kernel;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
 /// Mocker for unit testing and benchmarking
@@ -63,6 +66,7 @@ pub mod scheduler;
 mod tag;
 mod timer;
 mod work_io;
+#[cfg(not(target_arch = "wasm32"))]
 mod wrapped_kernel;
 
 /// Macros for building flowgraphs and implementing blocks.
@@ -77,6 +81,8 @@ pub mod macros {
 
 pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
+#[cfg(not(target_arch = "wasm32"))]
+pub use flowgraph::LocalBlockRef;
 pub use flowgraph_handle::FlowgraphBlockHandle;
 pub use flowgraph_handle::FlowgraphHandle;
 pub use flowgraph_task::FlowgraphTask;
@@ -99,6 +105,8 @@ pub use futuresdr_types::PortId;
 pub mod __private {
     pub use super::connect_add::ConnectAdd;
     pub use super::kernel_interface::KernelInterface;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use super::kernel_interface::SendKernelInterface;
 }
 
 /// Generic Result Type used for the [`crate::runtime::dev::Kernel`] trait.
@@ -317,6 +325,7 @@ pub enum BlockPortCtx {
     Name(String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<&dyn crate::runtime::dev::Block> for BlockPortCtx {
     fn from(value: &dyn crate::runtime::dev::Block) -> Self {
         BlockPortCtx::Name(value.type_name().into())

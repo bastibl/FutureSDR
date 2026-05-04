@@ -1,3 +1,4 @@
+use crate::runtime::buffer::SendBufferReader;
 use crate::runtime::dev::prelude::*;
 use cpal::BufferSize;
 use cpal::Stream;
@@ -44,7 +45,7 @@ where
 
 // cpal::Stream is !Send
 #[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<I> Send for AudioSink<I> where I: CpuBufferReader<Item = f32> {}
+unsafe impl<I> Send for AudioSink<I> where I: CpuBufferReader<Item = f32> + SendBufferReader {}
 
 const QUEUE_SIZE: usize = 5;
 const STANDARD_RATES: [u32; 4] = [24000, 44100, 48000, 96000];

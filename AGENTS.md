@@ -126,7 +126,7 @@ Buffers are the transport layer between blocks. Implementations:
 - `burn` — for Burn ML framework (feature: `burn`)
 - `zynq` — Xilinx Zynq FPGA DMA (feature: `zynq`, Linux only)
 
-Buffer traits: `BufferReader` / `BufferWriter` (generic), `CpuBufferReader` / `CpuBufferWriter` (CPU-specific with `slice()`/`consume()`/`produce()`), `InplaceReader` / `InplaceWriter` (in-place).
+Buffer traits: `SendBufferReader` / `SendBufferWriter` (send-capable generic), `BufferReader` / `BufferWriter` (local generic), `SendCpuBufferReader` / `SendCpuBufferWriter` and `CpuBufferReader` / `CpuBufferWriter` (CPU-specific with `slice()`/`consume()`/`produce()`), `SendInplaceReader` / `SendInplaceWriter` (in-place).
 
 ### Message Passing
 

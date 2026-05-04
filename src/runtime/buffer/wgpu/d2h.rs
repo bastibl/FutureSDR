@@ -32,6 +32,7 @@ where
     slice: BufferView,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl<D> Send for CurrentBuffer<D> where D: CpuSample {}
 
 /// Custom buffer writer
@@ -44,6 +45,7 @@ pub struct Writer<D: CpuSample> {
     state: ConnectionState<ConnectedWriter>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl<D> Send for Writer<D> where D: CpuSample {}
 
 #[derive(Debug)]
@@ -185,6 +187,7 @@ where
     finished: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl<D> Send for Reader<D> where D: CpuSample {}
 
 #[derive(Debug)]
@@ -224,7 +227,6 @@ where
     }
 }
 
-#[async_trait]
 impl<D> BufferReader for Reader<D>
 where
     D: CpuSample,

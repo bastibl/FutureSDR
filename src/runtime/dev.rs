@@ -4,13 +4,13 @@
 //! App authors building and running flowgraphs should generally prefer
 //! [`crate::prelude`] and the top-level [`crate::runtime`] APIs.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use super::block::Block;
 pub use super::block_inbox::BlockInbox;
 pub use super::block_inbox::BlockNotifier;
 pub use super::block_meta::BlockMeta;
 pub use super::buffer::BufferReader;
 pub use super::buffer::BufferWriter;
-pub use super::buffer::CircuitWriter;
 pub use super::buffer::CpuBufferReader;
 pub use super::buffer::CpuBufferWriter;
 pub use super::buffer::CpuSample;
@@ -19,33 +19,23 @@ pub use super::buffer::DefaultCpuWriter;
 pub use super::buffer::InplaceBuffer;
 pub use super::buffer::InplaceReader;
 pub use super::buffer::InplaceWriter;
+pub use super::buffer::LocalCpuReader;
+pub use super::buffer::LocalCpuWriter;
+pub use super::buffer::SendBufferReader;
+pub use super::buffer::SendBufferWriter;
+pub use super::buffer::SendCircuitWriter;
+pub use super::buffer::SendCpuBufferReader;
+pub use super::buffer::SendCpuBufferWriter;
+pub use super::buffer::SendInplaceReader;
+pub use super::buffer::SendInplaceWriter;
 pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
+pub use super::kernel::SendKernel;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
 pub use super::tag::Tag;
 pub use super::work_io::WorkIo;
-
-/// Marker trait for values that must be `Send` on native runtimes but not on wasm.
-///
-/// FutureSDR uses this bound on futures and block internals that may be moved
-/// between native executor threads. On `wasm32`, where the runtime is
-/// single-threaded, the marker does not require `Send`.
-#[cfg(not(target_arch = "wasm32"))]
-pub trait MaybeSend: Send {}
-#[cfg(not(target_arch = "wasm32"))]
-impl<T: Send + ?Sized> MaybeSend for T {}
-
-/// Marker trait for values that must be `Send` on native runtimes but not on wasm.
-///
-/// FutureSDR uses this bound on futures and block internals that may be moved
-/// between native executor threads. On `wasm32`, where the runtime is
-/// single-threaded, the marker does not require `Send`.
-#[cfg(target_arch = "wasm32")]
-pub trait MaybeSend {}
-#[cfg(target_arch = "wasm32")]
-impl<T: ?Sized> MaybeSend for T {}
 
 /// Prelude for implementing custom blocks and runtime extensions.
 ///
@@ -62,13 +52,13 @@ pub mod prelude {
     pub use crate::runtime::buffer::slab;
     pub use crate::runtime::channel::mpsc;
     pub use crate::runtime::channel::oneshot;
+    #[cfg(not(target_arch = "wasm32"))]
     pub use crate::runtime::dev::Block;
     pub use crate::runtime::dev::BlockInbox;
     pub use crate::runtime::dev::BlockMeta;
     pub use crate::runtime::dev::BlockNotifier;
     pub use crate::runtime::dev::BufferReader;
     pub use crate::runtime::dev::BufferWriter;
-    pub use crate::runtime::dev::CircuitWriter;
     pub use crate::runtime::dev::CpuBufferReader;
     pub use crate::runtime::dev::CpuBufferWriter;
     pub use crate::runtime::dev::CpuSample;
@@ -79,8 +69,13 @@ pub mod prelude {
     pub use crate::runtime::dev::InplaceWriter;
     pub use crate::runtime::dev::ItemTag;
     pub use crate::runtime::dev::Kernel;
-    pub use crate::runtime::dev::MaybeSend;
+    pub use crate::runtime::dev::LocalCpuReader;
+    pub use crate::runtime::dev::LocalCpuWriter;
     pub use crate::runtime::dev::MessageOutputs;
+    pub use crate::runtime::dev::SendCircuitWriter;
+    pub use crate::runtime::dev::SendInplaceReader;
+    pub use crate::runtime::dev::SendInplaceWriter;
+    pub use crate::runtime::dev::SendKernel;
     pub use crate::runtime::dev::Tag;
     pub use crate::runtime::dev::TypedBlockGuard;
     pub use crate::runtime::dev::TypedBlockGuardMut;

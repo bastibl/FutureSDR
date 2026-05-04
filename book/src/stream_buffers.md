@@ -2,15 +2,17 @@
 
 Stream buffers move samples between connected stream ports. A source block writes into the writer side of a buffer, and the downstream block reads from the reader side.
 
-FutureSDR can be extended with arbitrary buffer implementations. At the lowest level, a buffer only has to provide a writer and reader pair implementing `BufferWriter` and `BufferReader`. Those two traits are mostly the type-erased runtime connection layer: they let the flowgraph connect a writer port to a reader port, validate the connection, and propagate termination.
+FutureSDR can be extended with arbitrary buffer implementations. At the lowest level, a send-capable buffer provides a writer and reader pair implementing `SendBufferWriter` and `SendBufferReader`; a local-only buffer provides `BufferWriter` and `BufferReader`. Those traits are mostly the type-erased runtime connection layer: they let the flowgraph connect a writer port to a reader port, validate the connection, and propagate termination.
 
 Buffer implementations can expose their own higher-level API. A CPU buffer exposes slices. A GPU buffer can expose GPU resources. A DMA buffer can expose hardware-owned memory. FutureSDR therefore provides specialized traits for the common buffer families instead of forcing every buffer into one sample-slice API.
 
 The main stream buffer trait families are:
 
-- `BufferWriter` / `BufferReader`: minimal base trait that all buffers implement.
-- `CpuBufferWriter` / `CpuBufferReader`: out-of-place CPU buffer API.
-- `InplaceWriter` / `InplaceReader` / `InplaceBuffer`: in-place CPU buffer API.
+- `SendBufferWriter` / `SendBufferReader`: minimal base trait for send-capable buffers.
+- `BufferWriter` / `BufferReader`: minimal base trait for local buffers.
+- `SendCpuBufferWriter` / `SendCpuBufferReader`: out-of-place CPU buffer API for send-capable buffers.
+- `CpuBufferWriter` / `CpuBufferReader`: out-of-place CPU buffer API for local buffers.
+- `SendInplaceWriter` / `SendInplaceReader` / `InplaceBuffer`: in-place CPU buffer API.
 
 Most application code should use the default buffers through existing blocks. You only need to name buffer types when you want a non-default transport, such as in-place, GPU, or DMA buffers.
 
@@ -67,8 +69,8 @@ This can help for simple transformations, such as adding a constant to every sam
 
 In-place buffers have a different API from normal CPU buffers:
 
-- `InplaceReader::get_full_buffer()` receives a full reusable buffer chunk.
-- `InplaceWriter::put_full_buffer()` forwards the same chunk after processing.
+- `SendInplaceReader::get_full_buffer()` receives a full reusable buffer chunk.
+- `SendInplaceWriter::put_full_buffer()` forwards the same chunk after processing.
 - `InplaceBuffer::slice()` gives mutable access to the chunk contents.
 
 That means in-place processing usually needs blocks written for the in-place API. See the [in-place example](https://github.com/FutureSDR/FutureSDR/tree/main/examples/inplace) for complete source.
@@ -126,12 +128,12 @@ Accelerator buffers use the same connection model but expose APIs that match the
 - Vulkan buffers use Vulkan storage buffers.
 - Burn buffers use [Burn](https://burn.dev/) tensors for machine-learning workloads.
 
-These buffer APIs are intentionally not standardized beyond `BufferWriter` and `BufferReader`. A GPU block may need mapped buffers. A DMA block may need hardware buffer handles. A tensor buffer may need framework-specific tensor ownership.
+These buffer APIs are intentionally not standardized beyond `SendBufferWriter` / `SendBufferReader` and their local counterparts. A GPU block may need mapped buffers. A DMA block may need hardware buffer handles. A tensor buffer may need framework-specific tensor ownership.
 
 Accelerator buffer implementations typically also implement CPU buffer traits at the host boundary:
 
-- Host-to-device writers implement `CpuBufferWriter`, so a CPU source can write samples into an upload buffer.
-- Device-to-host readers implement `CpuBufferReader`, so a CPU sink can read processed samples after download.
+- Host-to-device writers implement `SendCpuBufferWriter`, so a CPU source can write samples into an upload buffer.
+- Device-to-host readers implement `SendCpuBufferReader`, so a CPU sink can read processed samples after download.
 
 For example, the WGPU example uses a CPU `VectorSource` with an `H2DWriter`, a GPU processing block, and a CPU `VectorSink` with a `D2HReader`:
 

@@ -2,8 +2,6 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::runtime::dev::MaybeSend;
-
 /// Work-loop control flags returned from [`Kernel::work`](crate::runtime::dev::Kernel::work).
 ///
 /// A block sets these fields during `work()` to tell the scheduler whether it
@@ -26,16 +24,20 @@ pub struct WorkIo {
     #[cfg(not(target_arch = "wasm32"))]
     pub block_on: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     /// Future that must resolve before the block is called again.
-    ///
-    /// The block will be called if new work arrives or if the future resolves,
-    /// whichever happens first.
     #[cfg(target_arch = "wasm32")]
     pub block_on: Option<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl WorkIo {
     /// Set the future that should wake this block again.
-    pub fn block_on<F: Future<Output = ()> + MaybeSend + 'static>(&mut self, f: F) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn block_on<F: Future<Output = ()> + Send + 'static>(&mut self, f: F) {
+        self.block_on = Some(Box::pin(f));
+    }
+
+    /// Set the future that should wake this block again.
+    #[cfg(target_arch = "wasm32")]
+    pub fn block_on<F: Future<Output = ()> + 'static>(&mut self, f: F) {
         self.block_on = Some(Box::pin(f));
     }
 }

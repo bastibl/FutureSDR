@@ -5,7 +5,6 @@ use crate::runtime::PortId;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitReturn;
-use crate::runtime::buffer::CircuitWriter;
 use crate::runtime::buffer::ConnectionState;
 use crate::runtime::buffer::CpuBufferReader;
 use crate::runtime::buffer::CpuBufferWriter;
@@ -16,6 +15,8 @@ use crate::runtime::buffer::InplaceWriter;
 use crate::runtime::buffer::PortConfig;
 use crate::runtime::buffer::PortCore;
 use crate::runtime::buffer::PortEndpoint;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::buffer::SendCircuitWriter;
 use crate::runtime::buffer::Tags;
 use crate::runtime::config::config;
 use crate::runtime::dev::BlockInbox;
@@ -248,7 +249,8 @@ where
     }
 }
 
-impl<T> CircuitWriter for Writer<T>
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendCircuitWriter for Writer<T>
 where
     T: CpuSample,
 {
@@ -405,7 +407,6 @@ where
     }
 }
 
-#[async_trait]
 impl<T> BufferReader for Reader<T>
 where
     T: CpuSample,

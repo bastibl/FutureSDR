@@ -21,36 +21,37 @@ use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::BlockNotifier;
 use crate::runtime::dev::ItemTag;
-use crate::runtime::dev::Kernel;
 use crate::runtime::dev::MessageOutputs;
+use crate::runtime::dev::SendKernel;
 use crate::runtime::dev::WorkIo;
 use crate::runtime::kernel_interface::KernelInterface;
+use crate::runtime::kernel_interface::SendKernelInterface;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
 /// Mocker for a block
 ///
 /// A harness to run a block without a runtime. Used for unit tests and benchmarking.
-pub struct Mocker<K: Kernel> {
+pub struct Mocker<K: SendKernel> {
     /// Wrapped Block
     block: WrappedKernel<K>,
     message_sinks: Vec<Receiver<BlockMessage>>,
     messages: Vec<Vec<Pmt>>,
 }
 
-impl<K: KernelInterface + Kernel + 'static> Deref for Mocker<K> {
+impl<K: SendKernelInterface + SendKernel + 'static> Deref for Mocker<K> {
     type Target = K;
 
     fn deref(&self) -> &Self::Target {
         &self.block.kernel
     }
 }
-impl<K: KernelInterface + Kernel + 'static> DerefMut for Mocker<K> {
+impl<K: SendKernelInterface + SendKernel + 'static> DerefMut for Mocker<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.block.kernel
     }
 }
 
-impl<K: KernelInterface + Kernel + 'static> Mocker<K> {
+impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
         self.block.id
@@ -81,7 +82,7 @@ impl<K: KernelInterface + Kernel + 'static> Mocker<K> {
         let mut message_sinks: Vec<Receiver<BlockMessage>> = Vec::new();
         let msg_len = config().queue_size;
 
-        for n in K::message_outputs() {
+        for n in <K as KernelInterface>::message_outputs() {
             messages.push(Vec::new());
             let (tx, rx) = channel(msg_len);
             message_sinks.push(rx);
@@ -229,7 +230,6 @@ impl<T: Debug + Send + 'static> Default for Reader<T> {
     }
 }
 
-#[async_trait]
 impl<T: Debug + Send + 'static> BufferReader for Reader<T> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self

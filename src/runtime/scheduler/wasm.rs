@@ -5,11 +5,6 @@ use futures::task::Context;
 use futures::task::Poll;
 use std::pin::Pin;
 
-use crate::runtime::BlockId;
-use crate::runtime::FlowgraphMessage;
-use crate::runtime::channel::mpsc::Sender;
-use crate::runtime::dev::Block;
-use crate::runtime::dev::MaybeSend;
 use crate::runtime::scheduler::Scheduler;
 
 /// WASM Scheduler
@@ -24,40 +19,7 @@ impl WasmScheduler {
 }
 
 impl Scheduler for WasmScheduler {
-    fn run_flowgraph(
-        &self,
-        blocks: Vec<Box<dyn Block>>,
-        main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
-        // spawn block executors
-        let mut tasks = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            let main_channel = main_channel.clone();
-            let blocking = block.is_blocking();
-            let task = if blocking {
-                self.spawn_blocking(async move {
-                    let mut block = block;
-                    let id = block.id();
-                    block.run(main_channel).await;
-                    (id, block)
-                })
-            } else {
-                self.spawn(async move {
-                    let mut block = block;
-                    let id = block.id();
-                    block.run(main_channel).await;
-                    (id, block)
-                })
-            };
-            tasks.push(task);
-        }
-        tasks
-    }
-
-    fn spawn<T: MaybeSend + 'static>(
-        &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
-    ) -> Task<T> {
+    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let (tx, rx) = oneshot::channel::<T>();
         wasm_bindgen_futures::spawn_local(async move {
             let t = future.await;
@@ -69,10 +31,7 @@ impl Scheduler for WasmScheduler {
         Task(rx)
     }
 
-    fn spawn_blocking<T: MaybeSend + 'static>(
-        &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
-    ) -> Task<T> {
+    fn spawn_blocking<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         info!("no spawn blocking for wasm, using spawn");
         self.spawn(future)
     }

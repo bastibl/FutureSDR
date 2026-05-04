@@ -7,6 +7,9 @@ pub mod burn;
 /// In-place circuit buffer
 pub mod circuit;
 
+/// Local single-thread CPU buffer
+pub mod local;
+
 /// Double-mapped circular buffer
 #[cfg(not(target_arch = "wasm32"))]
 pub mod circular;
@@ -33,7 +36,6 @@ use std::future::Future;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockNotifier;
 use crate::runtime::dev::ItemTag;
-use crate::runtime::dev::MaybeSend;
 use crate::runtime::dev::Tag;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::Error;
@@ -352,45 +354,25 @@ impl<T> ConnectionState<T> {
     }
 }
 
-/// Type-erased reader side of a stream buffer.
+/// Send-capable reader marker for stream buffers.
 ///
-/// This is the core runtime trait every buffer reader implements. Custom block
-/// authors normally use higher-level traits such as [`CpuBufferReader`] or
-/// [`InplaceReader`] instead of calling these methods directly.
-#[async_trait]
-pub trait BufferReader: Any {
-    /// Return this reader as [`Any`] for runtime downcasting.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    /// Initialize the reader with its owning block, port id, and inbox.
-    ///
-    /// This sets the own block ID, Port ID, and message receiver so that it can
-    /// be communicated to the other end when making connections.
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox);
-    /// Validate that this reader is connected and ready to run.
-    fn validate(&self) -> Result<(), Error>;
-    /// Notify upstream writers that this reader is done.
-    async fn notify_finished(&mut self);
-    /// Mark this reader because the upstream writer is done.
-    ///
-    /// The Block will usually process the remaining samples and shut down.
-    fn finish(&mut self);
-    /// Return whether the upstream writer has marked this buffer as done.
-    fn finished(&self) -> bool;
-    /// Get the owning block id.
-    fn block_id(&self) -> BlockId;
-    /// Get the owning port id.
-    fn port_id(&self) -> PortId;
+/// Native normal flowgraphs use this to ensure the reader type and its
+/// finish-notification future can cross worker threads. The reader methods come
+/// from [`BufferReader`].
+pub trait SendBufferReader: BufferReader + Send
+where
+    Self: BufferReader<notify_finished(..): Send>,
+{
 }
 
-/// Type-erased writer side of a stream buffer.
+/// Send-capable type-erased writer side of a stream buffer.
 ///
-/// This is the core runtime trait every buffer writer implements. Custom block
-/// authors normally use higher-level traits such as [`CpuBufferWriter`] or
-/// [`InplaceWriter`] instead of calling these methods directly.
-pub trait BufferWriter {
+/// This is used by the normal flowgraph runtime. Custom block authors normally
+/// use higher-level traits such as [`SendCpuBufferWriter`] or
+/// [`SendInplaceWriter`] instead of calling these methods directly.
+pub trait SendBufferWriter: Send {
     /// The corresponding reader.
-    type Reader: BufferReader;
+    type Reader: SendBufferReader;
     /// Initialize the writer with its owning block, port id, and inbox.
     ///
     /// This sets the own block ID, Port ID, and message receiver so that it can
@@ -401,6 +383,68 @@ pub trait BufferWriter {
     /// Connect the writer to a matching reader.
     fn connect(&mut self, dest: &mut Self::Reader);
     /// Connect the writer to a type-erased reader.
+    fn connect_dyn(&mut self, dest: &mut dyn SendBufferReader) -> Result<(), Error> {
+        if let Some(concrete) = BufferReader::as_any_mut(dest).downcast_mut::<Self::Reader>() {
+            self.connect(concrete);
+            Ok(())
+        } else {
+            Err(Error::ValidationError(
+                "dyn SendBufferReader has wrong type".to_string(),
+            ))
+        }
+    }
+    /// Notify downstream blocks that we are done.
+    fn notify_finished(&mut self) -> impl Future<Output = ()> + Send;
+    /// Get the owning block id.
+    fn block_id(&self) -> BlockId;
+    /// Get the owning port id.
+    fn port_id(&self) -> PortId;
+}
+
+/// Type-erased reader side of a stream buffer.
+///
+/// This is the primary local API. Native send-capable readers are derived from
+/// this trait through a blanket impl when the type and returned futures permit
+/// it.
+pub trait BufferReader: Any {
+    /// Return this reader as [`Any`] for runtime downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// Initialize the reader with its owning block, port id, and inbox.
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox);
+    /// Validate that this reader is connected and ready to run.
+    fn validate(&self) -> Result<(), Error>;
+    /// Notify upstream writers that this reader is done.
+    fn notify_finished(&mut self) -> impl Future<Output = ()>
+    where
+        Self: Sized;
+    /// Mark this reader because the upstream writer is done.
+    fn finish(&mut self);
+    /// Return whether the upstream writer has marked this buffer as done.
+    fn finished(&self) -> bool;
+    /// Get the owning block id.
+    fn block_id(&self) -> BlockId;
+    /// Get the owning port id.
+    fn port_id(&self) -> PortId;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendBufferReader for T where T: BufferReader<notify_finished(..): Send> + Send + 'static {}
+
+/// Type-erased writer side of a stream buffer.
+///
+/// This is the primary local API. Native send-capable writers are derived from
+/// this trait through a blanket impl when the type, reader, and returned futures
+/// permit it.
+pub trait BufferWriter {
+    /// The corresponding local reader.
+    type Reader: BufferReader;
+    /// Initialize the writer with its owning block, port id, and inbox.
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox);
+    /// Validate that this writer is connected and ready to run.
+    fn validate(&self) -> Result<(), Error>;
+    /// Connect the writer to a matching reader.
+    fn connect(&mut self, dest: &mut Self::Reader);
+    /// Connect the writer to a type-erased local reader.
     fn connect_dyn(&mut self, dest: &mut dyn BufferReader) -> Result<(), Error> {
         if let Some(concrete) = dest.as_any_mut().downcast_mut::<Self::Reader>() {
             self.connect(concrete);
@@ -412,20 +456,53 @@ pub trait BufferWriter {
         }
     }
     /// Notify downstream blocks that we are done.
-    fn notify_finished(&mut self) -> impl Future<Output = ()> + MaybeSend;
+    fn notify_finished(&mut self) -> impl Future<Output = ()>;
     /// Get the owning block id.
     fn block_id(&self) -> BlockId;
     /// Get the owning port id.
     fn port_id(&self) -> PortId;
 }
 
-/// A buffer writer that can close an in-place circuit to a matching end.
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendBufferWriter for T
+where
+    T: BufferWriter<notify_finished(..): Send> + Send,
+    T::Reader: SendBufferReader,
+{
+    type Reader = <T as BufferWriter>::Reader;
+
+    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox) {
+        BufferWriter::init(self, block_id, port_id, inbox);
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        BufferWriter::validate(self)
+    }
+
+    fn connect(&mut self, dest: &mut Self::Reader) {
+        BufferWriter::connect(self, dest);
+    }
+
+    fn notify_finished(&mut self) -> impl Future<Output = ()> + Send {
+        BufferWriter::notify_finished(self)
+    }
+
+    fn block_id(&self) -> BlockId {
+        BufferWriter::block_id(self)
+    }
+
+    fn port_id(&self) -> PortId {
+        BufferWriter::port_id(self)
+    }
+}
+
+/// Send-capable buffer writer that can close an in-place circuit to a matching end.
 ///
-/// Circuit-capable buffers are still connected with the normal
-/// [`BufferWriter::connect`] stream connection. Closing the circuit is the
+/// Circuit-capable buffers are still connected with the send-capable
+/// [`SendBufferWriter::connect`] stream connection. Closing the circuit is the
 /// additional step that wires the downstream end back to the upstream start so
 /// buffers can circulate.
-pub trait CircuitWriter: BufferWriter {
+pub trait SendCircuitWriter: SendBufferWriter {
     /// The circuit end type accepted by this writer.
     type CircuitEnd;
 
@@ -438,11 +515,11 @@ pub trait CpuSample: Default + Clone + std::fmt::Debug + Send + Sync + 'static {
 
 impl<T> CpuSample for T where T: Default + Clone + std::fmt::Debug + Send + Sync + 'static {}
 
-/// Reader API for out-of-place CPU stream buffers.
+/// Send-capable reader API for out-of-place CPU stream buffers.
 ///
 /// Blocks use this trait in `work()` to inspect available input samples and
 /// then call [`consume`](Self::consume) for the number of items processed.
-pub trait CpuBufferReader: BufferReader + Default + MaybeSend {
+pub trait SendCpuBufferReader: SendBufferReader + Default {
     /// Item type carried by this stream input.
     type Item: CpuSample;
     /// Get available samples.
@@ -472,11 +549,62 @@ pub trait CpuBufferReader: BufferReader + Default + MaybeSend {
     fn max_items(&self) -> usize;
 }
 
-/// Writer API for out-of-place CPU stream buffers.
+/// CPU stream reader API.
+///
+/// This is the primary local API. Native send-capable readers are derived from
+/// this trait through a blanket impl.
+pub trait CpuBufferReader: BufferReader + Default {
+    /// Item type.
+    type Item: CpuSample;
+    /// Get readable slice and associated tags.
+    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>);
+    /// Get readable slice.
+    fn slice(&mut self) -> &[Self::Item] {
+        self.slice_with_tags().0
+    }
+    /// Mark `n` items as consumed.
+    fn consume(&mut self, n: usize);
+    /// Set minimum number of readable items.
+    fn set_min_items(&mut self, n: usize);
+    /// Set minimum buffer size.
+    fn set_min_buffer_size_in_items(&mut self, n: usize);
+    /// Return the maximum number of items that fit in the buffer.
+    fn max_items(&self) -> usize;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendCpuBufferReader for T
+where
+    T: CpuBufferReader + SendBufferReader,
+{
+    type Item = <T as CpuBufferReader>::Item;
+
+    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
+        CpuBufferReader::slice_with_tags(self)
+    }
+
+    fn consume(&mut self, n: usize) {
+        CpuBufferReader::consume(self, n);
+    }
+
+    fn set_min_items(&mut self, n: usize) {
+        CpuBufferReader::set_min_items(self, n);
+    }
+
+    fn set_min_buffer_size_in_items(&mut self, n: usize) {
+        CpuBufferReader::set_min_buffer_size_in_items(self, n);
+    }
+
+    fn max_items(&self) -> usize {
+        CpuBufferReader::max_items(self)
+    }
+}
+
+/// Send-capable writer API for out-of-place CPU stream buffers.
 ///
 /// Blocks use this trait in `work()` to get writable output space and then call
 /// [`produce`](Self::produce) for the number of initialized items.
-pub trait CpuBufferWriter: BufferWriter + Default + MaybeSend {
+pub trait SendCpuBufferWriter: SendBufferWriter + Default {
     /// Item type carried by this stream output.
     type Item: CpuSample;
     /// Get available output buffer space.
@@ -506,6 +634,57 @@ pub trait CpuBufferWriter: BufferWriter + Default + MaybeSend {
     fn max_items(&self) -> usize;
 }
 
+/// CPU stream writer API.
+///
+/// This is the primary local API. Native send-capable writers are derived from
+/// this trait through a blanket impl.
+pub trait CpuBufferWriter: BufferWriter + Default {
+    /// Item type.
+    type Item: CpuSample;
+    /// Get writable slice and tag sink.
+    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>);
+    /// Get writable slice.
+    fn slice(&mut self) -> &mut [Self::Item] {
+        self.slice_with_tags().0
+    }
+    /// Mark `n` items as produced.
+    fn produce(&mut self, n: usize);
+    /// Set minimum number of writable items.
+    fn set_min_items(&mut self, n: usize);
+    /// Set minimum buffer size.
+    fn set_min_buffer_size_in_items(&mut self, n: usize);
+    /// Maximum writable items.
+    fn max_items(&self) -> usize;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendCpuBufferWriter for T
+where
+    T: CpuBufferWriter + SendBufferWriter,
+{
+    type Item = <T as CpuBufferWriter>::Item;
+
+    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>) {
+        CpuBufferWriter::slice_with_tags(self)
+    }
+
+    fn produce(&mut self, n: usize) {
+        CpuBufferWriter::produce(self, n);
+    }
+
+    fn set_min_items(&mut self, n: usize) {
+        CpuBufferWriter::set_min_items(self, n);
+    }
+
+    fn set_min_buffer_size_in_items(&mut self, n: usize) {
+        CpuBufferWriter::set_min_buffer_size_in_items(self, n);
+    }
+
+    fn max_items(&self) -> usize {
+        CpuBufferWriter::max_items(self)
+    }
+}
+
 /// Owned buffer chunk passed through an in-place stream circuit.
 pub trait InplaceBuffer {
     /// Type of the samples in the buffer.
@@ -519,7 +698,7 @@ pub trait InplaceBuffer {
 }
 
 /// Reader half of an in-place circuit buffer.
-pub trait InplaceReader: BufferReader + Default + MaybeSend {
+pub trait InplaceReader: BufferReader + Default {
     /// Item type carried by this in-place reader.
     type Item: CpuSample;
     /// Buffer chunk type moved through this reader.
@@ -536,7 +715,7 @@ pub trait InplaceReader: BufferReader + Default + MaybeSend {
 }
 
 /// Writer half of an in-place circuit buffer.
-pub trait InplaceWriter: BufferWriter + Default + MaybeSend {
+pub trait InplaceWriter: BufferWriter + Default {
     /// Item type carried by this in-place writer.
     type Item: CpuSample;
     /// Buffer chunk type moved through this writer.
@@ -561,18 +740,34 @@ pub trait InplaceWriter: BufferWriter + Default + MaybeSend {
     fn inject_buffers_with_items(&mut self, n_buffers: usize, n_items: usize);
 }
 
+/// Send-capable in-place reader marker.
+pub trait SendInplaceReader: InplaceReader + SendBufferReader {}
+
 #[cfg(not(target_arch = "wasm32"))]
-/// Default [`CpuBufferReader`] implementation.
+impl<T> SendInplaceReader for T where T: InplaceReader + SendBufferReader {}
+
+/// Send-capable in-place writer marker.
+pub trait SendInplaceWriter: InplaceWriter + SendBufferWriter {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendInplaceWriter for T where T: InplaceWriter + SendBufferWriter {}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Default send-capable [`CpuBufferReader`] implementation.
 pub type DefaultCpuReader<D> = circular::Reader<D>;
-/// Default [`CpuBufferWriter`] implementation.
+/// Default send-capable [`CpuBufferWriter`] implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub type DefaultCpuWriter<D> = circular::Writer<D>;
 #[cfg(target_arch = "wasm32")]
-/// Default [`CpuBufferReader`] implementation.
+/// Default local [`CpuBufferReader`] implementation.
 pub type DefaultCpuReader<D> = slab::Reader<D>;
 #[cfg(target_arch = "wasm32")]
-/// Default [`CpuBufferWriter`] implementation.
+/// Default local [`CpuBufferWriter`] implementation.
 pub type DefaultCpuWriter<D> = slab::Writer<D>;
+/// Local [`CpuBufferReader`] implementation.
+pub type LocalCpuReader<D> = local::Reader<D>;
+/// Local [`CpuBufferWriter`] implementation.
+pub type LocalCpuWriter<D> = local::Writer<D>;
 
 /// Helper for adding tags to an output buffer.
 pub struct Tags<'a> {

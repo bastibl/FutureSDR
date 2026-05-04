@@ -26,10 +26,9 @@ use std::thread;
 
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
+use crate::runtime::block::BoxBlock;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
-use crate::runtime::dev::Block;
-use crate::runtime::dev::MaybeSend;
 use crate::runtime::scheduler::Scheduler;
 
 /// Flow scheduler
@@ -139,9 +138,9 @@ impl FlowScheduler {
 impl Scheduler for FlowScheduler {
     fn run_flowgraph(
         &self,
-        blocks: Vec<Box<dyn Block>>,
+        blocks: Vec<BoxBlock>,
         main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
+    ) -> Vec<Task<(BlockId, BoxBlock)>> {
         let n_blocks = blocks.len();
         let n_cores = self.inner.workers.len();
         let mut spawned: HashSet<BlockId> = HashSet::new();
@@ -206,16 +205,16 @@ impl Scheduler for FlowScheduler {
         tasks
     }
 
-    fn spawn<T: MaybeSend + 'static>(
+    fn spawn<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         self.inner.executor.spawn(future)
     }
 
-    fn spawn_blocking<T: MaybeSend + 'static>(
+    fn spawn_blocking<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         self.inner
             .executor
@@ -231,12 +230,12 @@ impl Default for FlowScheduler {
 
 fn spawn_block_on_executor(
     executor: &FlowExecutor,
-    block: Box<dyn Block>,
+    block: BoxBlock,
     main_channel: Sender<FlowgraphMessage>,
     queue_index: usize,
-) -> Task<(BlockId, Box<dyn Block>)> {
+) -> Task<(BlockId, BoxBlock)> {
     if block.is_blocking() {
-        debug!("spawing block on executor");
+        debug!("spawning blocking block on executor");
         executor.spawn_executor(
             blocking::unblock(move || {
                 block_on(async move {
@@ -303,9 +302,9 @@ impl FlowExecutor {
     ///     println!("Hello world");
     /// });
     /// ```
-    pub fn spawn<T: MaybeSend + 'static>(
+    pub fn spawn<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         let mut active = self.state().active.lock().unwrap();
 
@@ -326,9 +325,9 @@ impl FlowExecutor {
         task
     }
 
-    pub fn spawn_executor<T: MaybeSend + 'static>(
+    pub fn spawn_executor<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
         executor: usize,
     ) -> Task<T> {
         let mut active = self.state().active.lock().unwrap();

@@ -5,7 +5,6 @@ use crate::runtime::PortId;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitReturn;
-use crate::runtime::buffer::CircuitWriter;
 use crate::runtime::buffer::ConnectionState;
 use crate::runtime::buffer::CpuBufferReader;
 use crate::runtime::buffer::CpuBufferWriter;
@@ -16,6 +15,8 @@ use crate::runtime::buffer::InplaceWriter;
 use crate::runtime::buffer::PortConfig;
 use crate::runtime::buffer::PortCore;
 use crate::runtime::buffer::PortEndpoint;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::buffer::SendCircuitWriter;
 use crate::runtime::buffer::Tags;
 use crate::runtime::config::config;
 use crate::runtime::dev::BlockInbox;
@@ -318,7 +319,8 @@ where
     }
 }
 
-impl<B, E, SW, SR> CircuitWriter for Writer<B, E, SW, SR>
+#[cfg(not(target_arch = "wasm32"))]
+impl<B, E, SW, SR> SendCircuitWriter for Writer<B, E, SW, SR>
 where
     B: Backend,
     E: TensorKind<B> + BasicOps<B> + Send + Sync + 'static,
@@ -521,7 +523,6 @@ where
     }
 }
 
-#[async_trait]
 impl<B, E, SR> BufferReader for Reader<B, E, SR>
 where
     B: Backend,

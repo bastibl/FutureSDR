@@ -2,7 +2,6 @@ use std::any::Any;
 use std::fmt;
 use std::mem::size_of;
 
-use async_trait::async_trait;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::BlockMessage;
 use futuresdr::runtime::Error;
@@ -330,7 +329,6 @@ where
     }
 }
 
-#[async_trait]
 impl<T, const MAX_READERS: usize> BufferReader for Reader<T, MAX_READERS>
 where
     T: CpuSample,

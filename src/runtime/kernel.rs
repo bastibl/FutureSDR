@@ -1,17 +1,33 @@
 use std::future::Future;
 
 use crate::runtime::dev::BlockMeta;
-use crate::runtime::dev::MaybeSend;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
 use futuresdr::runtime::Result;
+
+/// Send-capable marker for normal runtime blocks.
+///
+/// Custom block authors implement [`Kernel`]. Any `Kernel` whose value and
+/// kernel futures are `Send` automatically implements `SendKernel`, which is
+/// the proof required by normal flowgraph entry points.
+pub trait SendKernel: Kernel + Send
+where
+    Self: Kernel<work(..): Send, init(..): Send, deinit(..): Send>,
+    Self: Send,
+{
+}
+
+impl<T> SendKernel for T where T: Kernel<work(..): Send, init(..): Send, deinit(..): Send> + Send {}
 
 /// Processing logic for a block.
 ///
 /// `Kernel` is the central trait custom block authors implement. The
 /// `#[derive(Block)]` macro declares stream and message ports from annotated
-/// fields and methods; the `Kernel` implementation supplies initialization,
-/// work, and shutdown behavior.
+/// fields and methods; the `Kernel` implementation supplies
+/// initialization, work, and shutdown behavior.
+///
+/// Normal runtime entry points accept only kernels that also satisfy
+/// [`SendKernel`], i.e., send-capable kernels with `Send` futures.
 ///
 /// ```
 /// use futuresdr::runtime::dev::prelude::*;
@@ -51,40 +67,32 @@ use futuresdr::runtime::Result;
 ///     }
 /// }
 /// ```
-pub trait Kernel: MaybeSend {
+pub trait Kernel {
     /// Process stream data and emit messages.
-    ///
-    /// The runtime calls this repeatedly while inputs, outputs, messages, or
-    /// timers can make progress. Use [`WorkIo`] to request another immediate
-    /// call, wait on a future, or mark the block as finished.
     fn work(
         &mut self,
         _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> + MaybeSend {
+    ) -> impl Future<Output = Result<()>> {
         async { Ok(()) }
     }
+
     /// Initialize the kernel before normal work starts.
-    ///
-    /// Override this to allocate resources, post startup messages, or adjust
-    /// metadata. The default implementation does nothing.
     fn init(
         &mut self,
         _mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> + MaybeSend {
+    ) -> impl Future<Output = Result<()>> {
         async { Ok(()) }
     }
+
     /// De-initialize the kernel after work has stopped.
-    ///
-    /// Override this to release resources or post final messages. The default
-    /// implementation does nothing.
     fn deinit(
         &mut self,
         _mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> + MaybeSend {
+    ) -> impl Future<Output = Result<()>> {
         async { Ok(()) }
     }
 }

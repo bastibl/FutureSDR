@@ -268,7 +268,6 @@ where
     }
 }
 
-#[async_trait]
 impl<D> CpuBufferWriter for Writer<D>
 where
     D: CpuSample,
@@ -483,7 +482,6 @@ where
     }
 }
 
-#[async_trait]
 impl<D> BufferReader for Reader<D>
 where
     D: CpuSample,

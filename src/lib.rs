@@ -1,4 +1,5 @@
 #![warn(missing_docs)]
+#![feature(return_type_notation)]
 #![recursion_limit = "512"]
 
 //! An experimental asynchronous SDR runtime for heterogeneous architectures that is:
@@ -42,8 +43,6 @@
 // make the futuresdr crate available in the library to allow referencing it as
 // futuresdr internally, which simplifies proc macros.
 extern crate self as futuresdr;
-#[macro_use]
-extern crate futuresdr_macros;
 /// Logging macro
 #[macro_use]
 pub extern crate tracing;

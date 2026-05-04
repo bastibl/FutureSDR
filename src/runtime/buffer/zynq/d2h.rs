@@ -182,7 +182,6 @@ where
     }
 }
 
-#[async_trait]
 impl<D> BufferReader for Reader<D>
 where
     D: CpuSample,

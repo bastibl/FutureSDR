@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use async_trait::async_trait;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::BlockMessage;
 use futuresdr::runtime::Error;
@@ -368,7 +367,6 @@ where
     }
 }
 
-#[async_trait]
 impl<T> BufferReader for Reader<T>
 where
     T: CpuSample,

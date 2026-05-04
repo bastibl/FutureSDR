@@ -11,10 +11,9 @@ use std::thread;
 
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
+use crate::runtime::block::BoxBlock;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
-use crate::runtime::dev::Block;
-use crate::runtime::dev::MaybeSend;
 use crate::runtime::scheduler::Scheduler;
 
 static SMOL: Lazy<Mutex<Slab<Arc<Executor<'_>>>>> = Lazy::new(|| Mutex::new(Slab::new()));
@@ -108,15 +107,15 @@ impl SmolScheduler {
 impl Scheduler for SmolScheduler {
     fn run_flowgraph(
         &self,
-        blocks: Vec<Box<dyn Block>>,
+        blocks: Vec<BoxBlock>,
         main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
+    ) -> Vec<Task<(BlockId, BoxBlock)>> {
         // spawn block executors
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
             let main_channel = main_channel.clone();
-            let blocking = block.is_blocking();
-            let task = if blocking {
+            let task = if block.is_blocking() {
+                debug!("spawning blocking block");
                 self.spawn_blocking(async move {
                     let mut block = block;
                     let id = block.id();
@@ -136,9 +135,9 @@ impl Scheduler for SmolScheduler {
         tasks
     }
 
-    fn spawn<T: MaybeSend + 'static>(
+    fn spawn<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         SMOL.lock()
             .unwrap()
@@ -147,9 +146,9 @@ impl Scheduler for SmolScheduler {
             .spawn(future)
     }
 
-    fn spawn_blocking<T: MaybeSend + 'static>(
+    fn spawn_blocking<T: Send + 'static>(
         &self,
-        future: impl Future<Output = T> + MaybeSend + 'static,
+        future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         SMOL.lock()
             .unwrap()

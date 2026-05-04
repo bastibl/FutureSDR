@@ -44,7 +44,7 @@ where
     }
 }
 
-trait Deinter<S: DemodulatedSymbol, D: DeinterleavedSymbol>: Send {
+trait Deinter<S: DemodulatedSymbol, D: DeinterleavedSymbol> {
     fn deinterleave_block(&mut self, sf_app: usize, cw_len: usize);
 }
 

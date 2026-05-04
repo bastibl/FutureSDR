@@ -7,17 +7,16 @@ use crate::runtime::PortId;
 use crate::runtime::Result;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::dev::BlockInbox;
-use crate::runtime::dev::MaybeSend;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::channel::mpsc::Sender;
 
-#[async_trait]
+#[async_trait::async_trait]
 /// Runtime object-safe interface for wrapped kernel instances.
 ///
 /// Custom blocks implement [`Kernel`](crate::runtime::dev::Kernel); this trait
-/// is implemented by the runtime wrapper generated around a kernel and is
-/// mainly useful for runtime extensions.
-pub trait Block: MaybeSend + Any {
+/// is implemented by the normal runtime wrapper around send-capable kernels and
+/// is mainly useful for runtime extensions.
+pub trait Block: Any + Send {
     /// Return this block as [`Any`] for downcasting.
     fn as_any(&self) -> &dyn Any;
     /// Return this block as mutable [`Any`] for downcasting.
@@ -64,6 +63,10 @@ pub trait Block: MaybeSend + Any {
     /// Blocking blocks will be spawned in a separate thread.
     fn is_blocking(&self) -> bool;
 }
+
+pub(crate) type BoxBlock = Box<dyn Block>;
+
+pub(crate) type DynBlock = dyn Block;
 
 impl fmt::Debug for dyn Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

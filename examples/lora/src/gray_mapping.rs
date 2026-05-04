@@ -47,7 +47,7 @@ where
     }
 }
 
-trait GrayMap<T: DemodulatedSymbol>: Send {
+trait GrayMap<T: DemodulatedSymbol> {
     fn map(samples: &[T]) -> Vec<T>;
 }
 
