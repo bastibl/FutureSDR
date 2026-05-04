@@ -6,7 +6,7 @@ use futuresdr::blocks::NullSource;
 use futuresdr::runtime::__private::SendKernelInterface;
 use futuresdr::runtime::dev::CpuBufferReader;
 use futuresdr::runtime::dev::CpuBufferWriter;
-use futuresdr::runtime::dev::SendBufferWriter;
+use futuresdr::runtime::dev::BufferWriter;
 use futuresdr::runtime::dev::SendCpuBufferReader;
 use futuresdr::runtime::dev::SendCpuBufferWriter;
 use futuresdr::runtime::dev::SendKernel;
@@ -35,7 +35,7 @@ struct Args {
 }
 
 pub trait BufferType {
-    type Writer<T: CpuSample>: CpuBufferWriter<Item = T> + SendCpuBufferWriter<Item = T> + 'static;
+    type Writer<T: CpuSample>: CpuBufferWriter<Item = T> + SendCpuBufferWriter + 'static;
 }
 pub struct SlabBuffer;
 impl BufferType for SlabBuffer {
@@ -46,7 +46,7 @@ impl BufferType for CircBuffer {
     type Writer<T: CpuSample> = DefaultCpuWriter<T>;
 }
 
-type ReaderOf<B, T> = <<B as BufferType>::Writer<T> as SendBufferWriter>::Reader;
+type ReaderOf<B, T> = <<B as BufferType>::Writer<T> as BufferWriter>::Reader;
 
 fn flow_mapping(pipe_blocks: &[Vec<BlockId>]) -> Vec<Vec<BlockId>> {
     let n_executors = core_affinity::get_core_ids().map(|v| v.len()).unwrap_or(1);
@@ -68,7 +68,7 @@ fn generate<B>() -> Result<(
 )>
 where
     B: BufferType,
-    ReaderOf<B, f32>: CpuBufferReader<Item = f32> + SendCpuBufferReader<Item = f32> + 'static,
+    ReaderOf<B, f32>: CpuBufferReader<Item = f32> + SendCpuBufferReader + 'static,
     NullSource<f32, B::Writer<f32>>: SendKernel + SendKernelInterface,
     Head<f32, ReaderOf<B, f32>, B::Writer<f32>>: SendKernel + SendKernelInterface,
     CopyRand<f32, ReaderOf<B, f32>, B::Writer<f32>>: SendKernel + SendKernelInterface,

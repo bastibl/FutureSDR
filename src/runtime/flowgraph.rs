@@ -19,8 +19,11 @@ use crate::runtime::block::BoxBlock;
 use crate::runtime::block::DynBlock;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
+#[cfg(target_arch = "wasm32")]
+use crate::runtime::buffer::CircuitWriter;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::buffer::SendBufferWriter;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::buffer::SendCircuitWriter;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;
@@ -1019,7 +1022,7 @@ impl Flowgraph {
     where
         KS: Kernel + 'static,
         KD: Kernel + 'static,
-        CW: SendCircuitWriter + 'static,
+        CW: CircuitWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut CW,
         FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
     {

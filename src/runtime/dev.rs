@@ -11,6 +11,7 @@ pub use super::block_inbox::BlockNotifier;
 pub use super::block_meta::BlockMeta;
 pub use super::buffer::BufferReader;
 pub use super::buffer::BufferWriter;
+pub use super::buffer::CircuitWriter;
 pub use super::buffer::CpuBufferReader;
 pub use super::buffer::CpuBufferWriter;
 pub use super::buffer::CpuSample;
@@ -59,6 +60,7 @@ pub mod prelude {
     pub use crate::runtime::dev::BlockNotifier;
     pub use crate::runtime::dev::BufferReader;
     pub use crate::runtime::dev::BufferWriter;
+    pub use crate::runtime::dev::CircuitWriter;
     pub use crate::runtime::dev::CpuBufferReader;
     pub use crate::runtime::dev::CpuBufferWriter;
     pub use crate::runtime::dev::CpuSample;

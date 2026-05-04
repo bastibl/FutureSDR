@@ -8,7 +8,7 @@ This example demonstrates how to use in-place, zero-copy buffers in FutureSDR. I
 2. An in-place version that reuses the same buffers across the pipeline.
 3. A hybrid version in which standard CPU sources and sinks interface with an intermediate in-place stage.
 
-The hybrid setup works because the in-place buffers also implement the `SendCpuBufferReader` and `SendCpuBufferWriter` traits, which means they can also be used like normal CPU buffers.
+The hybrid setup works because the in-place buffers implement the normal `CpuBufferReader` and `CpuBufferWriter` APIs and satisfy the `SendCpuBufferReader` and `SendCpuBufferWriter` marker traits, which means they can also be used like normal send-capable CPU buffers.
 
 ## How It Works
 

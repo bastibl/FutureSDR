@@ -359,46 +359,16 @@ impl<T> ConnectionState<T> {
 /// Native normal flowgraphs use this to ensure the reader type and its
 /// finish-notification future can cross worker threads. The reader methods come
 /// from [`BufferReader`].
-pub trait SendBufferReader: BufferReader + Send
-where
-    Self: BufferReader<notify_finished(..): Send>,
-{
-}
+pub trait SendBufferReader: BufferReader<notify_finished(..): Send> + Send {}
 
-/// Send-capable type-erased writer side of a stream buffer.
+/// Send-capable writer marker for stream buffers.
 ///
-/// This is used by the normal flowgraph runtime. Custom block authors normally
-/// use higher-level traits such as [`SendCpuBufferWriter`] or
-/// [`SendInplaceWriter`] instead of calling these methods directly.
-pub trait SendBufferWriter: Send {
-    /// The corresponding reader.
-    type Reader: SendBufferReader;
-    /// Initialize the writer with its owning block, port id, and inbox.
-    ///
-    /// This sets the own block ID, Port ID, and message receiver so that it can
-    /// be communicated to the other end when making connections.
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox);
-    /// Validate that this writer is connected and ready to run.
-    fn validate(&self) -> Result<(), Error>;
-    /// Connect the writer to a matching reader.
-    fn connect(&mut self, dest: &mut Self::Reader);
-    /// Connect the writer to a type-erased reader.
-    fn connect_dyn(&mut self, dest: &mut dyn SendBufferReader) -> Result<(), Error> {
-        if let Some(concrete) = BufferReader::as_any_mut(dest).downcast_mut::<Self::Reader>() {
-            self.connect(concrete);
-            Ok(())
-        } else {
-            Err(Error::ValidationError(
-                "dyn SendBufferReader has wrong type".to_string(),
-            ))
-        }
-    }
-    /// Notify downstream blocks that we are done.
-    fn notify_finished(&mut self) -> impl Future<Output = ()> + Send;
-    /// Get the owning block id.
-    fn block_id(&self) -> BlockId;
-    /// Get the owning port id.
-    fn port_id(&self) -> PortId;
+/// Native normal flowgraphs use this to ensure the writer type, its matching
+/// reader, and its finish-notification future can cross worker threads. The
+/// writer methods come from [`BufferWriter`].
+pub trait SendBufferWriter:
+    BufferWriter<Reader: SendBufferReader, notify_finished(..): Send> + Send
+{
 }
 
 /// Type-erased reader side of a stream buffer.
@@ -469,40 +439,15 @@ where
     T: BufferWriter<notify_finished(..): Send> + Send,
     T::Reader: SendBufferReader,
 {
-    type Reader = <T as BufferWriter>::Reader;
-
-    fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox) {
-        BufferWriter::init(self, block_id, port_id, inbox);
-    }
-
-    fn validate(&self) -> Result<(), Error> {
-        BufferWriter::validate(self)
-    }
-
-    fn connect(&mut self, dest: &mut Self::Reader) {
-        BufferWriter::connect(self, dest);
-    }
-
-    fn notify_finished(&mut self) -> impl Future<Output = ()> + Send {
-        BufferWriter::notify_finished(self)
-    }
-
-    fn block_id(&self) -> BlockId {
-        BufferWriter::block_id(self)
-    }
-
-    fn port_id(&self) -> PortId {
-        BufferWriter::port_id(self)
-    }
 }
 
-/// Send-capable buffer writer that can close an in-place circuit to a matching end.
+/// Buffer writer that can close an in-place circuit to a matching end.
 ///
-/// Circuit-capable buffers are still connected with the send-capable
-/// [`SendBufferWriter::connect`] stream connection. Closing the circuit is the
+/// Circuit-capable buffers are still connected with the normal
+/// [`BufferWriter::connect`] stream connection. Closing the circuit is the
 /// additional step that wires the downstream end back to the upstream start so
 /// buffers can circulate.
-pub trait SendCircuitWriter: SendBufferWriter {
+pub trait CircuitWriter: BufferWriter {
     /// The circuit end type accepted by this writer.
     type CircuitEnd;
 
@@ -510,44 +455,21 @@ pub trait SendCircuitWriter: SendBufferWriter {
     fn close_circuit(&mut self, dst: &mut Self::CircuitEnd);
 }
 
+/// Send-capable circuit writer marker.
+pub trait SendCircuitWriter: CircuitWriter + SendBufferWriter {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> SendCircuitWriter for T where T: CircuitWriter + SendBufferWriter {}
+
 /// Trait alias-style marker for sample types supported by CPU buffers.
 pub trait CpuSample: Default + Clone + std::fmt::Debug + Send + Sync + 'static {}
 
 impl<T> CpuSample for T where T: Default + Clone + std::fmt::Debug + Send + Sync + 'static {}
 
-/// Send-capable reader API for out-of-place CPU stream buffers.
+/// Send-capable reader marker for out-of-place CPU stream buffers.
 ///
-/// Blocks use this trait in `work()` to inspect available input samples and
-/// then call [`consume`](Self::consume) for the number of items processed.
-pub trait SendCpuBufferReader: SendBufferReader + Default {
-    /// Item type carried by this stream input.
-    type Item: CpuSample;
-    /// Get available samples.
-    fn slice(&mut self) -> &[Self::Item] {
-        self.slice_with_tags().0
-    }
-    /// Get available samples and tags.
-    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>);
-    /// Consume items from the input buffer.
-    fn consume(&mut self, n: usize);
-    /// Configure the minimum number of items required in
-    /// [work()](crate::runtime::dev::Kernel::work)
-    ///
-    /// This defines the minimum number of samples that the block needs to proceed. For example, an
-    /// FFT block requires samples corresponding to the FFT size.
-    fn set_min_items(&mut self, n: usize);
-    /// Configure the minimum buffer size
-    ///
-    /// This sets the minimum number of samples that the buffer can take. This is independent from
-    /// any requirements in [work()](crate::runtime::dev::Kernel::work) but mainly for performance reasons, i.e., it
-    /// defines the tradeoff between throughput and latency.
-    ///
-    /// By default, it will be set to the value defined in
-    /// [`crate::runtime::config::Config`].
-    fn set_min_buffer_size_in_items(&mut self, n: usize);
-    /// Return the maximum number of items that fit in the buffer.
-    fn max_items(&self) -> usize;
-}
+/// The CPU methods come from [`CpuBufferReader`].
+pub trait SendCpuBufferReader: CpuBufferReader + SendBufferReader {}
 
 /// CPU stream reader API.
 ///
@@ -573,66 +495,12 @@ pub trait CpuBufferReader: BufferReader + Default {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<T> SendCpuBufferReader for T
-where
-    T: CpuBufferReader + SendBufferReader,
-{
-    type Item = <T as CpuBufferReader>::Item;
+impl<T> SendCpuBufferReader for T where T: CpuBufferReader + SendBufferReader {}
 
-    fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>) {
-        CpuBufferReader::slice_with_tags(self)
-    }
-
-    fn consume(&mut self, n: usize) {
-        CpuBufferReader::consume(self, n);
-    }
-
-    fn set_min_items(&mut self, n: usize) {
-        CpuBufferReader::set_min_items(self, n);
-    }
-
-    fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        CpuBufferReader::set_min_buffer_size_in_items(self, n);
-    }
-
-    fn max_items(&self) -> usize {
-        CpuBufferReader::max_items(self)
-    }
-}
-
-/// Send-capable writer API for out-of-place CPU stream buffers.
+/// Send-capable writer marker for out-of-place CPU stream buffers.
 ///
-/// Blocks use this trait in `work()` to get writable output space and then call
-/// [`produce`](Self::produce) for the number of initialized items.
-pub trait SendCpuBufferWriter: SendBufferWriter + Default {
-    /// Item type carried by this stream output.
-    type Item: CpuSample;
-    /// Get available output buffer space.
-    fn slice(&mut self) -> &mut [Self::Item] {
-        self.slice_with_tags().0
-    }
-    /// Available buffer space and tags.
-    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>);
-    /// Produce initialized items into the output buffer.
-    fn produce(&mut self, n: usize);
-    /// Configure the minimum number of items required in
-    /// [work()](crate::runtime::dev::Kernel::work)
-    ///
-    /// This defines the minimum number of samples that the block needs to proceed. For example, an
-    /// FFT block requires samples corresponding to the FFT size.
-    fn set_min_items(&mut self, n: usize);
-    /// Configure the minimum buffer size
-    ///
-    /// This sets the minimum number of samples that the buffer can take. This is independent from
-    /// any requirements in [work()](crate::runtime::dev::Kernel::work) but mainly for performance reasons, i.e., it
-    /// defines the tradeoff between throughput and latency.
-    ///
-    /// By default, it will be set to the value defined in
-    /// [`crate::runtime::config::Config`].
-    fn set_min_buffer_size_in_items(&mut self, n: usize);
-    /// Return the maximum number of items that fit in the buffer.
-    fn max_items(&self) -> usize;
-}
+/// The CPU methods come from [`CpuBufferWriter`].
+pub trait SendCpuBufferWriter: CpuBufferWriter + SendBufferWriter {}
 
 /// CPU stream writer API.
 ///
@@ -658,32 +526,7 @@ pub trait CpuBufferWriter: BufferWriter + Default {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<T> SendCpuBufferWriter for T
-where
-    T: CpuBufferWriter + SendBufferWriter,
-{
-    type Item = <T as CpuBufferWriter>::Item;
-
-    fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>) {
-        CpuBufferWriter::slice_with_tags(self)
-    }
-
-    fn produce(&mut self, n: usize) {
-        CpuBufferWriter::produce(self, n);
-    }
-
-    fn set_min_items(&mut self, n: usize) {
-        CpuBufferWriter::set_min_items(self, n);
-    }
-
-    fn set_min_buffer_size_in_items(&mut self, n: usize) {
-        CpuBufferWriter::set_min_buffer_size_in_items(self, n);
-    }
-
-    fn max_items(&self) -> usize {
-        CpuBufferWriter::max_items(self)
-    }
-}
+impl<T> SendCpuBufferWriter for T where T: CpuBufferWriter + SendBufferWriter {}
 
 /// Owned buffer chunk passed through an in-place stream circuit.
 pub trait InplaceBuffer {
