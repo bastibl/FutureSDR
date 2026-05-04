@@ -27,13 +27,10 @@ struct CurrentBuffer<D>
 where
     D: CpuSample,
 {
-    buffer: *mut BufferFull<D>,
+    buffer: BufferFull<D>,
     byte_offset: usize,
     slice: BufferView,
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe impl<D> Send for CurrentBuffer<D> where D: CpuSample {}
 
 /// Custom buffer writer
 #[derive(Debug)]
@@ -44,9 +41,6 @@ pub struct Writer<D: CpuSample> {
     core: PortCore,
     state: ConnectionState<ConnectedWriter>,
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe impl<D> Send for Writer<D> where D: CpuSample {}
 
 #[derive(Debug)]
 struct ConnectedWriter {
@@ -187,9 +181,6 @@ where
     finished: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-unsafe impl<D> Send for Reader<D> where D: CpuSample {}
-
 #[derive(Debug)]
 struct ConnectedReader {
     writer: PortEndpoint,
@@ -294,15 +285,13 @@ where
         static V: Vec<ItemTag> = vec![];
         debug!("D2H reader bytes");
         if self.buffer.is_none() {
-            if let Some(b) = self.inbound.lock().unwrap().pop_front() {
-                let buffer = Box::leak(Box::new(b));
-                let t = buffer as *mut BufferFull<D>;
+            if let Some(buffer) = self.inbound.lock().unwrap().pop_front() {
                 let slice = buffer
                     .buffer
                     .slice(0..buffer.used_bytes as u64)
                     .get_mapped_range();
                 self.buffer = Some(CurrentBuffer {
-                    buffer: t,
+                    buffer,
                     byte_offset: 0,
                     slice,
                 });
@@ -344,8 +333,9 @@ where
 
         buffer.byte_offset += amount * size_of::<D>();
         if buffer.byte_offset == byte_len {
-            let c = unsafe { Box::from_raw(self.buffer.take().unwrap().buffer) };
-            let buffer = c.buffer;
+            let CurrentBuffer { buffer, slice, .. } = self.buffer.take().unwrap();
+            drop(slice);
+            let buffer = buffer.buffer;
             buffer.unmap();
             self.outbound.lock().unwrap().push(BufferEmpty {
                 buffer,
@@ -366,5 +356,19 @@ where
     fn max_items(&self) -> usize {
         warn!("max_items not yet implemented for wgpu buffers");
         usize::MAX
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::Reader;
+    use super::Writer;
+
+    fn assert_send<T: Send>() {}
+
+    #[test]
+    fn d2h_buffers_are_send_by_auto_traits() {
+        assert_send::<Writer<f32>>();
+        assert_send::<Reader<f32>>();
     }
 }
