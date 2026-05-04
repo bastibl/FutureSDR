@@ -93,3 +93,64 @@ For SoapySDR hardware drivers:
 - For verification, restart a new terminal and run `SoapySDRUtil --info`. Check if your hardware (e.g., uhd) is listed under `Available factories`.
 
 - Check if your setup is working by running `cargo build` in the FutureSDR directory.
+
+## Windows Subsystem for Linux (WSL)
+
+Alternatively, FutureSDR can be run on Windows using WSL (These steps are verified for Ubuntu 24.04).
+- Open PowerShell as Administrator and run: <br/>`wsl --install -d Ubuntu-24.04`
+- After installation, restart your PC.
+- Open a Linux terminal, set up your username/password, and run: <br/>`sudo apt update && sudo apt upgrade`
+- Install the core tools required for compiling Rust and C++ projects: <br/>`sudo apt install git build-essential cmake libfontconfig1-dev clang libclang-dev usbutils`
+- Install Rust and set the `nightly` toolchain as default:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  source $HOME/.cargo/env
+  rustup toolchain install nightly
+  rustup default nightly
+  ```
+
+- Depending on your SDR device, install the necessary drivers and firmware (e.g. for USRP devices):
+
+  ```bash
+  sudo apt install libuhd-dev uhd-host
+  sudo uhd_images_downloader
+  ```
+
+- Install the bridge between SDR hardware and software, along with the audio bridge:
+
+  ```bash
+  sudo apt install libsoapysdr-dev soapysdr-tools soapysdr-module-uhd
+  sudo apt install pulseaudio libasound2-dev libasound2-plugins
+  ```
+    **Note:** After installing `pulseaudio`, run `wsl --shutdown` in PowerShell and restart your terminal to activate the audio bridge. Ensure `ls -l /mnt/wslg/PulseServer` exists to enable audio support in examples.
+
+- To prevent a `Segmentation Fault` during device discovery, disable the default Soapy audio module: <br/>`sudo mv /usr/lib/x86_64-linux-gnu/SoapySDR/modules0.8/libaudioSupport.so /usr/lib/x86_64-linux-gnu/SoapySDR/modules0.8/libaudioSupport.so.bak`
+
+- To share your USB device with Linux, install `usbipd` on Windows:
+  * Open PowerShell as Administrator and run: <br/>`winget install usbipd`
+  * Plug in your SDR and identify the `VID:PID`: <br/>`usbipd list`
+  * Bind and Attach (use Hardware-ID for port independence):
+
+    ```PowerShell
+    usbipd bind --hardware-id <VID:PID>
+    usbipd attach --hardware-id <VID:PID> --auto-attach
+    ```
+
+- In your Linux terminal, verify if the hardware is visible:
+
+  ```bash
+  lsusb
+  sudo uhd_find_devices
+  ```
+
+    **Note:** When you run `uhd_find_devices` or an SDR-based example for the first time, the USRP will download firmware and reset. This breaks the connection to WSL. You should return to Windows PowerShell and manually run this command again: <br/>`usbipd attach --hardware-id <VID:PID> --auto-attach`
+ Once re-attached, your device will be stable until the device is physically disconnected.
+
+- Finally, install FutureSDR and check if your setup is working by running `cargo build` in the FutureSDR directory: 
+
+  ```bash
+  git clone https://github.com/FutureSDR/FutureSDR.git
+  cd FutureSDR
+  cargo build --release
+  ```
