@@ -49,7 +49,7 @@ impl fmt::Debug for dyn LocalBlock {
     }
 }
 
-pub(crate) struct StoredLocalBlock {
+pub struct StoredLocalBlock {
     block: Box<dyn LocalBlock>,
 }
 

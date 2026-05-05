@@ -5,6 +5,10 @@ use futures::task::Context;
 use futures::task::Poll;
 use std::pin::Pin;
 
+use crate::runtime::BlockId;
+use crate::runtime::FlowgraphMessage;
+use crate::runtime::channel::mpsc::Sender;
+use crate::runtime::flowgraph::NormalStoredBlock;
 use crate::runtime::scheduler::Scheduler;
 
 /// WASM Scheduler
@@ -19,6 +23,34 @@ impl WasmScheduler {
 }
 
 impl Scheduler for WasmScheduler {
+    fn run_flowgraph(
+        &self,
+        blocks: Vec<NormalStoredBlock>,
+        main_channel: &Sender<FlowgraphMessage>,
+    ) -> Vec<Task<(BlockId, NormalStoredBlock)>> {
+        let mut tasks = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let main_channel = main_channel.clone();
+            let task = if block.as_ref().is_blocking() {
+                self.spawn_blocking(async move {
+                    let mut block = block;
+                    let id = block.as_ref().id();
+                    block.as_mut().run(main_channel).await;
+                    (id, block)
+                })
+            } else {
+                self.spawn(async move {
+                    let mut block = block;
+                    let id = block.as_ref().id();
+                    block.as_mut().run(main_channel).await;
+                    (id, block)
+                })
+            };
+            tasks.push(task);
+        }
+        tasks
+    }
+
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let (tx, rx) = oneshot::channel::<T>();
         wasm_bindgen_futures::spawn_local(async move {
