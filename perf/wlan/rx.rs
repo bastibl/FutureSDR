@@ -113,11 +113,9 @@ fn opti(args: Args) -> Result<()> {
     let src = FileSource::<Complex32, LockfreeComplexWriter<3>>::new(&args.file, false);
     let delay = Delay::<Complex32, LockfreeComplexReader<3>, LockfreeComplexWriter<2>>::new(16);
     let complex_to_mag_2 =
-        Apply::<_, _, _, LockfreeComplexReader<3>, SpscF32Writer>::with_buffers(
-            |i: &Complex32| {
+        Apply::<_, _, _, LockfreeComplexReader<3>, SpscF32Writer>::with_buffers(|i: &Complex32| {
             i.norm_sqr()
-        },
-        );
+        });
     let float_avg = MovingAverage::<f32, SpscF32Reader, SpscF32Writer>::new(64);
     let mult_conj = Combine::<
         _,
