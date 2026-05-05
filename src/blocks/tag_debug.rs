@@ -66,7 +66,7 @@ where
         tags.iter().filter(|x| x.index < n).for_each(|x| {
             println!(
                 "TagDebug {}: buf {}/abs {} -- {:?}",
-                &self.name,
+                self.name,
                 x.index,
                 self.n_received + x.index,
                 x.tag

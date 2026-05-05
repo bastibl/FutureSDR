@@ -9,12 +9,12 @@ async fn main() -> Result<(), Error> {
     let mut fgs = remote.flowgraphs().await?;
     let fg = &mut fgs[0];
     fg.update().await?;
-    println!("flowgraph {}", &fg);
+    println!("flowgraph {}", fg);
 
     let mut blocks = fg.blocks();
     let b = &mut blocks[0];
     b.update().await?;
-    println!("block {:?}", &b);
+    println!("block {:?}", b);
 
     println!("Connections:");
     let msg_connections = fg.message_connections();

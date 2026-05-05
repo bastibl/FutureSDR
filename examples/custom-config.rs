@@ -22,7 +22,7 @@ fn main() {
     if let Some(v) = config::get_value("my") {
         match v.try_deserialize::<MyConfig>() {
             Ok(v) => {
-                println!("MyConfig: {:?}", &v);
+                println!("MyConfig: {:?}", v);
             }
             _ => {
                 println!("MyConfig could not be deserialized");

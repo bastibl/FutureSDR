@@ -142,7 +142,7 @@ async fn run_fg(
 
     for i in 0..devices.length() {
         let d = devices.get_unchecked(i);
-        println!("dev {}   {:?}", i, &d);
+        println!("dev {}   {:?}", i, d);
     }
 
     // Open radio if one is already paired and plugged

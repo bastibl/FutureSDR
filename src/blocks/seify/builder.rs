@@ -79,7 +79,7 @@ impl<D: DeviceTrait + Clone> Builder<D> {
             min_input_buffer_size: None,
         }
     }
-    /// Channel: sets the hardware channel index 
+    /// Channel: sets the hardware channel index
     /// #Example
     /// For USRP B210:  
     /// - `0`: corresponds to RF A

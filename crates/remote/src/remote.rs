@@ -217,11 +217,11 @@ impl Block {
         let url = match handler {
             Handler::Name(n) => format!(
                 "{}/api/fg/{}/block/{}/call/{}/",
-                &self.url, self.flowgraph_id, self.description.id.0, n
+                self.url, self.flowgraph_id, self.description.id.0, n
             ),
             Handler::Id(i) => format!(
                 "{}/api/fg/{}/block/{}/call/{}/",
-                &self.url, self.flowgraph_id, self.description.id.0, i
+                self.url, self.flowgraph_id, self.description.id.0, i
             ),
         };
 
@@ -246,7 +246,7 @@ impl std::fmt::Display for Block {
         write!(
             f,
             "{} ({}, {})",
-            &self.description.instance_name, &self.description.type_name, self.description.id.0,
+            self.description.instance_name, self.description.type_name, self.description.id.0,
         )
     }
 }

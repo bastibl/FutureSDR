@@ -83,7 +83,7 @@ fn main() -> Result<()> {
         let msg = {
             let i = std::io::stdin().lock();
             let mut o = std::io::stdout().lock();
-            write!(o, "{}: ", &args.name)?;
+            write!(o, "{}: ", args.name)?;
             o.flush()?;
             let mut iterator = i.lines();
             iterator.next().unwrap()?

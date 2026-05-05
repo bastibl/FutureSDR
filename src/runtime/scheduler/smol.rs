@@ -78,7 +78,7 @@ impl SmolScheduler {
 
             let handle = thread::Builder::new()
                 .stack_size(config::config().stack_size)
-                .name(format!("smol-{}", &c.id))
+                .name(format!("smol-{}", c.id))
                 .spawn(move || {
                     if pin_executors {
                         debug!("starting executor thread on core id {}", &c.id);
