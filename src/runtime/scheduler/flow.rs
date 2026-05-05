@@ -1,4 +1,3 @@
-use async_io::block_on;
 use async_lock::Barrier;
 use async_task::Runnable;
 use async_task::Task;
@@ -136,7 +135,7 @@ impl FlowScheduler {
 }
 
 impl Scheduler for FlowScheduler {
-    fn run_flowgraph(
+    fn run_domain(
         &self,
         blocks: Vec<BoxBlock>,
         main_channel: &Sender<FlowgraphMessage>,
@@ -211,15 +210,6 @@ impl Scheduler for FlowScheduler {
     ) -> Task<T> {
         self.inner.executor.spawn(future)
     }
-
-    fn spawn_blocking<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        self.inner
-            .executor
-            .spawn(blocking::unblock(|| async_io::block_on(future)))
-    }
 }
 
 impl Default for FlowScheduler {
@@ -234,30 +224,19 @@ fn spawn_block_on_executor(
     main_channel: Sender<FlowgraphMessage>,
     queue_index: usize,
 ) -> Task<(BlockId, BoxBlock)> {
-    if block.is_blocking() {
-        debug!("spawning blocking block on executor");
-        executor.spawn_executor(
-            blocking::unblock(move || {
-                block_on(async move {
-                    let mut block = block;
-                    let id = block.id();
-                    block.run(main_channel).await;
-                    (id, block)
-                })
-            }),
-            queue_index,
-        )
-    } else {
-        executor.spawn_executor(
-            async move {
-                let mut block = block;
-                let id = block.id();
-                block.run(main_channel).await;
-                (id, block)
-            },
-            queue_index,
-        )
-    }
+    debug_assert!(
+        !block.is_blocking(),
+        "blocking blocks must be placed in local domains before scheduling"
+    );
+    executor.spawn_executor(
+        async move {
+            let mut block = block;
+            let id = block.id();
+            block.run(main_channel).await;
+            (id, block)
+        },
+        queue_index,
+    )
 }
 
 /// An async executor.

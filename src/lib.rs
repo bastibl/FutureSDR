@@ -83,6 +83,7 @@ pub mod prelude {
     pub use futuresdr::runtime::Result;
     pub use futuresdr::runtime::RunningFlowgraph;
     pub use futuresdr::runtime::Runtime;
+    pub use futuresdr::runtime::RuntimeId;
     pub use futuresdr::runtime::Timer;
     pub use futuresdr::runtime::channel::mpsc;
     pub use futuresdr::runtime::macros::connect;

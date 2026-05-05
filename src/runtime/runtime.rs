@@ -1,16 +1,17 @@
-#[cfg(not(target_arch = "wasm32"))]
-use async_executor::LocalExecutor;
 use async_lock::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use axum::Router;
 use futures::channel::oneshot;
 use futures::prelude::*;
 use std::fmt;
+#[cfg(target_arch = "wasm32")]
+use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use crate::runtime;
 use crate::runtime::BlockDescription;
-use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::ControlPort;
 use crate::runtime::Error;
@@ -22,22 +23,25 @@ use crate::runtime::FlowgraphMessage;
 use crate::runtime::FlowgraphTask;
 use crate::runtime::Pmt;
 use crate::runtime::RunningFlowgraph;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::block::BoxBlock;
+use crate::runtime::RuntimeId;
 use crate::runtime::channel::mpsc::Receiver;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::mpsc::channel;
 use crate::runtime::config;
-use crate::runtime::dev::BlockInbox;
-use crate::runtime::flowgraph::NormalStoredBlock;
+#[cfg(target_arch = "wasm32")]
+use crate::runtime::scheduler::DummyScheduler;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::local_block::StoredLocalBlock;
+use crate::runtime::scheduler::LocalScheduler;
 use crate::runtime::scheduler::Scheduler;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::scheduler::SmolScheduler;
 use crate::runtime::scheduler::Task;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::scheduler::ThreadLocalScheduler;
 #[cfg(target_arch = "wasm32")]
-use crate::runtime::scheduler::WasmScheduler;
+use crate::runtime::scheduler::WasmLocalScheduler;
+
+static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
 trait SpawnBound: Scheduler + Sync + 'static {}
@@ -59,14 +63,27 @@ type DynSpawn = dyn Spawn + 'static;
 /// A [`Runtime`] owns a scheduler, starts flowgraphs, and provides a control
 /// port on native targets. It is generic over the scheduler implementation, but
 /// most applications can use [`Runtime::new`] with the default scheduler.
-pub struct Runtime<S> {
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Runtime<S = SmolScheduler, LS = ThreadLocalScheduler> {
+    id: RuntimeId,
     scheduler: S,
+    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
+    flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
+    _control_port: ControlPort,
+}
+
+#[cfg(target_arch = "wasm32")]
+/// Executor and control-plane owner for [`Flowgraph`]s and async tasks on WASM.
+pub struct Runtime<S = DummyScheduler, LS = WasmLocalScheduler> {
+    id: RuntimeId,
+    scheduler: S,
+    _local_scheduler: PhantomData<fn() -> LS>,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
     _control_port: ControlPort,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Runtime<SmolScheduler> {
+impl Runtime<SmolScheduler, ThreadLocalScheduler> {
     /// Construct a new [`Runtime`] using [`SmolScheduler::default()`].
     pub fn new() -> Self {
         Self::with_custom_routes(Router::new())
@@ -82,14 +99,24 @@ impl Runtime<SmolScheduler> {
         runtime::init();
 
         let scheduler = SmolScheduler::default();
+        let local_scheduler_factory: Arc<dyn Fn() -> ThreadLocalScheduler + Send + Sync> =
+            Arc::new(ThreadLocalScheduler::default);
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
+        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
+            runtime_id: id,
             flowgraphs: flowgraphs.clone(),
-            scheduler: Arc::new(scheduler.clone()),
+            scheduler: Arc::new(RuntimeSpawner {
+                runtime_id: id,
+                scheduler: scheduler.clone(),
+                local_scheduler_factory: local_scheduler_factory.clone(),
+            }),
         };
 
         Runtime {
+            id,
             scheduler,
+            local_scheduler_factory,
             flowgraphs,
             _control_port: ControlPort::new(handle, routes),
         }
@@ -97,27 +124,38 @@ impl Runtime<SmolScheduler> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Default for Runtime<SmolScheduler> {
+impl Default for Runtime<SmolScheduler, ThreadLocalScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S> Drop for Runtime<S> {
+#[cfg(not(target_arch = "wasm32"))]
+impl<S, LS> Drop for Runtime<S, LS> {
     fn drop(&mut self) {
         debug!("Runtime dropped");
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-impl Runtime<WasmScheduler> {
+impl<S, LS> Drop for Runtime<S, LS> {
+    fn drop(&mut self) {
+        debug!("Runtime dropped");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Runtime<DummyScheduler, WasmLocalScheduler> {
     /// Construct a runtime using the WASM scheduler.
     pub fn new() -> Self {
         runtime::init();
 
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
+        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         Runtime {
-            scheduler: WasmScheduler,
+            id,
+            scheduler: DummyScheduler::new(),
+            _local_scheduler: PhantomData,
             flowgraphs,
             _control_port: ControlPort::new(),
         }
@@ -125,15 +163,31 @@ impl Runtime<WasmScheduler> {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl Default for Runtime<WasmScheduler> {
+impl Default for Runtime<DummyScheduler, WasmLocalScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Scheduler> Runtime<S> {
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: Scheduler, LS: LocalScheduler> Runtime<S, LS> {
+    /// Create a flowgraph owned by this runtime.
+    pub fn flowgraph(&self) -> Flowgraph {
+        Flowgraph::new_with_runtime(Some(self.id))
+    }
+
+    fn validate_flowgraph(&self, fg: &Flowgraph) -> Result<(), Error> {
+        if let Some(runtime_id) = fg.runtime_id
+            && runtime_id != self.id
+        {
+            return Err(Error::RuntimeError(
+                "flowgraph belongs to a different runtime".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Spawn an async task on the runtime scheduler.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
@@ -141,47 +195,12 @@ impl<S: Scheduler> Runtime<S> {
         self.scheduler.spawn(future)
     }
 
-    /// Spawn an async task on the runtime scheduler.
-    #[cfg(target_arch = "wasm32")]
-    pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        self.scheduler.spawn(future)
-    }
-
     /// Spawn an async task and detach its handle.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn_background<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
     ) {
         self.scheduler.spawn(future).detach();
-    }
-
-    /// Spawn a blocking task
-    ///
-    /// This is usually moved in a separate thread.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn spawn_blocking<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        self.scheduler.spawn_blocking(future)
-    }
-
-    /// Spawn a blocking task
-    ///
-    /// This is usually moved in a separate thread.
-    #[cfg(target_arch = "wasm32")]
-    pub fn spawn_blocking<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        self.scheduler.spawn_blocking(future)
-    }
-
-    /// Spawn a blocking task in the background
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn spawn_blocking_background<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) {
-        self.scheduler.spawn_blocking(future).detach();
     }
 
     /// Start a [`Flowgraph`] on the [`Runtime`] and await initialization.
@@ -190,12 +209,82 @@ impl<S: Scheduler> Runtime<S> {
     /// [`RunningFlowgraph`] can be used to send messages, stop the graph, or
     /// wait for completion.
     pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        #[cfg(not(target_arch = "wasm32"))]
-        if fg.has_local_domains() {
+        self.validate_flowgraph(&fg)?;
+        let queue_size = config::config().queue_size;
+        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
+
+        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+        let task = self.scheduler.spawn(run_flowgraph(
+            fg,
+            self.scheduler.clone(),
+            self.local_scheduler_factory.clone(),
+            fg_inbox.clone(),
+            fg_inbox_rx,
+            tx,
+        ));
+
+        rx.await
+            .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
+
+        let handle = FlowgraphHandle::new(fg_inbox);
+        self.flowgraphs
+            .try_lock()
+            .ok_or(Error::LockError)?
+            .push(handle.clone());
+
+        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
+    }
+
+    /// Start a [`Flowgraph`] on the [`Runtime`].
+    ///
+    /// Blocks until the flowgraph is initialized and running.
+    pub fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
+        async_io::block_on(self.start_async(fg))
+    }
+
+    /// Start a [`Flowgraph`] on the [`Runtime`] and block until it terminates.
+    pub fn run(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
+        let running = async_io::block_on(self.start_async(fg))?;
+        running.wait()
+    }
+
+    /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
+    pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
+        self.start_async(fg).await?.wait_async().await
+    }
+
+    /// Get the [`Scheduler`] that is associated with the [`Runtime`].
+    pub fn scheduler(&self) -> &S {
+        &self.scheduler
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<S: Scheduler, LS> Runtime<S, LS> {
+    /// Create a flowgraph owned by this runtime.
+    pub fn flowgraph(&self) -> Flowgraph {
+        Flowgraph::new_with_runtime(Some(self.id))
+    }
+
+    fn validate_flowgraph(&self, fg: &Flowgraph) -> Result<(), Error> {
+        if let Some(runtime_id) = fg.runtime_id
+            && runtime_id != self.id
+        {
             return Err(Error::RuntimeError(
-                "flowgraphs with local domains currently require Runtime::run".to_string(),
+                "flowgraph belongs to a different runtime".to_string(),
             ));
         }
+        Ok(())
+    }
+
+    /// Spawn an async task on the runtime scheduler.
+    pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+        self.scheduler.spawn(future)
+    }
+
+    /// Start a [`Flowgraph`] on the [`Runtime`] and await initialization.
+    pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
+        self.validate_flowgraph(&fg)?;
         let queue_size = config::config().queue_size;
         let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
 
@@ -220,24 +309,6 @@ impl<S: Scheduler> Runtime<S> {
         Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
     }
 
-    /// Start a [`Flowgraph`] on the [`Runtime`].
-    ///
-    /// Blocks until the flowgraph is initialized and running.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        async_io::block_on(self.start_async(fg))
-    }
-
-    /// Start a [`Flowgraph`] on the [`Runtime`] and block until it terminates.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn run(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
-        if fg.has_local_domains() {
-            return run_flowgraph_local_blocking(fg);
-        }
-        let running = async_io::block_on(self.start_async(fg))?;
-        running.wait()
-    }
-
     /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
     pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
         self.start_async(fg).await?.wait_async().await
@@ -250,7 +321,7 @@ impl<S: Scheduler> Runtime<S> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: Scheduler + Sync> Runtime<S> {
+impl<S: Scheduler + Sync> Runtime<S, ThreadLocalScheduler> {
     /// Construct a [`Runtime`] with a custom [`Scheduler`].
     pub fn with_scheduler(scheduler: S) -> Self {
         Self::with_config(scheduler, Router::new())
@@ -260,14 +331,24 @@ impl<S: Scheduler + Sync> Runtime<S> {
     pub fn with_config(scheduler: S, routes: Router) -> Self {
         runtime::init();
 
+        let local_scheduler_factory: Arc<dyn Fn() -> ThreadLocalScheduler + Send + Sync> =
+            Arc::new(ThreadLocalScheduler::default);
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
+        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
+            runtime_id: id,
             flowgraphs: flowgraphs.clone(),
-            scheduler: Arc::new(scheduler.clone()),
+            scheduler: Arc::new(RuntimeSpawner {
+                runtime_id: id,
+                scheduler: scheduler.clone(),
+                local_scheduler_factory: local_scheduler_factory.clone(),
+            }),
         };
 
         Runtime {
+            id,
             scheduler,
+            local_scheduler_factory,
             flowgraphs,
             _control_port: ControlPort::new(handle, routes),
         }
@@ -276,8 +357,53 @@ impl<S: Scheduler + Sync> Runtime<S> {
     /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle {
+            runtime_id: self.id,
             flowgraphs: self.flowgraphs.clone(),
-            scheduler: Arc::new(self.scheduler.clone()),
+            scheduler: Arc::new(RuntimeSpawner {
+                runtime_id: self.id,
+                scheduler: self.scheduler.clone(),
+                local_scheduler_factory: self.local_scheduler_factory.clone(),
+            }),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: Scheduler + Sync, LS: LocalScheduler + Sync> Runtime<S, LS> {
+    /// Construct a runtime with a custom normal scheduler and local scheduler factory.
+    pub fn with_scheduler_and_local(
+        scheduler: S,
+        local_scheduler_factory: impl Fn() -> LS + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_config_and_local(scheduler, Arc::new(local_scheduler_factory), Router::new())
+    }
+
+    /// Construct a runtime with custom schedulers and webserver routes.
+    pub fn with_config_and_local(
+        scheduler: S,
+        local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
+        routes: Router,
+    ) -> Self {
+        runtime::init();
+
+        let flowgraphs = Arc::new(Mutex::new(Vec::new()));
+        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
+        let handle = RuntimeHandle {
+            runtime_id: id,
+            flowgraphs: flowgraphs.clone(),
+            scheduler: Arc::new(RuntimeSpawner {
+                runtime_id: id,
+                scheduler: scheduler.clone(),
+                local_scheduler_factory: local_scheduler_factory.clone(),
+            }),
+        };
+
+        Runtime {
+            id,
+            scheduler,
+            local_scheduler_factory,
+            flowgraphs,
+            _control_port: ControlPort::new(handle, routes),
         }
     }
 }
@@ -289,8 +415,11 @@ impl<S: Scheduler> Runtime<S> {
         runtime::init();
 
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
+        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         Runtime {
+            id,
             scheduler,
+            _local_scheduler: PhantomData,
             flowgraphs,
             _control_port: ControlPort::new(),
         }
@@ -299,6 +428,7 @@ impl<S: Scheduler> Runtime<S> {
     /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle {
+            runtime_id: self.id,
             flowgraphs: self.flowgraphs.clone(),
             scheduler: Arc::new(self.scheduler.clone()),
         }
@@ -311,7 +441,51 @@ trait Spawn {
     async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct RuntimeSpawner<S, LS> {
+    runtime_id: RuntimeId,
+    scheduler: S,
+    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl<S, LS> Spawn for RuntimeSpawner<S, LS>
+where
+    S: SpawnBound,
+    LS: LocalScheduler + Sync,
+{
+    async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
+        if let Some(runtime_id) = fg.runtime_id
+            && runtime_id != self.runtime_id
+        {
+            return Err(Error::RuntimeError(
+                "flowgraph belongs to a different runtime".to_string(),
+            ));
+        }
+        let queue_size = config::config().queue_size;
+        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
+
+        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+        let task = self.scheduler.spawn(run_flowgraph(
+            fg,
+            self.scheduler.clone(),
+            self.local_scheduler_factory.clone(),
+            fg_inbox.clone(),
+            fg_inbox_rx,
+            tx,
+        ));
+
+        rx.await.or(Err(Error::RuntimeError(
+            "run_flowgraph crashed".to_string(),
+        )))??;
+
+        let handle = FlowgraphHandle::new(fg_inbox);
+        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<S: SpawnBound> Spawn for S {
     async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
@@ -343,6 +517,7 @@ impl<S: SpawnBound> Spawn for S {
 /// control plane.
 #[derive(Clone)]
 pub struct RuntimeHandle {
+    runtime_id: RuntimeId,
     scheduler: Arc<DynSpawn>,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
 }
@@ -350,6 +525,7 @@ pub struct RuntimeHandle {
 impl fmt::Debug for RuntimeHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeHandle")
+            .field("runtime_id", &self.runtime_id)
             .field("flowgraphs", &self.flowgraphs)
             .finish()
     }
@@ -395,203 +571,33 @@ impl RuntimeHandle {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-enum LocalFinishedBlock {
-    Normal(BlockId, BoxBlock),
-    Local(BlockId, StoredLocalBlock),
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn run_flowgraph_local_blocking(fg: Flowgraph) -> Result<Flowgraph, Error> {
-    async_io::block_on(async move {
-        let queue_size = config::config().queue_size;
-        let (main_channel, main_rx) = channel::<FlowgraphMessage>(queue_size);
-        run_flowgraph_local(fg, main_channel, main_rx).await
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn run_flowgraph_local(
-    mut fg: Flowgraph,
-    main_channel: Sender<FlowgraphMessage>,
-    main_rx: Receiver<FlowgraphMessage>,
-) -> Result<Flowgraph, Error> {
-    debug!("in run_flowgraph_local");
-
-    let normal_blocks = fg.take_blocks()?;
-    let local_blocks = fg.take_local_blocks()?;
-
-    let mut inboxes: Vec<BlockInbox> = normal_blocks
-        .iter()
-        .map(|b| b.inbox())
-        .chain(local_blocks.iter().map(|b| b.as_ref().inbox()))
-        .collect();
-
-    let ex = LocalExecutor::new();
-    let mut block_tasks = Vec::with_capacity(normal_blocks.len() + local_blocks.len());
-
-    for block in normal_blocks {
-        let main_channel = main_channel.clone();
-        let task = ex.spawn(async move {
-            let mut block = block;
-            let id = block.id();
-            block.run(main_channel).await;
-            LocalFinishedBlock::Normal(id, block)
-        });
-        block_tasks.push(task);
-    }
-
-    for block in local_blocks {
-        let main_channel = main_channel.clone();
-        let task = ex.spawn(async move {
-            let mut block = block;
-            let id = block.as_ref().id();
-            block.as_mut().run(main_channel).await;
-            LocalFinishedBlock::Local(id, block)
-        });
-        block_tasks.push(task);
-    }
-
-    let run = async {
-        let mut active_blocks = 0u32;
-        for inbox in inboxes.iter_mut() {
-            inbox.send(BlockMessage::Initialize).await?;
-            active_blocks += 1;
-        }
-
-        let mut i = active_blocks;
-        let mut queue = Vec::new();
-        let mut block_error = false;
-        while i > 0 {
-            let m = main_rx.recv().await.ok_or_else(|| {
-                Error::RuntimeError("no reply from blocks during init phase".to_string())
-            })?;
-
-            match m {
-                FlowgraphMessage::Initialized => i -= 1,
-                FlowgraphMessage::BlockError { .. } => {
-                    i -= 1;
-                    active_blocks -= 1;
-                    block_error = true;
-                }
-                x => queue.push(x),
-            }
-        }
-
-        for inbox in inboxes.iter_mut() {
-            inbox.notify();
-        }
-
-        for m in queue.into_iter() {
-            main_channel.try_send(m)?;
-        }
-
-        if block_error {
-            main_channel.try_send(FlowgraphMessage::Terminate)?;
-        }
-
-        let mut terminated = false;
-        while active_blocks > 0 {
-            let m = main_rx.recv().await.ok_or_else(|| {
-                Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
-            })?;
-
-            match m {
-                FlowgraphMessage::BlockDone { .. } => {
-                    active_blocks -= 1;
-                }
-                FlowgraphMessage::BlockError { .. } => {
-                    block_error = true;
-                    active_blocks -= 1;
-                    let _ = main_channel.send(FlowgraphMessage::Terminate).await;
-                }
-                FlowgraphMessage::Terminate => {
-                    if !terminated {
-                        for inbox in inboxes.iter_mut() {
-                            if inbox.send(BlockMessage::Terminate).await.is_err() {
-                                debug!(
-                                    "runtime tried to terminate block that was already terminated"
-                                );
-                            }
-                        }
-                        terminated = true;
-                    }
-                }
-                _ => warn!("local main loop received unhandled message"),
-            }
-        }
-
-        if block_error {
-            return Err(Error::RuntimeError("A block raised an error".to_string()));
-        }
-
-        Ok(())
-    };
-
-    let run_result = ex.run(run).await;
-
-    if run_result.is_err() {
-        for inbox in inboxes.iter_mut() {
-            if inbox.send(BlockMessage::Terminate).await.is_err() {
-                debug!("runtime tried to terminate block during shutdown cleanup");
-            }
-        }
-    }
-
-    let mut normal_finished = Vec::new();
-    let mut local_finished = Vec::new();
-    for task in block_tasks {
-        match task.await {
-            LocalFinishedBlock::Normal(id, block) => normal_finished.push((id, block)),
-            LocalFinishedBlock::Local(id, block) => local_finished.push((id, block)),
-        }
-    }
-
-    fg.restore_blocks(normal_finished)?;
-    fg.restore_local_blocks(local_finished)?;
-
-    run_result?;
-    Ok(fg)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn normal_block_id(block: &NormalStoredBlock) -> BlockId {
-    block.id()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn normal_block_id(block: &NormalStoredBlock) -> BlockId {
-    block.as_ref().id()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn normal_block_inbox(block: &NormalStoredBlock) -> BlockInbox {
-    block.inbox()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn normal_block_inbox(block: &NormalStoredBlock) -> BlockInbox {
-    block.as_ref().inbox()
-}
-
-pub(crate) async fn run_flowgraph<S: Scheduler>(
+pub(crate) async fn run_flowgraph<S: Scheduler, LS: LocalScheduler>(
     mut fg: Flowgraph,
     scheduler: S,
+    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
     main_channel: Sender<FlowgraphMessage>,
     main_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
 ) -> Result<Flowgraph, Error> {
     debug!("in run_flowgraph");
 
+    let (mut inboxes, ids) = fg.inboxes()?;
     let blocks = fg.take_blocks()?;
-    let mut inboxes: Vec<BlockInbox> = blocks.iter().map(normal_block_inbox).collect();
-    let ids: Vec<_> = blocks.iter().map(normal_block_id).collect();
-    let block_tasks = scheduler.run_flowgraph(blocks, &main_channel);
+    let local_domains = fg.take_local_domains()?;
+    let stream_edges_desc = fg.stream_edge_endpoints();
+    let message_edges_desc = fg.message_edges.clone();
+    let block_tasks = scheduler.run_domain(blocks, &main_channel);
+    let local_tasks = local_domains
+        .into_iter()
+        .filter(|blocks| !blocks.is_empty())
+        .map(|blocks| (local_scheduler_factory)().run_domain(blocks, main_channel.clone()))
+        .collect::<Vec<_>>();
 
     let run_result: Result<(), Error> = async {
         debug!("init blocks");
         // init blocks
         let mut active_blocks = 0u32;
-        for inbox in inboxes.iter_mut() {
+        for inbox in inboxes.iter_mut().flatten() {
             inbox.send(BlockMessage::Initialize).await?;
             active_blocks += 1;
         }
@@ -628,7 +634,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
         }
 
         debug!("running blocks");
-        for inbox in inboxes.iter_mut() {
+        for inbox in inboxes.iter_mut().flatten() {
             inbox.notify();
             if inbox.is_closed() {
                 debug!("runtime wanted to start block that already terminated");
@@ -666,7 +672,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                     data,
                     tx,
                 } => {
-                    if let Some(inbox) = inboxes.get_mut(block_id.0) {
+                    if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
                         if inbox
                             .send(BlockMessage::Call { port_id, data })
                             .await
@@ -687,7 +693,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                     tx,
                 } => {
                     let (block_tx, block_rx) = oneshot::channel::<Result<Pmt, Error>>();
-                    if let Some(inbox) = inboxes.get_mut(block_id.0) {
+                    if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
                         if inbox
                             .send(BlockMessage::Callback {
                                 port_id,
@@ -717,7 +723,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                     let _ = main_channel.send(FlowgraphMessage::Terminate).await;
                 }
                 FlowgraphMessage::BlockDescription { block_id, tx } => {
-                    if let Some(ref mut b) = inboxes.get_mut(block_id.0) {
+                    if let Some(Some(b)) = inboxes.get_mut(block_id.0) {
                         let (b_tx, rx) = oneshot::channel::<BlockDescription>();
                         if b.send(BlockMessage::BlockDescription { tx: b_tx })
                             .await
@@ -741,7 +747,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                     let mut blocks = Vec::new();
                     for id in ids.iter() {
                         let (b_tx, rx) = oneshot::channel::<BlockDescription>();
-                        if let Some(inbox) = inboxes.get_mut(id.0)
+                        if let Some(Some(inbox)) = inboxes.get_mut(id.0)
                             && inbox
                                 .send(BlockMessage::BlockDescription { tx: b_tx })
                                 .await
@@ -751,14 +757,11 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                         }
                     }
 
-                    let stream_edges = fg.stream_edges.clone();
-                    let message_edges = fg.message_edges.clone();
-
                     if tx
                         .send(FlowgraphDescription {
                             blocks,
-                            stream_edges,
-                            message_edges,
+                            stream_edges: stream_edges_desc.clone(),
+                            message_edges: message_edges_desc.clone(),
                         })
                         .is_err()
                     {
@@ -769,7 +772,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
                 }
                 FlowgraphMessage::Terminate => {
                     if !terminated {
-                        for inbox in inboxes.iter_mut() {
+                        for inbox in inboxes.iter_mut().flatten() {
                             if inbox.send(BlockMessage::Terminate).await.is_err() {
                                 debug!(
                                     "runtime tried to terminate block that was already terminated"
@@ -792,10 +795,214 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     .await;
 
     if run_result.is_err() {
-        for inbox in inboxes.iter_mut() {
+        for inbox in inboxes.iter_mut().flatten() {
             if inbox.send(BlockMessage::Terminate).await.is_err() {
                 debug!("runtime tried to terminate block during shutdown cleanup");
             }
+        }
+    }
+
+    let mut finished_blocks = Vec::with_capacity(block_tasks.len());
+    for task in block_tasks {
+        finished_blocks.push(task.await);
+    }
+    fg.restore_blocks(finished_blocks)?;
+
+    let mut finished_local_blocks = Vec::new();
+    for task in local_tasks {
+        finished_local_blocks.extend(task.await);
+    }
+    fg.restore_local_blocks(finished_local_blocks)?;
+
+    run_result?;
+    Ok(fg)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn run_flowgraph<S: Scheduler>(
+    mut fg: Flowgraph,
+    scheduler: S,
+    main_channel: Sender<FlowgraphMessage>,
+    main_rx: Receiver<FlowgraphMessage>,
+    initialized: oneshot::Sender<Result<(), Error>>,
+) -> Result<Flowgraph, Error> {
+    debug!("in run_flowgraph");
+
+    let (mut inboxes, ids) = fg.inboxes()?;
+    let blocks = fg.take_blocks()?;
+    let stream_edges_desc = fg.stream_edge_endpoints();
+    let message_edges_desc = fg.message_edges.clone();
+    let block_tasks = scheduler.run_domain(blocks, &main_channel);
+
+    let run_result: Result<(), Error> = async {
+        debug!("init blocks");
+        let mut active_blocks = 0u32;
+        for inbox in inboxes.iter_mut().flatten() {
+            inbox.send(BlockMessage::Initialize).await?;
+            active_blocks += 1;
+        }
+
+        debug!("wait for blocks init");
+        let mut i = active_blocks;
+        let mut queue = Vec::new();
+        let mut block_error = false;
+        while i > 0 {
+            let m = main_rx.recv().await.ok_or_else(|| {
+                Error::RuntimeError("no reply from blocks during init phase".to_string())
+            })?;
+
+            match m {
+                FlowgraphMessage::Initialized => i -= 1,
+                FlowgraphMessage::BlockError { .. } => {
+                    i -= 1;
+                    active_blocks -= 1;
+                    block_error = true;
+                }
+                x => queue.push(x),
+            }
+        }
+
+        for inbox in inboxes.iter_mut().flatten() {
+            inbox.notify();
+        }
+
+        for m in queue.into_iter() {
+            main_channel.try_send(m)?;
+        }
+
+        initialized.send(Ok(())).map_err(|_| {
+            Error::RuntimeError("main thread panic during flowgraph init".to_string())
+        })?;
+
+        if block_error {
+            main_channel.try_send(FlowgraphMessage::Terminate)?;
+        }
+
+        let mut terminated = false;
+        while active_blocks > 0 {
+            let m = main_rx.recv().await.ok_or_else(|| {
+                Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
+            })?;
+
+            match m {
+                FlowgraphMessage::BlockCall {
+                    block_id,
+                    port_id,
+                    data,
+                    tx,
+                } => {
+                    if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
+                        if inbox
+                            .send(BlockMessage::Call { port_id, data })
+                            .await
+                            .is_ok()
+                        {
+                            let _ = tx.send(Ok(()));
+                        } else {
+                            let _ = tx.send(Err(Error::BlockTerminated));
+                        }
+                    } else {
+                        let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                    }
+                }
+                FlowgraphMessage::BlockCallback {
+                    block_id,
+                    port_id,
+                    data,
+                    tx,
+                } => {
+                    let (block_tx, block_rx) = oneshot::channel::<Result<Pmt, Error>>();
+                    if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
+                        if inbox
+                            .send(BlockMessage::Callback {
+                                port_id,
+                                data,
+                                tx: block_tx,
+                            })
+                            .await
+                            .is_ok()
+                        {
+                            match block_rx.await? {
+                                Ok(p) => tx.send(Ok(p)).ok(),
+                                Err(e) => tx.send(Err(Error::HandlerError(e.to_string()))).ok(),
+                            };
+                        } else {
+                            let _ = tx.send(Err(Error::BlockTerminated));
+                        }
+                    } else {
+                        let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                    }
+                }
+                FlowgraphMessage::BlockDone { .. } => active_blocks -= 1,
+                FlowgraphMessage::BlockError { .. } => {
+                    block_error = true;
+                    active_blocks -= 1;
+                    let _ = main_channel.send(FlowgraphMessage::Terminate).await;
+                }
+                FlowgraphMessage::BlockDescription { block_id, tx } => {
+                    if let Some(Some(b)) = inboxes.get_mut(block_id.0) {
+                        let (b_tx, rx) = oneshot::channel::<BlockDescription>();
+                        if b.send(BlockMessage::BlockDescription { tx: b_tx })
+                            .await
+                            .is_ok()
+                        {
+                            if let Ok(b) = rx.await {
+                                let _ = tx.send(Ok(b));
+                            } else {
+                                let _ = tx.send(Err(Error::RuntimeError(format!(
+                                    "Block {block_id:?} terminated or crashed"
+                                ))));
+                            }
+                        } else {
+                            let _ = tx.send(Err(Error::BlockTerminated));
+                        }
+                    } else {
+                        let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                    }
+                }
+                FlowgraphMessage::FlowgraphDescription { tx } => {
+                    let mut blocks = Vec::new();
+                    for id in ids.iter() {
+                        let (b_tx, rx) = oneshot::channel::<BlockDescription>();
+                        if let Some(Some(inbox)) = inboxes.get_mut(id.0)
+                            && inbox
+                                .send(BlockMessage::BlockDescription { tx: b_tx })
+                                .await
+                                .is_ok()
+                        {
+                            blocks.push(rx.await?);
+                        }
+                    }
+
+                    let _ = tx.send(FlowgraphDescription {
+                        blocks,
+                        stream_edges: stream_edges_desc.clone(),
+                        message_edges: message_edges_desc.clone(),
+                    });
+                }
+                FlowgraphMessage::Terminate => {
+                    if !terminated {
+                        for inbox in inboxes.iter_mut().flatten() {
+                            let _ = inbox.send(BlockMessage::Terminate).await;
+                        }
+                        terminated = true;
+                    }
+                }
+                _ => warn!("main loop received unhandled message"),
+            }
+        }
+
+        if block_error {
+            return Err(Error::RuntimeError("A block raised an error".to_string()));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    if run_result.is_err() {
+        for inbox in inboxes.iter_mut().flatten() {
+            let _ = inbox.send(BlockMessage::Terminate).await;
         }
     }
 

@@ -85,7 +85,7 @@ impl TpbScheduler {
 }
 
 impl Scheduler for TpbScheduler {
-    fn run_flowgraph(
+    fn run_domain(
         &self,
         blocks: Vec<Box<dyn Block>>,
         main_channel: &Sender<FlowgraphMessage>,
@@ -95,7 +95,7 @@ impl Scheduler for TpbScheduler {
         for block in blocks {
             let main_channel = main_channel.clone();
 
-            tasks.push(self.spawn_blocking(async move {
+            tasks.push(self.spawn(async move {
                 let mut block = block;
                 let id = block.id();
                 block.run(main_channel).await;
@@ -114,17 +114,6 @@ impl Scheduler for TpbScheduler {
             .get(self.inner.id)
             .unwrap()
             .spawn(future)
-    }
-
-    fn spawn_blocking<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        TPB.lock()
-            .unwrap()
-            .get(self.inner.id)
-            .unwrap()
-            .spawn(blocking::unblock(|| async_io::block_on(future)))
     }
 }
 

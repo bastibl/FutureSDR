@@ -15,6 +15,12 @@ use crate::runtime::scheduler::Scheduler;
 #[derive(Clone, Debug)]
 pub struct WasmScheduler;
 
+/// Placeholder normal scheduler type for WASM runtimes.
+pub type DummyScheduler = WasmScheduler;
+
+/// Local scheduler type for WASM runtimes.
+pub type WasmLocalScheduler = WasmScheduler;
+
 impl WasmScheduler {
     /// Create WASM Scheduler
     pub fn new() -> WasmScheduler {
@@ -23,7 +29,7 @@ impl WasmScheduler {
 }
 
 impl Scheduler for WasmScheduler {
-    fn run_flowgraph(
+    fn run_domain(
         &self,
         blocks: Vec<NormalStoredBlock>,
         main_channel: &Sender<FlowgraphMessage>,
@@ -31,21 +37,12 @@ impl Scheduler for WasmScheduler {
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
             let main_channel = main_channel.clone();
-            let task = if block.as_ref().is_blocking() {
-                self.spawn_blocking(async move {
-                    let mut block = block;
-                    let id = block.as_ref().id();
-                    block.as_mut().run(main_channel).await;
-                    (id, block)
-                })
-            } else {
-                self.spawn(async move {
-                    let mut block = block;
-                    let id = block.as_ref().id();
-                    block.as_mut().run(main_channel).await;
-                    (id, block)
-                })
-            };
+            let task = self.spawn(async move {
+                let mut block = block;
+                let id = block.as_ref().id();
+                block.as_mut().run(main_channel).await;
+                (id, block)
+            });
             tasks.push(task);
         }
         tasks
@@ -61,11 +58,6 @@ impl Scheduler for WasmScheduler {
         });
 
         Task(rx)
-    }
-
-    fn spawn_blocking<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        info!("no spawn blocking for wasm, using spawn");
-        self.spawn(future)
     }
 }
 

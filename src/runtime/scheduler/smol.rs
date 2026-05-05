@@ -105,7 +105,7 @@ impl SmolScheduler {
 }
 
 impl Scheduler for SmolScheduler {
-    fn run_flowgraph(
+    fn run_domain(
         &self,
         blocks: Vec<BoxBlock>,
         main_channel: &Sender<FlowgraphMessage>,
@@ -113,23 +113,17 @@ impl Scheduler for SmolScheduler {
         // spawn block executors
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
+            debug_assert!(
+                !block.is_blocking(),
+                "blocking blocks must be placed in local domains before scheduling"
+            );
             let main_channel = main_channel.clone();
-            let task = if block.is_blocking() {
-                debug!("spawning blocking block");
-                self.spawn_blocking(async move {
-                    let mut block = block;
-                    let id = block.id();
-                    block.run(main_channel).await;
-                    (id, block)
-                })
-            } else {
-                self.spawn(async move {
-                    let mut block = block;
-                    let id = block.id();
-                    block.run(main_channel).await;
-                    (id, block)
-                })
-            };
+            let task = self.spawn(async move {
+                let mut block = block;
+                let id = block.id();
+                block.run(main_channel).await;
+                (id, block)
+            });
             tasks.push(task);
         }
         tasks
@@ -144,17 +138,6 @@ impl Scheduler for SmolScheduler {
             .get(self.inner.id)
             .unwrap()
             .spawn(future)
-    }
-
-    fn spawn_blocking<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        SMOL.lock()
-            .unwrap()
-            .get(self.inner.id)
-            .unwrap()
-            .spawn(blocking::unblock(|| async_io::block_on(future)))
     }
 }
 
@@ -174,10 +157,6 @@ mod test {
         let _ = SmolScheduler::default();
         let s = SmolScheduler::default();
         let t = s.spawn(async { 1 + 1 });
-        let r = async_io::block_on(t);
-        assert_eq!(r, 2);
-
-        let t = s.spawn_blocking(async { 1 + 1 });
         let r = async_io::block_on(t);
         assert_eq!(r, 2);
     }

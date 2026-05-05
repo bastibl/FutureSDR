@@ -13,6 +13,9 @@ use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 #[derive(Block)]
 struct NonSendLocalBlock {
@@ -34,6 +37,31 @@ impl Kernel for NonSendLocalBlock {
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
+        io.finished = true;
+        Ok(())
+    }
+}
+
+#[derive(Block)]
+#[blocking]
+struct BlockingNoop {
+    worked: Arc<AtomicBool>,
+}
+
+impl BlockingNoop {
+    fn new(worked: Arc<AtomicBool>) -> Self {
+        Self { worked }
+    }
+}
+
+impl Kernel for BlockingNoop {
+    async fn work(
+        &mut self,
+        io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        self.worked.store(true, Ordering::SeqCst);
         io.finished = true;
         Ok(())
     }
@@ -69,5 +97,46 @@ fn local_domain_accepts_non_send_blocks() -> Result<()> {
     }
 
     Runtime::new().run(fg)?;
+    Ok(())
+}
+
+#[test]
+fn runtime_owned_flowgraph_runs_explicit_local_blocks() -> Result<()> {
+    let rt = Runtime::new();
+    let mut fg = rt.flowgraph();
+
+    let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
+    let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
+
+    fg.stream(&src, |b| b.output(), &snk, |b| b.input())?;
+
+    let fg = rt.run(fg)?;
+    assert_eq!(fg.block(&snk)?.n_received(), 4);
+    assert!(src.with(&fg, |_| true)?);
+
+    Ok(())
+}
+
+#[test]
+fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
+    let rt = Runtime::new();
+    let mut fg = rt.flowgraph();
+    let worked = Arc::new(AtomicBool::new(false));
+    let blk = fg.add(BlockingNoop::new(worked.clone()));
+
+    let fg = rt.run(fg)?;
+
+    assert!(worked.load(Ordering::SeqCst));
+    assert!(blk.with(&fg, |_| true)?);
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_flowgraph_from_other_runtime() -> Result<()> {
+    let rt_a = Runtime::new();
+    let rt_b = Runtime::new();
+    let fg = rt_a.flowgraph();
+
+    assert!(rt_b.run(fg).is_err());
     Ok(())
 }

@@ -14,6 +14,8 @@ pub use pmt::PmtKind;
 
 mod block_id;
 pub use block_id::BlockId;
+mod buffer_id;
+pub use buffer_id::BufferId;
 mod flowgraph_id;
 pub use flowgraph_id::FlowgraphId;
 mod port_id;
