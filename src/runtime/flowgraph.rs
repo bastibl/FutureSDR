@@ -12,8 +12,6 @@ use crate::runtime::FlowgraphId;
 use crate::runtime::PortId;
 use crate::runtime::Result;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::block::Block;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::BoxBlock;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::DynBlock;
@@ -32,8 +30,6 @@ use crate::runtime::kernel_interface::SendKernelInterface;
 #[cfg(target_arch = "wasm32")]
 use crate::runtime::local_block::LocalBlock;
 use crate::runtime::local_block::StoredLocalBlock;
-use crate::runtime::local_wrapped_kernel::LocalWrappedKernel;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);
@@ -61,10 +57,7 @@ mod normal_block {
 use normal_block::Dyn as NormalDynBlock;
 pub(crate) use normal_block::Stored as NormalStoredBlock;
 
-#[cfg(not(target_arch = "wasm32"))]
 type NormalWrappedKernel<K> = WrappedKernel<K>;
-#[cfg(target_arch = "wasm32")]
-type NormalWrappedKernel<K> = LocalWrappedKernel<K>;
 
 /// Shared typed access to a block stored inside a [`Flowgraph`].
 ///
@@ -367,8 +360,9 @@ impl Flowgraph {
     {
         let block_id = BlockId(self.blocks.len());
         let mut b = WrappedKernel::new(block, block_id);
-        let block_name = b.type_name();
-        b.set_instance_name(&format!("{}-{}", block_name, block_id.0));
+        let block_name = <K as KernelInterface>::type_name();
+        b.meta
+            .set_instance_name(format!("{}-{}", block_name, block_id.0));
         self.blocks.push(Some(Box::new(b)));
         BlockRef {
             id: block_id,
@@ -387,7 +381,7 @@ impl Flowgraph {
         K: Kernel + KernelInterface + 'static,
     {
         let block_id = BlockId(self.blocks.len());
-        let mut b = LocalWrappedKernel::new(block, block_id);
+        let mut b = WrappedKernel::new(block, block_id);
         let block_name = <K as KernelInterface>::type_name().to_string();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -482,6 +476,61 @@ impl Flowgraph {
             })
     }
 
+    fn get_two_typed_wrapped_blocks_mut<KS, KD>(
+        &mut self,
+        src_id: BlockId,
+        dst_id: BlockId,
+    ) -> Result<(&mut NormalWrappedKernel<KS>, &mut NormalWrappedKernel<KD>), Error>
+    where
+        KS: Kernel + 'static,
+        KD: Kernel + 'static,
+    {
+        if src_id == dst_id {
+            return Err(Error::LockError);
+        }
+
+        let len = self.blocks.len();
+        let invalid_block = if src_id.0 >= len { src_id } else { dst_id };
+        let [src_slot, dst_slot] =
+            self.blocks
+                .get_disjoint_mut([src_id.0, dst_id.0])
+                .map_err(|err| match err {
+                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                        Error::InvalidBlock(invalid_block)
+                    }
+                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+                })?;
+
+        let src = src_slot
+            .as_mut()
+            .map(normal_block::as_mut)
+            .ok_or(Error::LockError)?
+            .as_any_mut()
+            .downcast_mut::<NormalWrappedKernel<KS>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    src_id,
+                    std::any::type_name::<KS>()
+                ))
+            })?;
+        let dst = dst_slot
+            .as_mut()
+            .map(normal_block::as_mut)
+            .ok_or(Error::LockError)?
+            .as_any_mut()
+            .downcast_mut::<NormalWrappedKernel<KD>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    dst_id,
+                    std::any::type_name::<KD>()
+                ))
+            })?;
+
+        Ok((src, dst))
+    }
+
     fn get_typed_block_by_id<K: Kernel + 'static>(
         &self,
         block_id: BlockId,
@@ -559,52 +608,7 @@ impl Flowgraph {
     {
         self.validate_block_ref(src_block)?;
         self.validate_block_ref(dst_block)?;
-        if src_block.id == dst_block.id {
-            return Err(Error::LockError);
-        }
-        let len = self.blocks.len();
-        let invalid_block = if src_block.id.0 >= len {
-            src_block.id
-        } else {
-            dst_block.id
-        };
-        let [src_slot, dst_slot] = self
-            .blocks
-            .get_disjoint_mut([src_block.id.0, dst_block.id.0])
-            .map_err(|err| match err {
-                std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                    Error::InvalidBlock(invalid_block)
-                }
-                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-            })?;
-        let src = src_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
-        let dst = dst_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
-        let src = src
-            .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KS>>()
-            .ok_or_else(|| {
-                Error::ValidationError(format!(
-                    "block {:?} has unexpected type for {}",
-                    src_block.id,
-                    std::any::type_name::<KS>()
-                ))
-            })?;
-        let dst = dst
-            .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KD>>()
-            .ok_or_else(|| {
-                Error::ValidationError(format!(
-                    "block {:?} has unexpected type for {}",
-                    dst_block.id,
-                    std::any::type_name::<KD>()
-                ))
-            })?;
+        let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_block.id, dst_block.id)?;
         let edge = Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(&mut dst.kernel));
         self.stream_edges.push(edge);
         Ok(())
@@ -634,52 +638,7 @@ impl Flowgraph {
     {
         self.validate_block_ref(src_block)?;
         self.validate_block_ref(dst_block)?;
-        if src_block.id == dst_block.id {
-            return Err(Error::LockError);
-        }
-        let len = self.blocks.len();
-        let invalid_block = if src_block.id.0 >= len {
-            src_block.id
-        } else {
-            dst_block.id
-        };
-        let [src_slot, dst_slot] = self
-            .blocks
-            .get_disjoint_mut([src_block.id.0, dst_block.id.0])
-            .map_err(|err| match err {
-                std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                    Error::InvalidBlock(invalid_block)
-                }
-                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-            })?;
-        let src = src_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
-        let dst = dst_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
-        let src = src
-            .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KS>>()
-            .ok_or_else(|| {
-                Error::ValidationError(format!(
-                    "block {:?} has unexpected type for {}",
-                    src_block.id,
-                    std::any::type_name::<KS>()
-                ))
-            })?;
-        let dst = dst
-            .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KD>>()
-            .ok_or_else(|| {
-                Error::ValidationError(format!(
-                    "block {:?} has unexpected type for {}",
-                    dst_block.id,
-                    std::any::type_name::<KD>()
-                ))
-            })?;
+        let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_block.id, dst_block.id)?;
         src_port(&mut src.kernel).close_circuit(dst_port(&mut dst.kernel));
         Ok(())
     }
@@ -891,7 +850,7 @@ impl LocalDomain<'_> {
         K: Kernel + KernelInterface + 'static,
     {
         let block_id = self.fg.reserve_block_id();
-        let mut b = LocalWrappedKernel::new(block(), block_id);
+        let mut b = WrappedKernel::new(block(), block_id);
         let block_name = <K as KernelInterface>::type_name().to_string();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -943,7 +902,7 @@ impl LocalDomain<'_> {
         let dst = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
         let src = src
             .as_any_mut()
-            .downcast_mut::<LocalWrappedKernel<KS>>()
+            .downcast_mut::<WrappedKernel<KS>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "local block {:?} has unexpected type for {}",
@@ -953,7 +912,7 @@ impl LocalDomain<'_> {
             })?;
         let dst = dst
             .as_any_mut()
-            .downcast_mut::<LocalWrappedKernel<KD>>()
+            .downcast_mut::<WrappedKernel<KD>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "local block {:?} has unexpected type for {}",
@@ -998,7 +957,7 @@ impl LocalDomain<'_> {
             .ok_or(Error::LockError)?
             .as_mut()
             .as_any_mut()
-            .downcast_mut::<LocalWrappedKernel<KS>>()
+            .downcast_mut::<WrappedKernel<KS>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "local block {:?} has unexpected type for {}",

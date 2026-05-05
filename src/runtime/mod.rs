@@ -53,7 +53,6 @@ mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
 mod local_block;
-mod local_wrapped_kernel;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
 /// Mocker for unit testing and benchmarking
@@ -66,7 +65,6 @@ pub mod scheduler;
 mod tag;
 mod timer;
 mod work_io;
-#[cfg(not(target_arch = "wasm32"))]
 mod wrapped_kernel;
 
 /// Macros for building flowgraphs and implementing blocks.

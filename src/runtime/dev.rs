@@ -33,6 +33,8 @@ pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
 pub use super::kernel::SendKernel;
+#[doc(hidden)]
+pub use super::local_block::BlockObject;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
 pub use super::tag::Tag;
@@ -58,6 +60,8 @@ pub mod prelude {
     pub use crate::runtime::dev::BlockInbox;
     pub use crate::runtime::dev::BlockMeta;
     pub use crate::runtime::dev::BlockNotifier;
+    #[doc(hidden)]
+    pub use crate::runtime::dev::BlockObject;
     pub use crate::runtime::dev::BufferReader;
     pub use crate::runtime::dev::BufferWriter;
     pub use crate::runtime::dev::CircuitWriter;

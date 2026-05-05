@@ -9,6 +9,8 @@ pub mod circuit;
 
 /// Local single-thread CPU buffer
 pub mod local;
+#[doc(hidden)]
+pub mod queued;
 
 /// Double-mapped circular buffer
 #[cfg(not(target_arch = "wasm32"))]

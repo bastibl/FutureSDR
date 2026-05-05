@@ -11,6 +11,7 @@ use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::PortId;
 use crate::runtime::Result;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::Block;
 use crate::runtime::block_inbox::BlockInboxReader;
 use crate::runtime::buffer::BufferReader;
@@ -19,10 +20,14 @@ use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;
 use crate::runtime::dev::MessageOutputs;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
 use crate::runtime::dev::WorkIo;
 use crate::runtime::kernel_interface::KernelInterface;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
+use crate::runtime::local_block::BlockObject;
+use crate::runtime::local_block::LocalBlock;
 use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.
@@ -41,19 +46,16 @@ pub(crate) struct WrappedKernel<K: Kernel> {
     pub inbox_tx: BlockInbox,
 }
 
-impl<K: SendKernelInterface + SendKernel + 'static> WrappedKernel<K> {
+impl<K: KernelInterface + Kernel + 'static> WrappedKernel<K> {
     /// Create typed block wrapper.
     pub fn new(mut kernel: K, id: BlockId) -> Self {
         let (tx, rx) = crate::runtime::block_inbox::channel(config::config().queue_size);
-        KernelInterface::stream_ports_init(&mut kernel, id, tx.clone());
+        kernel.stream_ports_init(id, tx.clone());
         Self {
             meta: BlockMeta::new(),
             mo: MessageOutputs::new(
                 id,
-                <K as KernelInterface>::message_outputs()
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect(),
+                K::message_outputs().iter().map(|x| x.to_string()).collect(),
             ),
             kernel,
             id,
@@ -63,7 +65,11 @@ impl<K: SendKernelInterface + SendKernel + 'static> WrappedKernel<K> {
     }
 
     async fn run_impl(&mut self, main_inbox: Sender<FlowgraphMessage>) -> Result<(), Error> {
-        let instance_name = self.instance_name().unwrap_or(self.type_name()).to_owned();
+        let instance_name = self
+            .meta
+            .instance_name()
+            .unwrap_or(K::type_name())
+            .to_owned();
         let WrappedKernel {
             meta,
             mo,
@@ -237,8 +243,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> WrappedKernel<K> {
     }
 }
 
-#[async_trait::async_trait]
-impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
+impl<K: KernelInterface + Kernel + 'static> BlockObject for WrappedKernel<K> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -264,7 +269,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     }
 
     fn message_inputs(&self) -> &'static [&'static str] {
-        <K as KernelInterface>::message_inputs()
+        K::message_inputs()
     }
     fn connect(
         &mut self,
@@ -275,39 +280,59 @@ impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
         self.mo.connect(src_port, dst_box, dst_port)
     }
 
-    fn instance_name(&self) -> Option<&str> {
-        self.meta.instance_name()
-    }
-    fn set_instance_name(&mut self, name: &str) {
-        self.meta.set_instance_name(name)
-    }
     fn type_name(&self) -> &str {
         K::type_name()
     }
     fn is_blocking(&self) -> bool {
         K::is_blocking()
     }
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait]
+impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
         match self.run_impl(main_inbox.clone()).await {
             Ok(_) => {
                 let _ = main_inbox
-                    .send(FlowgraphMessage::BlockDone {
-                        block_id: self.id(),
-                    })
+                    .send(FlowgraphMessage::BlockDone { block_id: self.id })
                     .await;
                 return;
             }
             Err(e) => {
                 let instance_name = self
+                    .meta
                     .instance_name()
                     .unwrap_or("<instance name not set>")
                     .to_string();
                 error!("{}: Error in Block.run() {:?}", instance_name, e);
                 let _ = main_inbox
-                    .send(FlowgraphMessage::BlockError {
-                        block_id: self.id(),
-                    })
+                    .send(FlowgraphMessage::BlockError { block_id: self.id })
+                    .await;
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl<K: KernelInterface + Kernel + 'static> LocalBlock for WrappedKernel<K> {
+    async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
+        match self.run_impl(main_inbox.clone()).await {
+            Ok(_) => {
+                let _ = main_inbox
+                    .send(FlowgraphMessage::BlockDone { block_id: self.id })
+                    .await;
+                return;
+            }
+            Err(e) => {
+                let instance_name = self
+                    .meta
+                    .instance_name()
+                    .unwrap_or("<instance name not set>")
+                    .to_string();
+                error!("{}: Error in Block.run() {:?}", instance_name, e);
+                let _ = main_inbox
+                    .send(FlowgraphMessage::BlockError { block_id: self.id })
                     .await;
             }
         }
