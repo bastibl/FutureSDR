@@ -18,7 +18,6 @@ use thiserror::Error;
 use crate::runtime::channel::mpsc;
 use crate::runtime::channel::oneshot;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod block;
 mod block_inbox;
 mod block_meta;
@@ -52,7 +51,6 @@ mod flowgraph_handle;
 mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
-mod local_block;
 #[cfg(not(target_arch = "wasm32"))]
 mod local_domain;
 mod message_output;

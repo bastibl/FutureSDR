@@ -21,23 +21,12 @@ pub struct WorkIo {
     ///
     /// The block will be called if new work arrives or if the future resolves,
     /// whichever happens first.
-    #[cfg(not(target_arch = "wasm32"))]
     pub block_on: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
-    /// Future that must resolve before the block is called again.
-    #[cfg(target_arch = "wasm32")]
-    pub block_on: Option<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl WorkIo {
     /// Set the future that should wake this block again.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn block_on<F: Future<Output = ()> + Send + 'static>(&mut self, f: F) {
-        self.block_on = Some(Box::pin(f));
-    }
-
-    /// Set the future that should wake this block again.
-    #[cfg(target_arch = "wasm32")]
-    pub fn block_on<F: Future<Output = ()> + 'static>(&mut self, f: F) {
         self.block_on = Some(Box::pin(f));
     }
 }

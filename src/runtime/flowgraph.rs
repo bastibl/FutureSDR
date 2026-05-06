@@ -18,9 +18,10 @@ use crate::runtime::PortId;
 use crate::runtime::Result;
 use crate::runtime::RuntimeId;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::block::BoxBlock;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::block::DynBlock;
+use crate::runtime::block::Block;
+use crate::runtime::block::BlockObject;
+#[cfg(target_arch = "wasm32")]
+use crate::runtime::block::LocalBlock;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitWriter;
@@ -34,10 +35,6 @@ use crate::runtime::dev::SendKernel;
 use crate::runtime::kernel_interface::KernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
-use crate::runtime::local_block::BlockObject;
-#[cfg(target_arch = "wasm32")]
-use crate::runtime::local_block::LocalBlock;
-use crate::runtime::local_block::StoredLocalBlock;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::LocalBlockBuilder;
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,37 +46,13 @@ use crate::runtime::wrapped_kernel::WrappedKernel;
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);
 static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
 
-mod normal_block {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) type Stored = super::BoxBlock;
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) type Stored = super::StoredLocalBlock;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) type Dyn = super::DynBlock;
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) type Dyn = dyn super::LocalBlock;
-
-    pub(crate) fn as_ref(block: &Stored) -> &Dyn {
-        block.as_ref()
-    }
-
-    pub(crate) fn as_mut(block: &mut Stored) -> &mut Dyn {
-        block.as_mut()
-    }
-}
-
-pub(crate) use normal_block::Stored as NormalStoredBlock;
-
-type NormalWrappedKernel<K> = WrappedKernel<K>;
-
 /// Shared typed access to a block stored inside a [`Flowgraph`].
 ///
 /// The guard dereferences to the block's kernel type and also exposes runtime
 /// metadata such as the block id and instance name. It is only available before
 /// the flowgraph is moved into a running [`Runtime`](crate::runtime::Runtime).
 pub struct TypedBlockGuard<'a, K: Kernel> {
-    wrapped: &'a NormalWrappedKernel<K>,
+    wrapped: &'a WrappedKernel<K>,
 }
 
 /// Mutable typed access to a block stored inside a [`Flowgraph`].
@@ -87,7 +60,7 @@ pub struct TypedBlockGuard<'a, K: Kernel> {
 /// The guard dereferences to the block's kernel type and can be used to update
 /// block state or metadata before the flowgraph is started.
 pub struct TypedBlockGuardMut<'a, K: Kernel> {
-    wrapped: &'a mut NormalWrappedKernel<K>,
+    wrapped: &'a mut WrappedKernel<K>,
 }
 
 impl<K: Kernel> TypedBlockGuard<'_, K> {
@@ -430,7 +403,10 @@ impl<K> From<&BlockRef<K>> for BlockId {
 pub struct Flowgraph {
     pub(crate) id: FlowgraphId,
     pub(crate) runtime_id: Option<RuntimeId>,
-    pub(crate) blocks: Vec<Option<NormalStoredBlock>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) blocks: Vec<Option<Box<dyn Block>>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) blocks: Vec<Option<Box<dyn LocalBlock>>>,
     pub(crate) block_placements: Vec<BlockPlacement>,
     pub(crate) block_inboxes: Vec<Option<BlockInbox>>,
     pub(crate) block_message_inputs: Vec<Option<&'static [&'static str]>>,
@@ -502,27 +478,29 @@ impl Flowgraph {
         let block_name = <K as KernelInterface>::type_name();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
-        let inbox = b.inbox();
         let placement = if <K as KernelInterface>::is_blocking() {
             let domain_id = self.auto_local_domain();
             let local_id = self.local_domains[domain_id].blocks;
             self.local_domains[domain_id].blocks += 1;
             self.blocks.push(None);
-            self.local_domains[domain_id]
+            let builder: LocalBlockBuilder = Box::new(move || Box::new(b));
+            let inbox = self.local_domains[domain_id]
                 .controller
-                .insert_block(local_id, StoredLocalBlock::new(Box::new(b)))
+                .build(local_id, builder)
                 .expect("failed to insert blocking block into local domain");
+            self.block_inboxes.push(Some(inbox));
             BlockPlacement::Local {
                 domain_id,
                 local_id,
                 auto: true,
             }
         } else {
+            let inbox = b.inbox();
             self.blocks.push(Some(Box::new(b)));
+            self.block_inboxes.push(Some(inbox));
             BlockPlacement::Normal { domain_id: 0 }
         };
         self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
         self.block_message_inputs.push(Some(K::message_inputs()));
         BlockRef {
             id: block_id,
@@ -547,7 +525,7 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.blocks.push(Some(StoredLocalBlock::new(Box::new(b))));
+        self.blocks.push(Some(Box::new(b)));
         let placement = BlockPlacement::Normal { domain_id: 0 };
         self.block_placements.push(placement);
         self.block_inboxes.push(Some(inbox));
@@ -631,7 +609,7 @@ impl Flowgraph {
             let block_name = <K as KernelInterface>::type_name().to_string();
             b.meta
                 .set_instance_name(format!("{}-{}", block_name, block_id.0));
-            StoredLocalBlock::new(Box::new(b))
+            Box::new(b)
         });
         let inbox = self.local_domains[domain_id]
             .controller
@@ -688,7 +666,7 @@ impl Flowgraph {
                 .get(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
                 .as_ref()
-                .map(|block| normal_block::as_ref(block) as &dyn BlockObject)
+                .map(|block| block.as_ref() as &dyn BlockObject)
                 .ok_or(Error::LockError),
             #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local { .. } => Err(Error::LockError),
@@ -702,7 +680,7 @@ impl Flowgraph {
                 .get_mut(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
                 .as_mut()
-                .map(|block| normal_block::as_mut(block) as &mut dyn BlockObject)
+                .map(|block| block.as_mut() as &mut dyn BlockObject)
                 .ok_or(Error::LockError),
             #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local { .. } => Err(Error::LockError),
@@ -712,11 +690,11 @@ impl Flowgraph {
     fn get_typed_wrapped_block_by_id<K: Kernel + 'static>(
         &self,
         block_id: BlockId,
-    ) -> Result<&NormalWrappedKernel<K>, Error> {
+    ) -> Result<&WrappedKernel<K>, Error> {
         let block = self.raw_block(block_id)?;
         block
             .as_any()
-            .downcast_ref::<NormalWrappedKernel<K>>()
+            .downcast_ref::<WrappedKernel<K>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "block {:?} has unexpected type for {}",
@@ -729,11 +707,11 @@ impl Flowgraph {
     fn get_typed_wrapped_block_mut_by_id<K: Kernel + 'static>(
         &mut self,
         block_id: BlockId,
-    ) -> Result<&mut NormalWrappedKernel<K>, Error> {
+    ) -> Result<&mut WrappedKernel<K>, Error> {
         let block = self.raw_block_mut(block_id)?;
         block
             .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<K>>()
+            .downcast_mut::<WrappedKernel<K>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "block {:?} has unexpected type for {}",
@@ -747,7 +725,7 @@ impl Flowgraph {
         &mut self,
         src_id: BlockId,
         dst_id: BlockId,
-    ) -> Result<(&mut NormalWrappedKernel<KS>, &mut NormalWrappedKernel<KD>), Error>
+    ) -> Result<(&mut WrappedKernel<KS>, &mut WrappedKernel<KD>), Error>
     where
         KS: Kernel + 'static,
         KD: Kernel + 'static,
@@ -770,10 +748,10 @@ impl Flowgraph {
 
         let src = src_slot
             .as_mut()
-            .map(normal_block::as_mut)
             .ok_or(Error::LockError)?
+            .as_mut()
             .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KS>>()
+            .downcast_mut::<WrappedKernel<KS>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "block {:?} has unexpected type for {}",
@@ -783,10 +761,10 @@ impl Flowgraph {
             })?;
         let dst = dst_slot
             .as_mut()
-            .map(normal_block::as_mut)
             .ok_or(Error::LockError)?
+            .as_mut()
             .as_any_mut()
-            .downcast_mut::<NormalWrappedKernel<KD>>()
+            .downcast_mut::<WrappedKernel<KD>>()
             .ok_or_else(|| {
                 Error::ValidationError(format!(
                     "block {:?} has unexpected type for {}",
@@ -1191,14 +1169,8 @@ impl Flowgraph {
                 }
                 std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
             })?;
-        let src_block = src_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
-        let dst_block = dst_slot
-            .as_mut()
-            .map(normal_block::as_mut)
-            .ok_or(Error::LockError)?;
+        let src_block = src_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
+        let dst_block = dst_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
         let reader = dst_block.stream_input(&dst_port_id).map_err(|e| match e {
             Error::InvalidStreamPort(_, port) => {
                 Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst_block_id), port)
@@ -1286,7 +1258,19 @@ impl Flowgraph {
         Ok(())
     }
 
-    pub(crate) fn take_blocks(&mut self) -> Result<Vec<NormalStoredBlock>, Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn Block>>, Error> {
+        let mut blocks = Vec::with_capacity(self.blocks.len());
+        for slot in self.blocks.iter_mut() {
+            if let Some(block) = slot.take() {
+                blocks.push(block);
+            }
+        }
+        Ok(blocks)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn LocalBlock>>, Error> {
         let mut blocks = Vec::with_capacity(self.blocks.len());
         for slot in self.blocks.iter_mut() {
             if let Some(block) = slot.take() {
@@ -1300,7 +1284,7 @@ impl Flowgraph {
     pub(crate) fn spawn_wasm_blocks(
         &mut self,
         main_channel: crate::runtime::channel::mpsc::Sender<crate::runtime::FlowgraphMessage>,
-    ) -> Result<Vec<crate::runtime::scheduler::Task<(BlockId, NormalStoredBlock)>>, Error> {
+    ) -> Result<Vec<crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>>, Error> {
         let blocks = self.take_blocks()?;
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
@@ -1365,9 +1349,29 @@ impl Flowgraph {
             .collect()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn restore_blocks(
         &mut self,
-        blocks: Vec<(BlockId, NormalStoredBlock)>,
+        blocks: Vec<(BlockId, Box<dyn Block>)>,
+    ) -> Result<(), Error> {
+        for (id, block) in blocks {
+            let slot = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
+            if slot.is_some() {
+                return Err(Error::RuntimeError(format!(
+                    "block slot {:?} was restored more than once",
+                    id
+                )));
+            }
+            *slot = Some(block);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn restore_blocks(
+        &mut self,
+        blocks: Vec<(BlockId, Box<dyn LocalBlock>)>,
     ) -> Result<(), Error> {
         for (id, block) in blocks {
             let slot = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;

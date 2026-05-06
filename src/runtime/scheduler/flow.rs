@@ -25,7 +25,7 @@ use std::thread;
 
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
-use crate::runtime::block::BoxBlock;
+use crate::runtime::block::Block;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
@@ -137,9 +137,9 @@ impl FlowScheduler {
 impl Scheduler for FlowScheduler {
     fn run_domain(
         &self,
-        blocks: Vec<BoxBlock>,
+        blocks: Vec<Box<dyn Block>>,
         main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, BoxBlock)>> {
+    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
         let n_blocks = blocks.len();
         let n_cores = self.inner.workers.len();
         let mut spawned: HashSet<BlockId> = HashSet::new();
@@ -220,10 +220,10 @@ impl Default for FlowScheduler {
 
 fn spawn_block_on_executor(
     executor: &FlowExecutor,
-    block: BoxBlock,
+    block: Box<dyn Block>,
     main_channel: Sender<FlowgraphMessage>,
     queue_index: usize,
-) -> Task<(BlockId, BoxBlock)> {
+) -> Task<(BlockId, Box<dyn Block>)> {
     debug_assert!(
         !block.is_blocking(),
         "blocking blocks must be placed in local domains before scheduling"

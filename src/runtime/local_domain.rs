@@ -12,16 +12,16 @@ use crate::runtime::Error;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::FlowgraphMessage;
 #[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::block::LocalBlock;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::channel::mpsc::Sender;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::config;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::BlockInbox;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::local_block::StoredLocalBlock;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type LocalBlockBuilder = Box<dyn FnOnce() -> StoredLocalBlock + Send + 'static>;
+pub(crate) type LocalBlockBuilder = Box<dyn FnOnce() -> Box<dyn LocalBlock> + Send + 'static>;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static> + Send + 'static>;
@@ -31,7 +31,7 @@ type SyncReply<T> = mpsc::Sender<Result<T, Error>>;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct LocalDomainState {
-    pub(crate) blocks: Vec<Option<StoredLocalBlock>>,
+    pub(crate) blocks: Vec<Option<Box<dyn LocalBlock>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,11 +39,6 @@ enum LocalDomainMessage {
     Build {
         local_id: usize,
         builder: LocalBlockBuilder,
-        reply: SyncReply<BlockInbox>,
-    },
-    InsertBlock {
-        local_id: usize,
-        block: StoredLocalBlock,
         reply: SyncReply<BlockInbox>,
     },
     Exec(Box<dyn FnOnce(&mut LocalDomainState) + Send + 'static>),
@@ -87,23 +82,6 @@ impl LocalDomainController {
             .send(LocalDomainMessage::Build {
                 local_id,
                 builder,
-                reply,
-            })
-            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
-        rx.recv()
-            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
-    }
-
-    pub(crate) fn insert_block(
-        &self,
-        local_id: usize,
-        block: StoredLocalBlock,
-    ) -> Result<BlockInbox, Error> {
-        let (reply, rx) = mpsc::channel();
-        self.tx
-            .send(LocalDomainMessage::InsertBlock {
-                local_id,
-                block,
                 reply,
             })
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
@@ -173,15 +151,6 @@ fn run_domain_thread(rx: mpsc::Receiver<LocalDomainMessage>) {
                 let result = insert_at(&mut state.blocks, local_id, block).map(|_| inbox);
                 let _ = reply.send(result);
             }
-            LocalDomainMessage::InsertBlock {
-                local_id,
-                block,
-                reply,
-            } => {
-                let inbox = block.as_ref().inbox();
-                let result = insert_at(&mut state.blocks, local_id, block).map(|_| inbox);
-                let _ = reply.send(result);
-            }
             LocalDomainMessage::Exec(f) => f(&mut state),
             LocalDomainMessage::Run {
                 main_channel,
@@ -200,9 +169,9 @@ fn run_domain_thread(rx: mpsc::Receiver<LocalDomainMessage>) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn insert_at(
-    blocks: &mut Vec<Option<StoredLocalBlock>>,
+    blocks: &mut Vec<Option<Box<dyn LocalBlock>>>,
     local_id: usize,
-    block: StoredLocalBlock,
+    block: Box<dyn LocalBlock>,
 ) -> Result<(), Error> {
     if blocks.len() <= local_id {
         blocks.resize_with(local_id + 1, || None);

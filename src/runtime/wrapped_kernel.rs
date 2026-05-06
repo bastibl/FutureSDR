@@ -13,6 +13,8 @@ use crate::runtime::PortId;
 use crate::runtime::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::Block;
+use crate::runtime::block::BlockObject;
+use crate::runtime::block::LocalBlock;
 use crate::runtime::block_inbox::BlockInboxReader;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::config;
@@ -26,8 +28,6 @@ use crate::runtime::dev::WorkIo;
 use crate::runtime::kernel_interface::KernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
-use crate::runtime::local_block::BlockObject;
-use crate::runtime::local_block::LocalBlock;
 use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.

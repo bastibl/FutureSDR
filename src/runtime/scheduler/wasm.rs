@@ -8,7 +8,7 @@ use std::pin::Pin;
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::channel::mpsc::Sender;
-use crate::runtime::flowgraph::NormalStoredBlock;
+use crate::runtime::dev::BlockObject;
 use crate::runtime::scheduler::Scheduler;
 
 /// WASM Scheduler
@@ -28,9 +28,9 @@ impl WasmScheduler {
 impl Scheduler for WasmScheduler {
     fn run_domain(
         &self,
-        blocks: Vec<NormalStoredBlock>,
+        blocks: Vec<Box<dyn BlockObject>>,
         _main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, NormalStoredBlock)>> {
+    ) -> Vec<Task<(BlockId, Box<dyn BlockObject>)>> {
         drop(blocks);
         panic!("wasm flowgraph blocks are run through Flowgraph's local compatibility shim")
     }

@@ -6,6 +6,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use super::block::Block;
+#[doc(hidden)]
+pub use super::block::BlockObject;
 pub use super::block_inbox::BlockInbox;
 pub use super::block_inbox::BlockNotifier;
 pub use super::block_meta::BlockMeta;
@@ -33,8 +35,6 @@ pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
 pub use super::kernel::SendKernel;
-#[doc(hidden)]
-pub use super::local_block::BlockObject;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
 pub use super::tag::Tag;

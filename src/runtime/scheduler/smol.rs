@@ -11,7 +11,7 @@ use std::thread;
 
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
-use crate::runtime::block::BoxBlock;
+use crate::runtime::block::Block;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
@@ -107,9 +107,9 @@ impl SmolScheduler {
 impl Scheduler for SmolScheduler {
     fn run_domain(
         &self,
-        blocks: Vec<BoxBlock>,
+        blocks: Vec<Box<dyn Block>>,
         main_channel: &Sender<FlowgraphMessage>,
-    ) -> Vec<Task<(BlockId, BoxBlock)>> {
+    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
         // spawn block executors
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
