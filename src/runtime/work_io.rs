@@ -6,6 +6,8 @@ use std::pin::Pin;
 ///
 /// A block sets these fields during `work()` to tell the scheduler whether it
 /// should run again immediately, wait on an async condition, or stop the block.
+/// The runtime creates a fresh value for each scheduling turn, except for the
+/// future stored in [`WorkIo::block_on`] while it is waiting.
 pub struct WorkIo {
     /// Schedule the block again immediately after the current `work()` call.
     ///
@@ -26,6 +28,9 @@ pub struct WorkIo {
 
 impl WorkIo {
     /// Set the future that should wake this block again.
+    ///
+    /// The block may still be called earlier if stream data, a message, or a
+    /// control notification arrives before the future resolves.
     pub fn block_on<F: Future<Output = ()> + Send + 'static>(&mut self, f: F) {
         self.block_on = Some(Box::pin(f));
     }
@@ -55,6 +60,9 @@ pub struct LocalWorkIo {
 
 impl LocalWorkIo {
     /// Set the future that should wake this block again.
+    ///
+    /// The future is polled on the local-domain executor and therefore does not
+    /// need to be `Send`.
     pub fn block_on<F: Future<Output = ()> + 'static>(&mut self, f: F) {
         self.block_on = Some(Box::pin(f));
     }

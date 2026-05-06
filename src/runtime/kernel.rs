@@ -27,6 +27,12 @@ impl<T> SendKernel for T where T: Kernel<work(..): Send, init(..): Send, deinit(
 /// fields and methods; the `Kernel` implementation supplies
 /// initialization, work, and shutdown behavior.
 ///
+/// The runtime calls [`Kernel::init`] once, then repeatedly calls
+/// [`Kernel::work`] until the block marks itself finished or the flowgraph is
+/// stopped, and finally calls [`Kernel::deinit`]. A `work()` implementation
+/// should consume and produce exactly the number of stream items it handled and
+/// use [`WorkIo`] to request another immediate call, wait on a future, or finish.
+///
 /// Normal runtime entry points accept only kernels that also satisfy
 /// [`SendKernel`], i.e., send-capable kernels with `Send` futures.
 ///
@@ -70,6 +76,10 @@ impl<T> SendKernel for T where T: Kernel<work(..): Send, init(..): Send, deinit(
 /// ```
 pub trait Kernel {
     /// Process stream data and emit messages.
+    ///
+    /// Implementations inspect their input buffers, write output buffers, update
+    /// consume/produce counts, optionally post PMTs through [`MessageOutputs`],
+    /// and update [`WorkIo`] flags before returning.
     fn work(
         &mut self,
         _io: &mut WorkIo,
@@ -80,6 +90,10 @@ pub trait Kernel {
     }
 
     /// Initialize the kernel before normal work starts.
+    ///
+    /// This is the place to allocate runtime resources, send initial messages,
+    /// or update [`BlockMeta`]. Stream ports have already been initialized and
+    /// validated when this method is called.
     fn init(
         &mut self,
         _mo: &mut MessageOutputs,
@@ -89,6 +103,10 @@ pub trait Kernel {
     }
 
     /// De-initialize the kernel after work has stopped.
+    ///
+    /// This is called during block shutdown even when the block stopped because
+    /// the flowgraph was terminated. It should release resources owned by the
+    /// block and may post final messages.
     fn deinit(
         &mut self,
         _mo: &mut MessageOutputs,
@@ -102,7 +120,9 @@ pub trait Kernel {
 ///
 /// `LocalKernel` mirrors [`Kernel`] but receives [`LocalWorkIo`], allowing a
 /// block to wait on non-`Send` futures. Such blocks are accepted only by local
-/// flowgraph entry points.
+/// flowgraph entry points. On native targets they run inside a
+/// [`LocalDomain`](crate::runtime::LocalDomain); on WASM all blocks are local to
+/// the browser executor.
 pub trait LocalKernel {
     /// Process stream data and emit messages.
     fn work(

@@ -1,98 +1,84 @@
 FutureSDR Macros
 ================
 
-Macros to make working with FutureSDR a bit nicer.
+Procedural macros for FutureSDR applications and custom blocks.
 
-## Connect Macro
+## `connect!`
 
-Avoid boilerplate when setting up the flowgraph. This macro simplifies adding
-blocks to the flowgraph and connecting them.
-
-Assume you have created a flowgraph `fg` and several blocks (`src`, `shift`, ...) and need to add the block to the flowgraph and connect them. Using the `connect!` macro, this can be done with:
+`connect!` adds blocks to a flowgraph if needed and wires stream, local-stream,
+message, and circuit connections.
 
 ```rust
 connect!(fg,
-    src.out > shift.in;
-    shift > resamp1 > demod;
-    demod > resamp2 > snk;
+    src > head > snk;
+    msg_source | msg_sink;
 );
 ```
 
-It roughly generates code like:
+Default stream ports are `output` and `input`. Default message ports are `out`
+and `in`. Named ports can be written on either side of a connection:
 
 ```rust
-// Add all the blocks to the `Flowgraph`...
-let src = fg.add(src);
-let shift = fg.add(shift);
-let resamp1 = fg.add(resamp1);
-let demod = fg.add(demod);
-let resamp2 = fg.add(resamp2);
-let snk = fg.add(snk);
-
-// ... and connect the ports appropriately
-fg.stream(&src, |b| b.output(), &shift, |b| b.input())?;
-fg.stream(&shift, |b| b.output(), &resamp1, |b| b.input())?;
-fg.stream(&resamp1, |b| b.output(), &demod, |b| b.input())?;
-fg.stream(&demod, |b| b.output(), &resamp2, |b| b.input())?;
-fg.stream(&resamp2, |b| b.output(), &snk, |b| b.input())?;
-```
-
-Connections endpoints are defined by `block.port_name`. Standard names (i.e.,
-`out`/`in`) can be omitted. When ports have different name than standard `in`
-and `out`, one can use following notation.
-
-Stream connections are indicated as `>`, while message connections are indicated as `|`.
-
-Circuit-capable buffers are still connected like normal stream buffers. The `<`
-operator performs the additional circuit-closing step that returns buffers from
-the downstream end to the upstream start.
-
-It is possible to add blocks that have no connections by just putting them on a line separately.
-
-``` rust
-connect!(fg, dummy);
-```
-
-Port names with spaces have to be quoted.
-
-```ignore
 connect!(fg,
-    src."out port" > snk
+    src.samples > input.filter.output > snk;
+    control.out | command.radio;
 );
 ```
 
-## Message Handler Macro
+Connection operators:
 
-Avoid boilerplate when creating message handlers.
+- `>`: send-capable stream connection.
+- `~>`: local-domain-only stream connection for non-`Send` buffers.
+- `|`: message connection.
+- `<`: close an in-place circuit return path after the forward stream path has
+  already been connected.
 
-Assume a block with a message handler that refers to a block function
-`Self::my_handler`.
+Blocks without connections can be listed on their own line:
 
-```ignore
-pub fn new() -> Block {
-    Block::new(
-        BlockMetaBuilder::new("MyBlock").build(),
-        StreamIoBuilder::new().build(),
-        MessageIoBuilder::new()
-            .add_input("handler", Self::my_handler)
-            .build(),
-        Self,
-    )
+```rust
+connect!(fg, monitor);
+```
+
+## `#[derive(Block)]`
+
+Derive the runtime interface for a normal block kernel. Annotated fields become
+stream ports, and struct-level attributes declare message ports:
+
+```rust
+#[derive(Block)]
+#[message_inputs(set_gain)]
+#[message_outputs(done)]
+struct Scale {
+    #[input]
+    input: DefaultCpuReader<f32>,
+    #[output]
+    output: DefaultCpuWriter<f32>,
+    gain: f32,
 }
 ```
 
-The underlying machinery of the handler implementation is rather involved.
-With the `message_handler` macro, it can be simplified to:
+The struct implements `Kernel`; the derive macro supplies the generated port
+metadata, stream initialization and validation, dynamic stream lookup, and
+message-handler dispatch.
 
-```ignore
-#[message_handler]
-async fn my_handler(
-    &mut self,
-    _io: &mut WorkIo,
-    _mo: &mut MessageOutputs,
-    _meta: &mut BlockMeta,
-    _p: Pmt,
-) -> Result<Pmt> {
-    Ok(Pmt::Null)
-}
-```
+Supported attributes:
+
+- `#[input]` and `#[output]` on fields.
+- `#[message_inputs(handler)]`.
+- `#[message_inputs(handler = "port-name")]`.
+- `#[message_outputs(out)]`.
+- `#[blocking]`.
+- `#[type_name(Name)]`.
+- `#[null_kernel]`.
+
+## `#[derive(LocalBlock)]`
+
+`LocalBlock` supports the same attributes as `Block`, but targets the local
+runtime path and `LocalKernel` implementations. Use it for non-`Send` state,
+non-`Send` futures, or local-only buffers.
+
+## `#[async_trait]`
+
+FutureSDR's `async_trait` wrapper uses sendable futures on native targets and
+non-`Send` futures on WASM. It is mainly used by runtime extension traits that
+need the same source code to compile for both targets.

@@ -30,9 +30,11 @@ use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
 
-/// Flow scheduler
+/// Native scheduler with deterministic worker-local block queues.
 ///
-/// Groups blocks and puts them fixed in local queues of worker threads.
+/// `FlowScheduler` assigns normal blocks to per-worker queues instead of
+/// letting all work start in one global queue. This can be useful for
+/// experiments where block placement and queue locality matter.
 #[derive(Clone, Debug)]
 pub struct FlowScheduler {
     inner: Arc<FlowSchedulerInner>,
@@ -64,7 +66,7 @@ impl Drop for FlowSchedulerInner {
 }
 
 impl FlowScheduler {
-    /// Create Flow scheduler
+    /// Create a flow scheduler using its default block-to-worker mapping.
     pub fn new() -> FlowScheduler {
         FlowScheduler::with_pinned_blocks(Vec::new())
     }

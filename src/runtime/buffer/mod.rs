@@ -1,4 +1,13 @@
-//! Buffer Implementations for CPU and Accelerator Memory
+//! Stream buffer traits and built-in buffer implementations.
+//!
+//! Buffers are the transport layer between stream ports. A connection pairs one
+//! writer with one reader; the concrete buffer implementation decides whether
+//! that means CPU slices, in-place buffer chunks, GPU resources, tensors, or
+//! hardware-owned DMA memory.
+//!
+//! Application code normally uses the default buffer types exposed by existing
+//! blocks. Custom block and runtime-extension authors use the traits in this
+//! module to select a buffer family or implement a new transport.
 
 // ==================== BURN =======================
 #[cfg(feature = "burn")]
@@ -43,7 +52,10 @@ use futuresdr::runtime::BlockId;
 use futuresdr::runtime::Error;
 use futuresdr::runtime::PortId;
 
-/// Shared port configuration collected before the port is connected.
+/// Shared stream-port configuration collected before a port is connected.
+///
+/// Buffer implementations use this to remember constraints requested by blocks
+/// before the flowgraph has connected concrete peer endpoints.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PortConfig {
     min_items: Option<usize>,
@@ -68,6 +80,9 @@ impl PortConfig {
     }
 
     /// Minimum number of items requested by the port.
+    ///
+    /// A scheduler should avoid calling the block until this many items are
+    /// available to read or write, unless the peer has finished.
     pub const fn min_items(&self) -> Option<usize> {
         self.min_items
     }
@@ -99,7 +114,7 @@ impl PortConfig {
     }
 }
 
-/// Binding state shared by all ports.
+/// Binding state shared by all stream ports.
 #[derive(Debug, Clone)]
 pub enum PortBinding {
     /// Port is only constructed and not yet attached to a concrete block/port id.
@@ -295,6 +310,10 @@ impl<Q> CircuitReturn<Q> {
 }
 
 /// A backend state that is either disconnected or fully connected.
+///
+/// Buffer implementations use this helper when their reader or writer can be
+/// constructed before the peer endpoint exists, then filled in during
+/// connection setup.
 #[derive(Debug)]
 pub enum ConnectionState<T> {
     /// No backend has been connected yet.
@@ -331,12 +350,16 @@ impl<T> ConnectionState<T> {
     }
 
     /// Get the connected backend, panicking if it is still disconnected.
+    ///
+    /// Call this after `validate()` has proven the buffer is connected.
     pub fn connected(&self) -> &T {
         self.as_ref()
             .expect("buffer backend is disconnected after validation")
     }
 
     /// Get the connected backend mutably, panicking if it is still disconnected.
+    ///
+    /// Call this after `validate()` has proven the buffer is connected.
     pub fn connected_mut(&mut self) -> &mut T {
         self.as_mut()
             .expect("buffer backend is disconnected after validation")
@@ -384,8 +407,14 @@ pub trait BufferReader: Any {
     /// Initialize the reader with its owning block, port id, and inbox.
     fn init(&mut self, block_id: BlockId, port_id: PortId, inbox: BlockInbox);
     /// Validate that this reader is connected and ready to run.
+    ///
+    /// The runtime calls this during flowgraph startup before any block `init()`
+    /// method runs.
     fn validate(&self) -> Result<(), Error>;
     /// Notify upstream writers that this reader is done.
+    ///
+    /// Implementations usually forward this signal through the peer
+    /// [`BlockInbox`] so the upstream block can stop producing to this port.
     fn notify_finished(&mut self) -> impl Future<Output = ()>
     where
         Self: Sized;
@@ -414,6 +443,9 @@ pub trait BufferWriter {
     /// Validate that this writer is connected and ready to run.
     fn validate(&self) -> Result<(), Error>;
     /// Connect the writer to a matching reader.
+    ///
+    /// This is called while the flowgraph is being constructed, before runtime
+    /// startup. Implementations should store peer queues, not transfer samples.
     fn connect(&mut self, dest: &mut Self::Reader);
     /// Connect the writer to a type-erased local reader.
     fn connect_dyn(&mut self, dest: &mut dyn BufferReader) -> Result<(), Error> {
@@ -427,6 +459,9 @@ pub trait BufferWriter {
         }
     }
     /// Notify downstream blocks that we are done.
+    ///
+    /// Implementations usually mark the peer reader as finished and wake the
+    /// downstream block.
     fn notify_finished(&mut self) -> impl Future<Output = ()>;
     /// Get the owning block id.
     fn block_id(&self) -> BlockId;
@@ -478,12 +513,18 @@ pub trait CpuBufferReader: BufferReader + Default {
     /// Item type.
     type Item: CpuSample;
     /// Get readable slice and associated tags.
+    ///
+    /// The returned slice starts at the next unread item. Tags use indices
+    /// relative to this slice.
     fn slice_with_tags(&mut self) -> (&[Self::Item], &Vec<ItemTag>);
     /// Get readable slice.
     fn slice(&mut self) -> &[Self::Item] {
         self.slice_with_tags().0
     }
     /// Mark `n` items as consumed.
+    ///
+    /// `n` must not exceed the length of the last readable slice the block
+    /// decided to consume.
     fn consume(&mut self, n: usize);
     /// Set minimum number of readable items.
     fn set_min_items(&mut self, n: usize);
@@ -508,12 +549,18 @@ pub trait CpuBufferWriter: BufferWriter + Default {
     /// Item type.
     type Item: CpuSample;
     /// Get writable slice and tag sink.
+    ///
+    /// The returned slice starts at the next unproduced output item. Tags added
+    /// through [`Tags`] use indices relative to this slice.
     fn slice_with_tags(&mut self) -> (&mut [Self::Item], Tags<'_>);
     /// Get writable slice.
     fn slice(&mut self) -> &mut [Self::Item] {
         self.slice_with_tags().0
     }
     /// Mark `n` items as produced.
+    ///
+    /// `n` must not exceed the number of items written into the last writable
+    /// slice.
     fn produce(&mut self, n: usize);
     /// Set minimum number of writable items.
     fn set_min_items(&mut self, n: usize);

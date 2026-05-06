@@ -217,6 +217,11 @@ impl LocalDomainBlocks {
 }
 
 /// Handle for a local scheduling domain inside a [`Flowgraph`].
+///
+/// Local domains run their blocks on a dedicated single-thread executor. They
+/// are used for blocks or buffers that are not `Send`, and for blocks marked
+/// as blocking. Stream connections with local-only buffers can only connect
+/// blocks inside the same local domain.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct LocalDomain {
@@ -235,7 +240,11 @@ impl<K> BlockRef<K> {
 }
 
 impl<K: 'static> BlockRef<K> {
-    /// Get a typed handle to the block stored in the given [`Flowgraph`].
+    /// Get typed shared access to the block stored in the given [`Flowgraph`].
+    ///
+    /// This is a convenience wrapper around [`Flowgraph::block`]. It can only
+    /// access a block while the flowgraph owns its block instances, i.e. before
+    /// startup or after a running flowgraph has returned the finished graph.
     pub fn get<'a>(&self, fg: &'a Flowgraph) -> Result<TypedBlockGuard<'a, K>, Error> {
         fg.block(self)
     }
@@ -243,7 +252,8 @@ impl<K: 'static> BlockRef<K> {
     /// Access the typed block through the given [`Flowgraph`].
     ///
     /// Native local-domain blocks are accessed by running the closure on the
-    /// local-domain thread.
+    /// local-domain thread. This keeps non-`Send` block state confined to its
+    /// owning domain.
     pub fn with<R>(
         &self,
         fg: &Flowgraph,
@@ -285,7 +295,9 @@ impl<K: 'static> BlockRef<K> {
     /// Mutably access the typed block through the given [`Flowgraph`].
     ///
     /// Native local-domain blocks are accessed by running the closure on the
-    /// local-domain thread.
+    /// local-domain thread. This requires the flowgraph to be stopped; running
+    /// local-domain blocks cannot be borrowed mutably through the construction
+    /// API.
     pub fn with_mut<R>(
         &self,
         fg: &mut Flowgraph,
@@ -414,6 +426,11 @@ impl Flowgraph {
     }
 
     /// Create a local scheduling domain.
+    ///
+    /// Add non-`Send` or explicitly local blocks to this domain with
+    /// [`Flowgraph::add_local`]. Blocks in one local domain can use local-only
+    /// stream buffers with [`Flowgraph::stream_local`]. Normal send-capable
+    /// stream buffers may connect local-domain blocks to normal blocks.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn local_domain(&mut self) -> LocalDomain {
         let domain_id = self.local_domains.len();
@@ -427,7 +444,9 @@ impl Flowgraph {
     /// Add a block and return a typed reference to it.
     ///
     /// The returned [`BlockRef`] can be used for explicit typed connections or
-    /// for inspecting/mutating the block before the flowgraph is started.
+    /// for inspecting/mutating the block before the flowgraph is started. Blocks
+    /// marked as blocking are placed in an internal local domain so their async
+    /// API may perform blocking work without occupying a normal scheduler worker.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add<K>(&mut self, block: K) -> BlockRef<K>
     where
@@ -593,6 +612,11 @@ impl Flowgraph {
     }
 
     /// Add a block to a local domain.
+    ///
+    /// The closure is executed on the local-domain thread, so it may construct
+    /// non-`Send` state that never leaves that thread. Use this for blocks
+    /// derived with `LocalBlock`, for non-`Send` buffers, or for integrations
+    /// that must remain thread-affine.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add_local<K>(
         &mut self,
@@ -1136,11 +1160,20 @@ impl Flowgraph {
     }
 
     /// Get typed shared access to a block in this flowgraph.
+    ///
+    /// The reference must have been returned by this flowgraph. Access fails
+    /// while a native local-domain block is running because its state lives on
+    /// the local-domain thread.
     pub fn block<K: 'static>(&self, block: &BlockRef<K>) -> Result<TypedBlockGuard<'_, K>, Error> {
         self.get_typed_block(block)
     }
 
     /// Get typed mutable access to a block in this flowgraph.
+    ///
+    /// Use this before startup to configure block state or metadata, or after
+    /// [`Runtime::run`](crate::runtime::Runtime::run) returns the finished
+    /// flowgraph. It cannot borrow a block while the runtime has taken
+    /// ownership of the block tasks.
     pub fn block_mut<K: 'static>(
         &mut self,
         block: &BlockRef<K>,
@@ -1465,7 +1498,10 @@ impl Flowgraph {
     /// Connect stream ports through typed block handles owned by this flowgraph.
     ///
     /// This is the typed block-level stream API used by the
-    /// [connect](futuresdr::runtime::macros::connect) macro.
+    /// [`connect`](crate::runtime::macros::connect) macro.
+    ///
+    /// On native targets the selected writer must be send-capable. Use
+    /// [`Flowgraph::stream_local`] for local-only buffers in a local domain.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn stream<KS, KD, B, FS, FD>(
         &mut self,
@@ -1598,6 +1634,9 @@ impl Flowgraph {
     }
 
     /// Connect stream ports through typed block handles owned by this flowgraph.
+    ///
+    /// On WASM all blocks run on the browser executor, so this accepts the
+    /// primary local buffer traits directly.
     #[cfg(target_arch = "wasm32")]
     pub fn stream<KS, KD, B, FS, FD>(
         &mut self,
@@ -1650,7 +1689,7 @@ impl Flowgraph {
     /// makes the downstream end return buffers to the upstream start.
     ///
     /// This is the typed block-level circuit-closing API used by the
-    /// [connect](futuresdr::runtime::macros::connect) macro's `<` operator.
+    /// [`connect`](crate::runtime::macros::connect) macro's `<` operator.
     pub fn close_circuit<KS, KD, CW, FS, FD>(
         &mut self,
         src_block: &BlockRef<KS>,
@@ -1842,7 +1881,12 @@ impl Flowgraph {
         self.stream_dyn(src_block_id, src_port_id, dst_block_id, dst_port_id)
     }
 
-    /// Make message connection
+    /// Connect a message output port to a message input port.
+    ///
+    /// Message connections are type-erased and may form arbitrary topologies,
+    /// including cycles and self-connections. The destination message input is
+    /// validated immediately; the source output is validated when the connection
+    /// is registered with the source block.
     pub fn message(
         &mut self,
         src_block_id: impl Into<BlockId>,

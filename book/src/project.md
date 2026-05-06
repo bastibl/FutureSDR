@@ -48,8 +48,8 @@ FutureSDR supports several features that you may want to enable.
 - `seify`: enable Seify SDR hardware abstraction
 - `seify_dummy`: enable dummy driver for Seify for use in unit tests
 - `soapy`: enable SoapySDR driver for Seify
-- `tracing_max_level_debug`: disable tracing messages in debug mode (compile-time filter)
-- `tracing_release_max_level_info`: disable debug and tracing messages in release mode (compile-time filter)
+- `tracing_max_level_debug`: compile out `trace` messages in debug mode
+- `tracing_release_max_level_info`: compile out messages more detailed than `info` in release mode
 - `vulkan`: enable Vulkan buffers and blocks
 - `wgpu`: enable WGPU buffers and blocks
 - `zeromq`: enable ZeroMQ source and sink

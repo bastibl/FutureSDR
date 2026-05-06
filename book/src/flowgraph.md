@@ -102,6 +102,38 @@ let fg = Runtime::new().run(fg)?;
 
 Use `connect!` for normal application code. The explicit form is useful when block types are selected dynamically or when it helps to understand the lower-level API.
 
+## Local Domains
+
+On native targets, normal blocks and buffers must be send-capable because the scheduler may move block tasks between worker threads. A local domain gives you a single-thread execution island for blocks or buffers that are not `Send`, or for integrations that must stay on one thread.
+
+Create a local domain, add blocks with `add_local()`, and connect local-only stream buffers with `~>` in `connect!` or `stream_local()` manually:
+
+```rust
+use futuresdr::prelude::*;
+use futuresdr::runtime::buffer::LocalCpuReader;
+use futuresdr::runtime::buffer::LocalCpuWriter;
+
+let mut fg = Flowgraph::new();
+let local = fg.local_domain();
+
+let src = fg.add_local(local, || {
+    NullSource::<f32, LocalCpuWriter<f32>>::new()
+});
+let snk = fg.add_local(local, || {
+    NullSink::<f32, LocalCpuReader<f32>>::new()
+});
+
+fg.stream_local(&src, |b| b.output(), &snk, |b| b.input())?;
+```
+
+The `~>` macro operator is the equivalent typed local-stream connection:
+
+```rust
+connect!(fg, src ~> snk);
+```
+
+Local-only stream connections must stay inside one local domain. Send-capable stream buffers can still connect normal blocks and local-domain blocks. Message connections are not restricted by local domains.
+
 ## Accessing Blocks
 
 When a block is added to a flowgraph, FutureSDR returns a `BlockRef<T>`. A block reference is a lightweight typed identifier. It is copyable, can be converted to a `BlockId`, and can be used to access the block while the flowgraph owns it.

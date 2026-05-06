@@ -3,6 +3,9 @@ use serde::Serialize;
 use std::fmt;
 
 /// Identifier of a flowgraph known to a runtime control handle.
+///
+/// Runtime handles assign these ids as flowgraphs are registered with the
+/// control plane. They are used by the native REST API and by remote clients.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowgraphId(pub usize);
 

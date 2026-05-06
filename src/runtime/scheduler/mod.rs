@@ -1,4 +1,9 @@
-//! Flowgraph Scheduler Trait and Implementations
+//! Scheduler trait and built-in scheduler implementations.
+//!
+//! Schedulers execute normal flowgraph block tasks and general async tasks
+//! spawned through [`crate::runtime::Runtime`]. Most applications use the
+//! default scheduler selected by `Runtime::new`; custom schedulers implement
+//! [`crate::runtime::scheduler::Scheduler`].
 
 #[cfg(feature = "flow_scheduler")]
 mod flow;

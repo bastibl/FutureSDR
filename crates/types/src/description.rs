@@ -7,7 +7,8 @@ use crate::PortId;
 /// Serializable description of a running or constructed flowgraph.
 ///
 /// The control port and runtime flowgraph handles use this shape to report
-/// block metadata and type-erased connections.
+/// block metadata and type-erased connections. Stream and message edge tuples
+/// are ordered as `(src_block, src_port, dst_block, dst_port)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowgraphDescription {
     /// Blocks in the flowgraph.
@@ -38,7 +39,7 @@ pub struct BlockDescription {
     pub message_inputs: Vec<String>,
     /// Message output port names.
     pub message_outputs: Vec<String>,
-    /// Blocking
+    /// Whether the block runs on a blocking/local execution path.
     ///
     /// Blocking blocks have an async API but are spawned in a separate thread, i.e., it is ok to
     /// block inside the async function.

@@ -1,11 +1,9 @@
 //! Build, run, and control SDR flowgraphs.
 //!
-//! This module contains the user-facing runtime APIs for:
-//! - constructing [`Flowgraph`]s
-//! - starting them on a [`Runtime`]
-//! - interacting with running graphs through
-//!   [`RunningFlowgraph`]() and handles
-//! - inspecting finished graphs
+//! This module is the main application-facing runtime surface. It contains the
+//! types used to construct [`Flowgraph`]s, start them on a [`Runtime`],
+//! interact with running graphs through [`RunningFlowgraph`] and
+//! [`FlowgraphHandle`], and inspect a flowgraph again after it has stopped.
 //!
 //! For custom blocks and runtime extensions, see
 //! [`dev`].
@@ -109,19 +107,22 @@ pub mod __private {
     pub use super::kernel_interface::SendKernelInterface;
 }
 
-/// Generic Result Type used for the [`crate::runtime::dev::Kernel`] trait.
+/// Generic result type used by runtime APIs and custom block kernels.
 ///
-/// At the moment, a type alias for [`anyhow::Result`].
+/// FutureSDR intentionally uses [`anyhow::Result`] for most kernel-level and
+/// application-level fallible operations, since user block implementations often
+/// need to return errors from arbitrary libraries.
 pub type Result<T, E = anyhow::Error> = anyhow::Result<T, E>;
 
-/// Initialize runtime
+/// Initialize global runtime services.
 ///
-/// This function does not have to be called. Once a [`Runtime`] is started,
-/// this function is called automatically.
+/// Applications usually do not need to call this function. Constructing a
+/// [`Runtime`] calls it automatically.
 ///
-/// At the moment, this only enables logging. Calling it manually, allows using
-/// FutureSDR logging before a [`Runtime`] is started.
-///
+/// Currently this initializes FutureSDR's default logging subscriber if no
+/// tracing subscriber is already installed. Calling it manually is useful when
+/// an application wants to use FutureSDR's re-exported `tracing` macros before
+/// constructing a runtime. Repeated calls are harmless.
 pub fn init() {
     logging::init();
 }
@@ -221,51 +222,51 @@ pub enum BlockMessage {
     },
 }
 
-/// FutureSDR Error
+/// Errors returned by runtime control, connection, and validation APIs.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
-    /// Block does not exist
+    /// A block id does not exist in the target flowgraph.
     #[error("Block {:?} does not exist", 0)]
     InvalidBlock(BlockId),
-    /// Flowgraph does not exist or terminated
+    /// The target flowgraph has already terminated or its control inbox closed.
     #[error("Flowgraph terminated")]
     FlowgraphTerminated,
-    /// Message port does not exist
+    /// A message port does not exist on the referenced block.
     #[error("Block '{0}' does not have message port '{1:?}'")]
     InvalidMessagePort(BlockPortCtx, PortId),
-    /// Stream port does not exist
+    /// A stream port does not exist on the referenced block.
     #[error("Block '{0}' does not have stream port '{1:?}'")]
     InvalidStreamPort(BlockPortCtx, PortId),
-    /// Invalid Parameter
+    /// A parameter value was rejected by a runtime API.
     #[error("Invalid Parameter")]
     InvalidParameter,
-    /// Error in handler
+    /// A message handler returned an error.
     #[error("Error in message handler: {0}")]
     HandlerError(String),
-    /// Block is already terminated
+    /// The target block has already terminated.
     #[error("Block already terminated")]
     BlockTerminated,
-    /// Runtime error
+    /// Internal runtime failure or unexpected async-channel shutdown.
     #[error("Runtime error ({0})")]
     RuntimeError(String),
-    /// Validation error
+    /// Flowgraph, block, or buffer validation failed before or during startup.
     #[error("Validation error {0}")]
     ValidationError(String),
-    /// PMT Conversion Error
+    /// Conversion to or from a [`Pmt`] failed.
     #[error("PMT conversion error")]
     PmtConversionError,
-    /// Duplicate block name
+    /// Another block already uses this instance name.
     #[error("A Block with an instance name of '{0}' already exists")]
     DuplicateBlockName(String),
-    /// Error while locking a Mutex that should not be contended or poisoned
+    /// A lock that should be immediately available was poisoned or contended.
     #[error("Error while locking a Mutex that should not be contended or poisoned")]
     LockError,
-    /// Seify Args Conversion Error
+    /// Conversion between Seify arguments and PMTs failed.
     #[cfg(feature = "seify")]
     #[error("Seify Args conversion error")]
     SeifyArgsConversionError,
-    /// Seify Error
+    /// Error returned by the Seify SDR hardware abstraction layer.
     #[cfg(feature = "seify")]
     #[error("Seify error ({0})")]
     SeifyError(String),

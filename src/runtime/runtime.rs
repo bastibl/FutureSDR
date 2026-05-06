@@ -45,7 +45,12 @@ pub type DefaultScheduler = WasmScheduler;
 ///
 /// A [`Runtime`] owns a scheduler, starts flowgraphs, and provides a control
 /// port on native targets. It is generic over the scheduler implementation, but
-/// most applications can use [`Runtime::new`] with the default scheduler.
+/// most applications should use [`Runtime::new`] with the default scheduler.
+///
+/// Use [`Runtime::run`] or [`Runtime::run_async`] when the caller should wait
+/// until a flowgraph finishes. Use [`Runtime::start`] or
+/// [`Runtime::start_async`] when the caller needs a [`RunningFlowgraph`] handle
+/// for live message calls, descriptions, or shutdown.
 pub struct Runtime<S = DefaultScheduler> {
     scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
@@ -56,16 +61,27 @@ pub struct Runtime<S = DefaultScheduler> {
 #[cfg(not(target_arch = "wasm32"))]
 impl Runtime<DefaultScheduler> {
     /// Construct a new [`Runtime`] using [`DefaultScheduler::default()`].
+    ///
+    /// On native targets this also initializes logging and starts the integrated
+    /// control-port server when the runtime configuration enables it.
     pub fn new() -> Self {
         Self::with_custom_routes(Router::new())
     }
 
     /// Block the current thread until a future completes.
+    ///
+    /// This is a small convenience wrapper around the native async executor and
+    /// is useful when synchronous application code needs to call async runtime
+    /// handle methods.
     pub fn block_on<T>(future: impl Future<Output = T>) -> T {
         async_io::block_on(future)
     }
 
-    /// Construct a runtime with additional routes for the integrated webserver.
+    /// Construct a runtime with additional routes for the integrated web server.
+    ///
+    /// The routes are merged into the native control-port server. Use this for
+    /// application-specific HTTP APIs or UI assets that should be served by the
+    /// same process.
     pub fn with_custom_routes(routes: Router) -> Self {
         Self::with_config(DefaultScheduler::default(), routes)
     }
@@ -80,6 +96,9 @@ impl<S> Drop for Runtime<S> {
 #[cfg(target_arch = "wasm32")]
 impl Runtime<DefaultScheduler> {
     /// Construct a runtime using the WASM scheduler.
+    ///
+    /// WASM runtimes run on the browser executor and do not start a native
+    /// control-port server.
     pub fn new() -> Self {
         Self::with_scheduler(DefaultScheduler::default())
     }
@@ -92,7 +111,10 @@ impl Default for Runtime<DefaultScheduler> {
 }
 
 impl<S: Scheduler> Runtime<S> {
-    /// Spawn an async task on the runtime scheduler.
+    /// Spawn an async task on the runtime scheduler and return its task handle.
+    ///
+    /// The task is unrelated to any particular flowgraph. Dropping the returned
+    /// task cancels or detaches according to the underlying scheduler task type.
     pub fn spawn<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
@@ -115,6 +137,10 @@ impl<S: Scheduler> Runtime<S> {
     }
 
     /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
+    ///
+    /// This consumes the input flowgraph, runs it until every block finishes or
+    /// an error stops execution, and returns the finished flowgraph so block
+    /// state can be inspected.
     pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
         self.start_async(fg).await?.wait_async().await
     }
@@ -125,6 +151,10 @@ impl<S: Scheduler> Runtime<S> {
     }
 
     /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
+    ///
+    /// Handles share the same scheduler and control-plane registry as this
+    /// runtime. They are intended for web handlers, callbacks, and other async
+    /// tasks that cannot borrow the runtime directly.
     pub fn handle(&self) -> RuntimeHandle<S> {
         RuntimeHandle {
             scheduler: self.scheduler.clone(),
@@ -135,7 +165,7 @@ impl<S: Scheduler> Runtime<S> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<S: Scheduler> Runtime<S> {
-    /// Spawn an async task and detach its handle.
+    /// Spawn an async task on the runtime scheduler and detach it immediately.
     pub fn spawn_background<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
@@ -151,6 +181,8 @@ impl<S: Scheduler> Runtime<S> {
     }
 
     /// Start a [`Flowgraph`] on the [`Runtime`] and block until it terminates.
+    ///
+    /// This is the synchronous counterpart of [`Runtime::run_async`].
     pub fn run(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
         let running = async_io::block_on(self.start_async(fg))?;
         running.wait()
@@ -160,11 +192,14 @@ impl<S: Scheduler> Runtime<S> {
 #[cfg(not(target_arch = "wasm32"))]
 impl<S: Scheduler + Sync> Runtime<S> {
     /// Construct a [`Runtime`] with a custom [`Scheduler`].
+    ///
+    /// This uses the normal native control-port routes without adding
+    /// application-specific routes.
     pub fn with_scheduler(scheduler: S) -> Self {
         Self::with_config(scheduler, Router::new())
     }
 
-    /// Construct a runtime with a custom scheduler and webserver routes.
+    /// Construct a runtime with a custom scheduler and web server routes.
     pub fn with_config(scheduler: S, routes: Router) -> Self {
         runtime::init();
 
@@ -230,7 +265,11 @@ impl<S> PartialEq for RuntimeHandle<S> {
 }
 
 impl<S: Scheduler> RuntimeHandle<S> {
-    /// Start a [`Flowgraph`] on the runtime.
+    /// Start a [`Flowgraph`] on the runtime and register it with the control plane.
+    ///
+    /// This has the same startup semantics as [`Runtime::start_async`]. The
+    /// returned flowgraph is available through [`RuntimeHandle::get_flowgraph`]
+    /// and the native control-port API until it terminates.
     pub async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
         let running = start_flowgraph(self.scheduler.clone(), fg).await?;
         self.add_flowgraph(running.handle()).await;
@@ -245,7 +284,11 @@ impl<S: Scheduler> RuntimeHandle<S> {
         FlowgraphId(l)
     }
 
-    /// Get the control handle for a running flowgraph by id.
+    /// Get the control handle for a flowgraph by runtime registry id.
+    ///
+    /// The id is the position assigned when the flowgraph was registered with
+    /// the runtime handle. The returned handle may still fail later if the
+    /// flowgraph has already terminated.
     pub async fn get_flowgraph(&self, id: FlowgraphId) -> Option<FlowgraphHandle> {
         self.flowgraphs.lock().await.get(id.0).cloned()
     }

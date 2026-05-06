@@ -2,6 +2,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Identifier of a stream or message port on a block.
+///
+/// Port ids are string names. They are intentionally shared between stream and
+/// message APIs because the target API decides which port namespace to inspect.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortId(String);
 

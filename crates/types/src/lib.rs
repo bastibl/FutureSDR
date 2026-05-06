@@ -1,8 +1,13 @@
 #![warn(missing_docs)]
 //! # FutureSDR Types
 //!
-//! FutureSDR types that are used by the runtime and also exposed for
-//! interaction with the outside world through the flowgraph's REST API.
+//! Shared serializable types used by the FutureSDR runtime, control port, and
+//! remote clients.
+//!
+//! The most common type is [`Pmt`], the polymorphic message value passed to
+//! message handlers and serialized by the REST API. The id and description
+//! types are stable shapes for inspecting and controlling flowgraphs without
+//! depending on concrete block Rust types.
 mod description;
 pub use description::BlockDescription;
 pub use description::FlowgraphDescription;

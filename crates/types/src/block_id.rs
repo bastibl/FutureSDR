@@ -5,7 +5,8 @@ use serde::Serialize;
 ///
 /// Block ids are assigned when blocks are added to a flowgraph. They are useful
 /// for type-erased connections, runtime descriptions, and message calls to a
-/// running flowgraph.
+/// running flowgraph. The numeric value is only meaningful together with the
+/// flowgraph that assigned it.
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct BlockId(pub usize);
 

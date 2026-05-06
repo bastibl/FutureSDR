@@ -1,4 +1,15 @@
-//! Macros to make working with FutureSDR a bit nicer.
+//! Procedural macros for FutureSDR applications and custom blocks.
+//!
+//! The main entry points are:
+//!
+//! - `connect!`, which adds blocks to a flowgraph and wires stream, local
+//!   stream, message, and circuit connections.
+//! - `#[derive(Block)]`, which generates the runtime interface for normal
+//!   send-capable block kernels.
+//! - `#[derive(LocalBlock)]`, which generates the runtime interface for
+//!   explicitly local block kernels.
+//! - `#[async_trait]`, a small compatibility wrapper for async traits that use
+//!   non-`Send` futures on WASM.
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::Attribute;
@@ -24,12 +35,14 @@ use syn::token;
 
 /// Avoid boilerplate when setting up the flowgraph.
 ///
-/// This macro simplifies adding blocks to the flowgraph and connecting them.
-/// Assume you have created a flowgraph `fg` and several blocks (`src`, `shift`,
-/// ...) and need to add the block to the flowgraph and connect them. Using the
-/// `connect!` macro, this can be done with:
+/// `connect!` adds all mentioned blocks to the flowgraph if needed and then
+/// records the requested connections. It leaves the local variable names bound
+/// to typed block references, so they can be used later for inspection or
+/// message calls.
 ///
 /// ```ignore
+/// let mut fg = Flowgraph::new();
+///
 /// connect!(fg,
 ///     src.out > shift.in;
 ///     shift > resamp1 > demod;
@@ -56,9 +69,10 @@ use syn::token;
 /// fg.stream(&resamp2, |b| b.output(), &snk, |b| b.input())?;
 /// ```
 ///
-/// Connections endpoints are defined by `block.port_name`. Standard names
-/// (i.e., `out`/`in`) can be omitted. When ports have different name than
-/// standard `in` and `out`, one can use following notation.
+/// Connection endpoints are defined by `block.port_name`. Standard stream port
+/// names can be omitted: a missing source port means `output()`, and a missing
+/// destination port means `input()`. Message endpoints default to `"out"` and
+/// `"in"`.
 ///
 /// Send-capable stream connections are indicated as `>`, while local-domain-only
 /// stream connections for non-`Send` buffers are indicated as `~>`. Message
@@ -72,6 +86,13 @@ use syn::token;
 ///
 /// ```ignore
 /// connect!(fg, src > input.foo.output > snk);
+/// ```
+///
+/// Indexed stream ports generated from `Vec<T>` or `[T; N]` fields can be
+/// selected with `field[index]`:
+///
+/// ```ignore
+/// connect!(fg, src.output[0] > input.snk);
 /// ```
 ///
 /// It is possible to add blocks that have no connections by just putting them
@@ -449,7 +470,42 @@ fn port_bound_types(ty: &Type) -> Vec<Type> {
 //=========================================================================
 // BLOCK MACRO
 //=========================================================================
-/// Block Macro
+/// Derive the runtime interface for a normal block kernel.
+///
+/// `#[derive(Block)]` is used on a struct that implements `Kernel`. Fields
+/// marked with `#[input]` or `#[output]` become stream ports. Struct-level
+/// `#[message_inputs(...)]` and `#[message_outputs(...)]` attributes declare
+/// message ports.
+///
+/// ```ignore
+/// #[derive(Block)]
+/// #[message_inputs(set_gain)]
+/// #[message_outputs(done)]
+/// struct Scale {
+///     #[input]
+///     input: DefaultCpuReader<f32>,
+///     #[output]
+///     output: DefaultCpuWriter<f32>,
+///     gain: f32,
+/// }
+/// ```
+///
+/// Generated stream port getter methods have the same names as the annotated
+/// fields and are used by the `connect!` macro. `Vec<T>` and arrays of buffer
+/// ports are expanded into indexed port names such as `outputs[0]`; tuples are
+/// exposed through dynamic port names such as `ports.1`.
+///
+/// Supported struct attributes:
+///
+/// - `#[message_inputs(handler)]`: call `self.handler(...)` for a message input
+///   named `handler`.
+/// - `#[message_inputs(handler = "port-name")]`: expose a message input under a
+///   name that differs from the Rust method name.
+/// - `#[message_outputs(out)]`: declare a message output port named `out`.
+/// - `#[blocking]`: run this block on the blocking/local execution path.
+/// - `#[type_name(Name)]`: override the type name exposed in runtime
+///   descriptions.
+/// - `#[null_kernel]`: generate an empty `Kernel` implementation.
 #[proc_macro_derive(
     Block,
     attributes(
@@ -466,7 +522,11 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     derive_block_impl(input, false)
 }
 
-/// Local Block Macro
+/// Derive the runtime interface for an explicitly local block kernel.
+///
+/// This is the local counterpart to `#[derive(Block)]`. It supports the same
+/// port and metadata attributes, but generated message handlers receive
+/// `LocalWorkIo` and the block is added through local flowgraph entry points.
 #[proc_macro_derive(
     LocalBlock,
     attributes(

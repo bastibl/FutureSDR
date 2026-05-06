@@ -18,9 +18,11 @@ use crate::runtime::scheduler::Scheduler;
 
 static SMOL: Lazy<Mutex<Slab<Arc<Executor<'_>>>>> = Lazy::new(|| Mutex::new(Slab::new()));
 
-/// Smol Scheduler
+/// Native scheduler backed by the `smol` async executor.
 ///
-/// Default scheduler of the smol async runtime
+/// This is the default scheduler on native targets. It runs normal block tasks
+/// and runtime-spawned async tasks on a shared executor serviced by a fixed set
+/// of worker threads.
 #[derive(Clone, Debug)]
 pub struct SmolScheduler {
     inner: Arc<SmolSchedulerInner>,
@@ -53,11 +55,11 @@ impl Drop for SmolSchedulerInner {
 }
 
 impl SmolScheduler {
-    /// Create smol scheduler
+    /// Create a scheduler with a fixed number of worker threads.
     ///
-    /// ## Parameter
-    /// - `n_executors`: number of worker threads
-    /// - `pin_executors`: pin worker threads to CPUs?
+    /// If `pin_executors` is true, workers are pinned to detected CPU cores in
+    /// order, cycling through the core list when `n_executors` is larger than
+    /// the number of detected cores.
     pub fn new(n_executors: usize, pin_executors: bool) -> SmolScheduler {
         let mut slab = SMOL.lock().unwrap();
         let executor = Arc::new(Executor::new());

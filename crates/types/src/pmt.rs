@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
 
-/// PMT Any trait
+/// Trait object support for type-erased in-process PMT payloads.
 ///
-/// This trait has to be implemented by types that should be used with [`Pmt::Any`].
+/// Any clonable, sendable, sync, `'static` type implements this trait
+/// automatically and can be stored in [`Pmt::Any`]. `Pmt::Any` is not serialized
+/// and is intended for message paths that stay inside one process.
 pub trait PmtAny: Any + DynClone + Send + Sync + 'static {
     /// Cast to [`Any`](std::any::Any)
     fn as_any(&self) -> &dyn Any;
@@ -65,6 +67,10 @@ impl dyn PmtAny {
 /// control calls. Most variants serialize normally; [`Pmt::Any`] is skipped
 /// during serialization and is intended only for in-process values.
 ///
+/// String parsing accepts a few short forms such as `Ok`, `Null`, `true`, and
+/// `false`, plus serde-compatible enum JSON such as `{ "U32": 123 }` and the
+/// compact `U32: 123` syntax used by simple UIs.
+///
 /// ```
 /// use futuresdr_types::{Pmt, PmtKind};
 ///
@@ -76,33 +82,33 @@ impl dyn PmtAny {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Pmt {
-    /// Ok.
+    /// Successful operation without additional payload.
     Ok,
-    /// Invalid value
+    /// Invalid value.
     ///
-    /// Mainly used as the return type in message handlers, when the parameter is outside the
-    /// allowed range.
+    /// Mainly used as the return type in message handlers when the parameter is
+    /// outside the allowed range.
     InvalidValue,
-    /// Null
+    /// Absence of a value.
     ///
     /// Used, for example, as the input type, when the message handler is mainly about the return
     /// type.
     Null,
-    /// String
+    /// UTF-8 string.
     String(String),
-    /// Boolean
+    /// Boolean.
     Bool(bool),
-    /// Usize
+    /// Native-sized unsigned integer.
     Usize(usize),
-    /// Isize
+    /// Native-sized signed integer.
     Isize(isize),
-    /// U32, 32-bit unsigned integer
+    /// 32-bit unsigned integer.
     U32(u32),
-    /// U64, 64-bit unsigned integer
+    /// 64-bit unsigned integer.
     U64(u64),
-    /// F32, 32-bit float
+    /// 32-bit float.
     F32(f32),
-    /// F64, 64-bit float
+    /// 64-bit float.
     F64(f64),
     /// Vector of 32-bit complex floats.
     VecCF32(Vec<Complex32>),
@@ -110,12 +116,10 @@ pub enum Pmt {
     VecF32(Vec<f32>),
     /// Vector of 64-bit unsigned integers.
     VecU64(Vec<u64>),
-    /// Binary data blob
+    /// Binary data blob.
     Blob(Vec<u8>),
-    /// Vector of [`Pmts`](Pmt)
+    /// Vector of PMT values.
     VecPmt(Vec<Pmt>),
-    /// Finished
-    ///
     /// Runtime message used to signal that a connected block finished.
     Finished,
     /// Map from string keys to PMT values.
@@ -237,6 +241,9 @@ impl std::str::FromStr for Pmt {
 
 impl Pmt {
     /// Create a [`Pmt`] by parsing a string into a specific [`PmtKind`].
+    ///
+    /// Only scalar kinds that have a straightforward textual representation are
+    /// supported here. Use [`std::str::FromStr`] for full PMT JSON parsing.
     pub fn from_string(s: &str, t: &PmtKind) -> Option<Pmt> {
         match t {
             PmtKind::U32 => {
@@ -275,7 +282,8 @@ impl Pmt {
 
 /// PMT conversion error.
 ///
-/// This error is returned, if conversion to/from PMTs fail.
+/// This error is returned when parsing or `TryFrom<Pmt>` conversion cannot
+/// produce the requested target type without changing the PMT kind.
 #[derive(Debug, Clone, Error, PartialEq)]
 #[error("PMT conversion error")]
 pub struct PmtConversionError;

@@ -7,7 +7,7 @@ can be used as the base for web UIs or any other tool supporting REST (e.g., Cur
 
 *Control port* provides a REST API to expose the flowgraph structure and enable remote interaction.
 It is enabled by default, but you can configure it explicitly through the
-[configuration](./running.md#configuration), for example:
+[configuration](running_apps.md#configuration), for example:
 
 ```toml
 ctrlport_enable = true
@@ -68,7 +68,7 @@ curl http://127.0.0.1:1337/api/fg/0/ | jq
         "tx"
       ],
       "blocking": false
-    },
+    }
   ],
   "stream_edges": [
     [
@@ -76,7 +76,7 @@ curl http://127.0.0.1:1337/api/fg/0/ | jq
       "output",
       2,
       "input"
-    ],
+    ]
   ],
   "message_edges": [
     [
@@ -84,7 +84,7 @@ curl http://127.0.0.1:1337/api/fg/0/ | jq
       "tx",
       0,
       "tx"
-    ],
+    ]
   ]
 }
 ```
@@ -189,7 +189,7 @@ for freq in itertools.cycle(FREQUENCIES):
 FutureSDR comes with a minimal, work-in-progress web UI, implemented in the *prophecy* crate.
 It comes pre-compiled at `crates/prophecy/dist`.
 When FutureSDR is started with control port enabled, you can specify the
-`frontend_path` [configuration](./running.md#configuration) option to serve a custom
+`frontend_path` [configuration](running_apps.md#configuration) option to serve a custom
 frontend at the root path of the control-port URL (e.g., `127.0.0.1:1337`).
 
 Using the REST API, it is straightforward to build custom UIs.

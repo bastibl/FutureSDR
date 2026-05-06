@@ -28,12 +28,12 @@ or message-based data processing. These blocks can be combined into a
 
 **User Documentation** explains how to:
 
-- Use an existing FutureSDR application (an example or a thrid party implementation).
+- Use an existing FutureSDR application (an example or a third-party implementation).
 - Interface a FutureSDR application through the built-in or a custom web interface.
 - Interface a FutureSDR application through the REST API (e.g., Curl or a custom Python script).
 
 
-**Application Development** explains how to;
+**Application Development** explains how to:
 
 - Create FutureSDR applications using existing blocks.
 - Interact with running flowgraphs through Rust code.
@@ -44,4 +44,3 @@ or message-based data processing. These blocks can be combined into a
 
 - Implement custom blocks for specific technologies or custom integrations.
 - Extend FutureSDR with custom buffers or custom schedulers.
-

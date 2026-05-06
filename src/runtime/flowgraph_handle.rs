@@ -16,7 +16,11 @@ use futuresdr::runtime::Timer;
 ///
 /// Use this handle to post or call message handlers, inspect the running
 /// flowgraph, or request shutdown. `post` only waits until the runtime accepts
-/// the message, while `call` waits for the handler result.
+/// and forwards the message, while `call` waits for the handler result.
+///
+/// A handle remains cheap to clone, but operations can fail with
+/// [`Error::FlowgraphTerminated`] or [`Error::BlockTerminated`] after the graph
+/// or target block has stopped.
 #[derive(Debug, Clone)]
 pub struct FlowgraphHandle {
     inbox: Sender<FlowgraphMessage>,
@@ -44,6 +48,9 @@ impl FlowgraphHandle {
     }
 
     /// Get a handle scoped to one block in the running flowgraph.
+    ///
+    /// The block id is not validated until an operation is performed on the
+    /// returned handle.
     pub fn block(&self, block_id: impl Into<BlockId>) -> FlowgraphBlockHandle {
         FlowgraphBlockHandle {
             flowgraph: self.clone(),
@@ -100,6 +107,10 @@ impl FlowgraphHandle {
     }
 
     /// Describe the running flowgraph.
+    ///
+    /// The description contains block metadata plus type-erased stream and
+    /// message edges. It is the same shape served by the native control-port
+    /// API.
     pub async fn describe(&self) -> Result<FlowgraphDescription, Error> {
         let (tx, rx) = oneshot::channel::<FlowgraphDescription>();
         self.inbox
@@ -139,6 +150,11 @@ impl FlowgraphHandle {
     /// Stop the [`crate::runtime::Flowgraph`].
     ///
     /// Send a terminate message to the [`crate::runtime::Flowgraph`] and wait until it shuts down.
+    ///
+    /// This method observes shutdown through the control channel closing. It
+    /// does not return the finished [`crate::runtime::Flowgraph`]; use
+    /// [`crate::runtime::RunningFlowgraph::stop_and_wait`] when the caller needs
+    /// to recover and inspect the finished graph.
     pub async fn stop_and_wait(&self) -> Result<(), Error> {
         self.stop().await.map_err(|_| Error::FlowgraphTerminated)?;
         while !self.inbox.is_closed() {

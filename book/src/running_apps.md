@@ -112,12 +112,12 @@ FUTURESDR_LOG=info,lora::decoder=off cargo run --release --bin rx
 
 
 > [!WARNING]
-> By default, FutureSDR sets feature flags that disable `tracing` level log messages in debug mode and everything more detailed than `info` in release mode. This is a *compile time* filter!
+> By default, FutureSDR sets feature flags that apply compile-time tracing filters: `trace` messages are disabled in debug builds, and messages more detailed than `info` are disabled in release builds.
 >
 > Also, these flags are transitive! If you want more detailed logs in your application, disable default features for the FutureSDR dependency.
-> ```rustc
+> ```toml
 > [dependencies]
-> futuresdr = { version = ..., default-features=false, features = ["foo", "bar"] }
+> futuresdr = { version = "...", default-features = false, features = ["audio", "seify"] }
 > ```
 
 ## Command Line Arguments
@@ -175,10 +175,7 @@ cargo run --release --bin receiver -- -a soapy_driver=rtlsdr
 
 > [!IMPORTANT]
 > Seify will forward all arguments to Soapy. Only the `driver` argument has to be prefixed to `soapy_driver` to differentiate it from Seify driver selection.
-> ```
 
 > [!IMPORTANT]
 > Soapy might select the wrong device even if only one SDR is plugged into your PC.
 > Use the `-a/--argument` to select the Soapy driver, e.g., `-a soapy_driver=rtlsdr`.
-> ```
-

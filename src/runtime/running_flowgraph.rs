@@ -16,6 +16,10 @@ use crate::runtime::Result;
 /// It can be split into a [`FlowgraphHandle`] and [`FlowgraphTask`], or used
 /// directly to post messages, request descriptions, stop the flowgraph, and
 /// wait for its finished [`Flowgraph`].
+///
+/// Waiting consumes `RunningFlowgraph` because the finished flowgraph is
+/// returned to the caller. Clone [`RunningFlowgraph::handle`] first when other
+/// tasks need to keep sending control messages while one task waits.
 pub struct RunningFlowgraph {
     handle: FlowgraphHandle,
     task: FlowgraphTask,
@@ -37,6 +41,9 @@ impl RunningFlowgraph {
     }
 
     /// Split the running flowgraph into its completion task and control handle.
+    ///
+    /// This is useful when one task should own the wait path while other code
+    /// keeps a handle for control messages.
     pub fn split(self) -> (FlowgraphTask, FlowgraphHandle) {
         (self.task, self.handle)
     }
@@ -91,6 +98,9 @@ impl RunningFlowgraph {
     }
 
     /// Stop the running flowgraph and wait until it terminates.
+    ///
+    /// Returns the finished [`Flowgraph`] after all block tasks have stopped and
+    /// their block state has been restored into the graph.
     pub async fn stop_and_wait(self) -> Result<Flowgraph, Error> {
         self.handle.stop().await?;
         self.wait_async().await

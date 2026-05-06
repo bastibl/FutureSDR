@@ -28,9 +28,12 @@ use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
-/// Mocker for a block
+/// Native test harness for running one block without a [`Runtime`](crate::runtime::Runtime).
 ///
-/// A harness to run a block without a runtime. Used for unit tests and benchmarking.
+/// `Mocker` wraps a kernel in the same block wrapper used by the runtime, but
+/// drives `init`, `work`, message handlers, and `deinit` directly. It is useful
+/// for focused unit tests and microbenchmarks where constructing a full
+/// [`Flowgraph`](crate::runtime::Flowgraph) would add noise.
 pub struct Mocker<K: SendKernel> {
     /// Wrapped Block
     block: WrappedKernel<K>,
@@ -75,7 +78,11 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         &mut self.block.meta
     }
 
-    /// Create mocker
+    /// Create a mocker around one kernel instance.
+    ///
+    /// Message output ports declared by the block are connected to internal
+    /// sinks so tests can inspect emitted PMTs with [`Mocker::messages`] or
+    /// [`Mocker::take_messages`].
     pub fn new(kernel: K) -> Self {
         let mut block = WrappedKernel::new(kernel, BlockId(0));
         let mut messages = Vec::new();
@@ -103,7 +110,11 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         }
     }
 
-    /// Post a PMT to a message handler of the block.
+    /// Call one message handler of the block and return its PMT result.
+    ///
+    /// This executes the generated handler dispatch directly. It does not run
+    /// `work()` afterward; call [`Mocker::run`] if the handler only queued state
+    /// that should be processed by the work loop.
     pub fn post(&mut self, id: impl Into<PortId>, p: Pmt) -> Result<Pmt, Error> {
         let id = id.into();
         let mut io = WorkIo {
@@ -119,12 +130,15 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
             .map_err(|e| Error::HandlerError(e.to_string()))
     }
 
-    /// Run the block wrapped by the mocker
+    /// Run the block's `work()` loop synchronously.
+    ///
+    /// The loop repeats while the block sets [`WorkIo::call_again`]. Message
+    /// outputs produced during each call are captured before the next iteration.
     pub fn run(&mut self) {
         async_io::block_on(self.run_async());
     }
 
-    /// Init the block wrapped by the mocker
+    /// Run the block's `init()` method synchronously.
     pub fn init(&mut self) {
         async_io::block_on(async {
             self.block
@@ -135,7 +149,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         });
     }
 
-    /// Deinit the block wrapped by the mocker
+    /// Run the block's `deinit()` method synchronously.
     pub fn deinit(&mut self) {
         async_io::block_on(async {
             self.block
@@ -156,7 +170,9 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         std::mem::take(&mut self.messages)
     }
 
-    /// Run the mocker async
+    /// Run the block's `work()` loop asynchronously.
+    ///
+    /// Like [`Mocker::run`], this repeats while [`WorkIo::call_again`] is set.
     pub async fn run_async(&mut self) {
         let mut io = WorkIo {
             call_again: false,
@@ -192,7 +208,11 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
 }
 
 #[derive(Debug)]
-/// Buffer reader for Mocker
+/// Mock CPU input buffer for [`Mocker`].
+///
+/// Use [`Reader::set`] or [`Reader::set_with_tags`] before running the block.
+/// Consumed items are removed from the front of the buffer, matching the normal
+/// [`CpuBufferReader`] contract.
 pub struct Reader<T: Debug + Send + 'static> {
     data: Vec<T>,
     tags: Vec<ItemTag>,
@@ -201,7 +221,7 @@ pub struct Reader<T: Debug + Send + 'static> {
 }
 
 impl<T: Debug + Send + 'static> Reader<T> {
-    /// Add input buffer with given data
+    /// Replace the readable input items.
     pub fn set(&mut self, data: Vec<T>)
     where
         T: Debug + Send + 'static,
@@ -209,7 +229,7 @@ impl<T: Debug + Send + 'static> Reader<T> {
         self.set_with_tags(data, Vec::new());
     }
 
-    /// Add input buffer with given data and tags
+    /// Replace the readable input items and their tags.
     pub fn set_with_tags(&mut self, data: Vec<T>, tags: Vec<ItemTag>)
     where
         T: Debug + Send + 'static,
@@ -289,7 +309,11 @@ where
 }
 
 #[derive(Debug)]
-/// Stream buffer reader for Mocker
+/// Mock CPU output buffer for [`Mocker`].
+///
+/// Reserve capacity before running the block. Produced items are appended to the
+/// buffer and can be cloned with [`Writer::get`] or drained with
+/// [`Writer::take`].
 pub struct Writer<T: Clone + Debug + Send + 'static> {
     data: Vec<T>,
     tags: Vec<ItemTag>,
@@ -309,15 +333,15 @@ impl<T: Clone + Debug + Send + 'static> Default for Writer<T> {
 }
 
 impl<T: Clone + Debug + Send + 'static> Writer<T> {
-    /// Reserve space in the output buffer
+    /// Reserve writable capacity in the output buffer.
     pub fn reserve(&mut self, n: usize) {
         self.data = Vec::with_capacity(n);
     }
-    /// Get the data from the buffer (clone)
+    /// Clone all produced items and tags without clearing them.
     pub fn get(&self) -> (Vec<T>, Vec<ItemTag>) {
         (self.data.clone(), self.tags.clone())
     }
-    /// Take the data from the buffer
+    /// Drain all produced items and tags.
     pub fn take(&mut self) -> (Vec<T>, Vec<ItemTag>) {
         (
             std::mem::take(&mut self.data),
