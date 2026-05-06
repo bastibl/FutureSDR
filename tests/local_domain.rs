@@ -122,12 +122,12 @@ fn flowgraph_runs_local_domain_blocks() -> Result<()> {
     let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
     let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
 
-    assert!(src.with_local(&fg, |_| true)?);
+    assert!(src.with(&fg, |_| true)?);
     fg.stream(&src, |b| b.output(), &snk, |b| b.input())?;
 
     let fg = rt.run(fg)?;
     assert_eq!(fg.block(&snk)?.n_received(), 4);
-    assert!(src.with_local(&fg, |_| true)?);
+    assert!(src.with(&fg, |_| true)?);
 
     Ok(())
 }
@@ -161,7 +161,7 @@ fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
     let fg = rt.run(fg)?;
 
     assert!(worked.load(Ordering::SeqCst));
-    assert!(blk.with_local(&fg, |_| true)?);
+    assert!(blk.with(&fg, |_| true)?);
     Ok(())
 }
 

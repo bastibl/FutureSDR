@@ -247,20 +247,10 @@ impl<K: 'static> BlockRef<K> {
     }
 
     /// Access the typed block through the given [`Flowgraph`].
-    pub fn with<R>(&self, fg: &Flowgraph, f: impl FnOnce(&K) -> R) -> Result<R, Error> {
-        let block = fg.block(self)?;
-        Ok(f(&block))
-    }
-
-    /// Mutably access the typed block through the given [`Flowgraph`].
-    pub fn with_mut<R>(&self, fg: &mut Flowgraph, f: impl FnOnce(&mut K) -> R) -> Result<R, Error> {
-        let mut block = fg.block_mut(self)?;
-        Ok(f(&mut block))
-    }
-
-    /// Access a local block by running the closure on its local-domain thread.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn with_local<R>(
+    ///
+    /// Native local-domain blocks are accessed by running the closure on the
+    /// local-domain thread.
+    pub fn with<R>(
         &self,
         fg: &Flowgraph,
         f: impl FnOnce(&K) -> R + Send + 'static,
@@ -270,7 +260,11 @@ impl<K: 'static> BlockRef<K> {
     {
         fg.validate_block_ref(self)?;
         match self.placement {
-            BlockPlacement::Normal { .. } => self.with(fg, f),
+            BlockPlacement::Normal { .. } => {
+                let block = fg.block(self)?;
+                Ok(f(&block))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local {
                 domain_id,
                 local_id,
@@ -294,11 +288,13 @@ impl<K: 'static> BlockRef<K> {
         }
     }
 
-    /// Mutably access a local block by running the closure on its local-domain thread.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn with_local_mut<R>(
+    /// Mutably access the typed block through the given [`Flowgraph`].
+    ///
+    /// Native local-domain blocks are accessed by running the closure on the
+    /// local-domain thread.
+    pub fn with_mut<R>(
         &self,
-        fg: &Flowgraph,
+        fg: &mut Flowgraph,
         f: impl FnOnce(&mut K) -> R + Send + 'static,
     ) -> Result<R, Error>
     where
@@ -306,10 +302,11 @@ impl<K: 'static> BlockRef<K> {
     {
         fg.validate_block_ref(self)?;
         match self.placement {
-            BlockPlacement::Normal { .. } => Err(Error::ValidationError(
-                "with_local_mut requires a local block; use Flowgraph::block_mut for normal blocks"
-                    .to_string(),
-            )),
+            BlockPlacement::Normal { .. } => {
+                let mut block = fg.block_mut(self)?;
+                Ok(f(&mut block))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local {
                 domain_id,
                 local_id,
