@@ -60,8 +60,9 @@ use syn::token;
 /// (i.e., `out`/`in`) can be omitted. When ports have different name than
 /// standard `in` and `out`, one can use following notation.
 ///
-/// Stream connections are indicated as `>`, while message connections are
-/// indicated as `|`.
+/// Send-capable stream connections are indicated as `>`, while local-domain-only
+/// stream connections for non-`Send` buffers are indicated as `~>`. Message
+/// connections are indicated as `|`.
 ///
 /// Circuit-capable buffers are still connected with normal stream connections.
 /// The `<` operator performs the additional circuit-closing step that sends
@@ -100,7 +101,7 @@ pub fn connect(input: TokenStream) -> TokenStream {
             blocks.push(dst.block.clone());
 
             let out = match connection_type {
-                ConnectionType::Stream => {
+                ConnectionType::Stream | ConnectionType::LocalStream => {
                     let src_port = match src_port {
                         Some(Port { name, index: None }) => {
                             quote! { #name() }
@@ -130,8 +131,13 @@ pub fn connect(input: TokenStream) -> TokenStream {
                         }
                     };
                     let dst_block = &dst.block;
+                    let method = match connection_type {
+                        ConnectionType::Stream => quote! { stream },
+                        ConnectionType::LocalStream => quote! { stream_local },
+                        _ => unreachable!(),
+                    };
                     quote! {
-                        #fg.stream(
+                        #fg.#method(
                             &#src_block,
                             |b| b.#src_port,
                             &#dst_block,
@@ -281,6 +287,7 @@ impl Parse for ConnectionString {
 #[derive(Debug)]
 enum ConnectionType {
     Stream,
+    LocalStream,
     Message,
     Circuit,
 }
@@ -290,6 +297,10 @@ impl Parse for ConnectionType {
         if input.peek(Token![>]) {
             input.parse::<Token![>]>()?;
             Ok(Self::Stream)
+        } else if input.peek(Token![~]) {
+            input.parse::<Token![~]>()?;
+            input.parse::<Token![>]>()?;
+            Ok(Self::LocalStream)
         } else if input.peek(Token![|]) {
             input.parse::<Token![|]>()?;
             Ok(Self::Message)
@@ -297,7 +308,7 @@ impl Parse for ConnectionType {
             input.parse::<Token![<]>()?;
             Ok(Self::Circuit)
         } else {
-            Err(input.error("expected `>` or `|` to specify the connection type"))
+            Err(input.error("expected `>`, `~>`, `|`, or `<` to specify the connection type"))
         }
     }
 }

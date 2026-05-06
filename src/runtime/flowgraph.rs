@@ -22,6 +22,8 @@ use crate::runtime::block::LocalBlock;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitWriter;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;
@@ -1258,7 +1260,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: BufferWriter + 'static,
+        B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1290,7 +1292,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: BufferWriter + 'static,
+        B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1475,7 +1477,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: BufferWriter + 'static,
+        B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1540,6 +1542,61 @@ impl Flowgraph {
         Ok(())
     }
 
+    /// Connect local-only stream ports through typed block handles owned by this flowgraph.
+    ///
+    /// On native targets this only accepts two local-domain blocks in the same
+    /// [`LocalDomain`]. Use this for non-`Send` stream buffers such as
+    /// [`LocalCpuWriter`](crate::runtime::buffer::LocalCpuWriter).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn stream_local<KS, KD, B, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        self.validate_block_ref(src_block)?;
+        self.validate_block_ref(dst_block)?;
+        let src_id = src_block.id;
+        let dst_id = dst_block.id;
+        let edge = match (src_block.placement, dst_block.placement) {
+            (
+                BlockPlacement::Local {
+                    domain_id: src_domain,
+                    local_id: src_local,
+                    kind: src_kind,
+                    ..
+                },
+                BlockPlacement::Local {
+                    domain_id: dst_domain,
+                    local_id: dst_local,
+                    kind: dst_kind,
+                    ..
+                },
+            ) => self.connect_local_local_stream::<KS, KD, B, FS, FD>(
+                (src_id, src_domain, src_local, src_kind),
+                src_port,
+                (dst_id, dst_domain, dst_local, dst_kind),
+                dst_port,
+            )?,
+            _ => {
+                return Err(Error::ValidationError(
+                    "local stream connections require source and destination blocks in the same local domain"
+                        .to_string(),
+                ));
+            }
+        };
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
     /// Connect stream ports through typed block handles owned by this flowgraph.
     #[cfg(target_arch = "wasm32")]
     pub fn stream<KS, KD, B, FS, FD>(
@@ -1562,6 +1619,28 @@ impl Flowgraph {
         let edge = Self::connect_stream_ports(src_port(src), dst_port(dst));
         self.stream_edges.push(edge);
         Ok(())
+    }
+
+    /// Connect local-only stream ports through typed block handles owned by this flowgraph.
+    ///
+    /// On WASM this is an alias for [`Flowgraph::stream`], since the runtime is
+    /// single-threaded and has no native local domains.
+    #[cfg(target_arch = "wasm32")]
+    pub fn stream_local<KS, KD, B, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter,
+        FS: FnOnce(&mut KS) -> &mut B,
+        FD: FnOnce(&mut KD) -> &mut B::Reader,
+    {
+        self.stream(src_block, src_port, dst_block, dst_port)
     }
 
     /// Close a circuit between already connected circuit-capable buffers.
@@ -1660,23 +1739,12 @@ impl Flowgraph {
                     &dst_port_id,
                 )?,
             #[cfg(not(target_arch = "wasm32"))]
-            (
-                BlockPlacement::Local {
-                    domain_id: src_domain,
-                    local_id: src_local,
-                    ..
-                },
-                BlockPlacement::Local {
-                    domain_id: dst_domain,
-                    local_id: dst_local,
-                    ..
-                },
-            ) => self.connect_local_local_stream_dyn(
-                (src_block_id, src_domain, src_local),
-                src_port_id,
-                (dst_block_id, dst_domain, dst_local),
-                dst_port_id,
-            )?,
+            (BlockPlacement::Local { .. }, BlockPlacement::Local { .. }) => {
+                return Err(Error::ValidationError(
+                    "stream_dyn does not connect local-local streams; use stream_local_dyn for same-domain local stream buffers"
+                        .to_string(),
+                ));
+            }
             #[cfg(not(target_arch = "wasm32"))]
             (
                 BlockPlacement::Local {
@@ -1709,6 +1777,69 @@ impl Flowgraph {
 
         self.stream_edges.push(edge);
         Ok(())
+    }
+
+    /// Connect local-only stream ports without static port type checks.
+    ///
+    /// On native targets this only accepts two local-domain blocks in the same
+    /// [`LocalDomain`]. Use [`Flowgraph::stream_dyn`] for send-capable/default
+    /// dynamic stream connections that involve normal runtime blocks.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn stream_local_dyn(
+        &mut self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        let src_block_id = src_block_id.into();
+        let src_port_id = src_port_id.into();
+        let dst_block_id = dst_block_id.into();
+        let dst_port_id = dst_port_id.into();
+
+        let edge = match (self.placement(src_block_id)?, self.placement(dst_block_id)?) {
+            (
+                BlockPlacement::Local {
+                    domain_id: src_domain,
+                    local_id: src_local,
+                    ..
+                },
+                BlockPlacement::Local {
+                    domain_id: dst_domain,
+                    local_id: dst_local,
+                    ..
+                },
+            ) => self.connect_local_local_stream_dyn(
+                (src_block_id, src_domain, src_local),
+                src_port_id,
+                (dst_block_id, dst_domain, dst_local),
+                dst_port_id,
+            )?,
+            _ => {
+                return Err(Error::ValidationError(
+                    "local dynamic stream connections require source and destination blocks in the same local domain"
+                        .to_string(),
+                ));
+            }
+        };
+
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
+    /// Connect local-only stream ports without static port type checks.
+    ///
+    /// On WASM this is an alias for [`Flowgraph::stream_dyn`], since the
+    /// runtime is single-threaded and has no native local domains.
+    #[cfg(target_arch = "wasm32")]
+    pub fn stream_local_dyn(
+        &mut self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        self.stream_dyn(src_block_id, src_port_id, dst_block_id, dst_port_id)
     }
 
     /// Make message connection

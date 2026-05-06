@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         Head::<u8, LocalCpuReader<u8>, DefaultCpuWriter<u8>>::new(3)
     });
 
-    fg.stream(&src, |b| b.output(), &head, |b| b.input())?;
+    fg.stream_local(&src, |b| b.output(), &head, |b| b.input())?;
     fg.stream(&head, |b| b.output(), &snk, |b| b.input())?;
 
     let fg = Runtime::new().run(fg)?;
