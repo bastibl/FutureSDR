@@ -5,7 +5,8 @@ use crate::runtime::Timer;
 use crate::runtime::dev::prelude::*;
 
 /// Output the same message periodically.
-#[derive(Block)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(Block))]
+#[cfg_attr(target_arch = "wasm32", derive(LocalBlock))]
 #[message_outputs(out)]
 pub struct MessageSource {
     message: Pmt,
@@ -30,11 +31,47 @@ impl MessageSource {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 impl Kernel for MessageSource {
     async fn work(
         &mut self,
         io: &mut WorkIo,
+        mo: &mut MessageOutputs,
+        _b: &mut BlockMeta,
+    ) -> Result<()> {
+        let now = Instant::now();
+
+        if now >= self.t_last + self.interval {
+            mo.post("out", self.message.clone()).await?;
+            self.t_last = now;
+            if let Some(ref mut n) = self.n_messages {
+                *n -= 1;
+                if *n == 0 {
+                    io.finished = true;
+                }
+            }
+        }
+
+        io.block_on(MessageSource::sleep(
+            self.t_last + self.interval - Instant::now(),
+        ));
+
+        Ok(())
+    }
+
+    async fn init(&mut self, _mo: &mut MessageOutputs, _b: &mut BlockMeta) -> Result<()> {
+        self.t_last = Instant::now();
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+impl LocalKernel for MessageSource {
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
         mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {

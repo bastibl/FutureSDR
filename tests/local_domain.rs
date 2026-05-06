@@ -9,35 +9,49 @@ use futuresdr::runtime::buffer::LocalCpuReader;
 use futuresdr::runtime::buffer::LocalCpuWriter;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::Kernel;
+use futuresdr::runtime::dev::LocalKernel;
+use futuresdr::runtime::dev::LocalWorkIo;
 use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
+use futuresdr::runtime::macros::LocalBlock;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-#[derive(Block)]
+#[derive(LocalBlock)]
 struct NonSendLocalBlock {
-    _state: Rc<()>,
+    state: Rc<()>,
+    waited: bool,
 }
 
 impl NonSendLocalBlock {
     fn new() -> Self {
         Self {
-            _state: Rc::new(()),
+            state: Rc::new(()),
+            waited: false,
         }
     }
 }
 
-impl Kernel for NonSendLocalBlock {
+impl LocalKernel for NonSendLocalBlock {
     async fn work(
         &mut self,
-        io: &mut WorkIo,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
-        io.finished = true;
+        if self.waited {
+            io.finished = true;
+        } else {
+            self.waited = true;
+            let state = self.state.clone();
+            io.call_again = false;
+            io.block_on(async move {
+                let _state = state;
+            });
+        }
         Ok(())
     }
 }

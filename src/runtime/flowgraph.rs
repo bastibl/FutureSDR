@@ -30,9 +30,12 @@ use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;
+use crate::runtime::dev::LocalKernel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::KernelInterface;
+use crate::runtime::kernel_interface::LocalKernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
@@ -471,7 +474,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add<K>(&mut self, block: K) -> BlockRef<K>
     where
-        K: SendKernel + SendKernelInterface + 'static,
+        K: SendKernel + SendKernelInterface + LocalKernelInterface + 'static,
     {
         let block_id = BlockId(self.blocks.len());
         let mut b = WrappedKernel::new(block, block_id);
@@ -501,7 +504,8 @@ impl Flowgraph {
             BlockPlacement::Normal { domain_id: 0 }
         };
         self.block_placements.push(placement);
-        self.block_message_inputs.push(Some(K::message_inputs()));
+        self.block_message_inputs
+            .push(Some(<K as KernelInterface>::message_inputs()));
         BlockRef {
             id: block_id,
             flowgraph_id: self.id,
@@ -517,11 +521,11 @@ impl Flowgraph {
     #[cfg(target_arch = "wasm32")]
     pub fn add<K>(&mut self, block: K) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         let block_id = BlockId(self.blocks.len());
-        let mut b = WrappedKernel::new(block, block_id);
-        let block_name = <K as KernelInterface>::type_name().to_string();
+        let mut b = WrappedKernel::new_local(block, block_id);
+        let block_name = <K as LocalKernelInterface>::type_name().to_string();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
@@ -529,7 +533,8 @@ impl Flowgraph {
         let placement = BlockPlacement::Normal { domain_id: 0 };
         self.block_placements.push(placement);
         self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs.push(Some(K::message_inputs()));
+        self.block_message_inputs
+            .push(Some(<K as LocalKernelInterface>::message_inputs()));
         BlockRef {
             id: block_id,
             flowgraph_id: self.id,
@@ -552,7 +557,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add_local<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         self.ensure_default_local_domain();
         self.add_local_to_domain(0, false, block)
@@ -566,7 +571,7 @@ impl Flowgraph {
         block: impl FnOnce() -> K + Send + 'static,
     ) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         self.validate_local_domain(domain)
             .expect("local domain belongs to another flowgraph");
@@ -581,7 +586,7 @@ impl Flowgraph {
         block: impl FnOnce() -> K + Send + 'static,
     ) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         self.add_local_to(domain, block)
     }
@@ -594,7 +599,7 @@ impl Flowgraph {
         block: impl FnOnce() -> K + Send + 'static,
     ) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         let local_id = self.local_domains[domain_id].blocks;
         self.local_domains[domain_id].blocks += 1;
@@ -605,8 +610,8 @@ impl Flowgraph {
         };
         let block_id = self.reserve_block_id(placement);
         let builder: LocalBlockBuilder = Box::new(move || {
-            let mut b = WrappedKernel::new(block(), block_id);
-            let block_name = <K as KernelInterface>::type_name().to_string();
+            let mut b = WrappedKernel::new_local(block(), block_id);
+            let block_name = <K as LocalKernelInterface>::type_name().to_string();
             b.meta
                 .set_instance_name(format!("{}-{}", block_name, block_id.0));
             Box::new(b)
@@ -616,7 +621,7 @@ impl Flowgraph {
             .build(local_id, builder)
             .expect("failed to build local block in local domain");
         self.block_inboxes[block_id.0] = Some(inbox);
-        self.block_message_inputs[block_id.0] = Some(K::message_inputs());
+        self.block_message_inputs[block_id.0] = Some(<K as LocalKernelInterface>::message_inputs());
         BlockRef {
             id: block_id,
             flowgraph_id: self.id,
@@ -625,7 +630,7 @@ impl Flowgraph {
         }
     }
 
-    fn validate_block_ref<K>(&self, block: &BlockRef<K>) -> Result<(), Error> {
+    pub(crate) fn validate_block_ref<K>(&self, block: &BlockRef<K>) -> Result<(), Error> {
         if block.flowgraph_id != self.id {
             return Err(Error::ValidationError(format!(
                 "block {:?} belongs to flowgraph {}, not {}",
@@ -687,7 +692,7 @@ impl Flowgraph {
         }
     }
 
-    fn get_typed_wrapped_block_by_id<K: Kernel + 'static>(
+    fn get_typed_wrapped_block_by_id<K: 'static>(
         &self,
         block_id: BlockId,
     ) -> Result<&WrappedKernel<K>, Error> {
@@ -704,7 +709,7 @@ impl Flowgraph {
             })
     }
 
-    fn get_typed_wrapped_block_mut_by_id<K: Kernel + 'static>(
+    fn get_typed_wrapped_block_mut_by_id<K: 'static>(
         &mut self,
         block_id: BlockId,
     ) -> Result<&mut WrappedKernel<K>, Error> {
@@ -727,8 +732,8 @@ impl Flowgraph {
         dst_id: BlockId,
     ) -> Result<(&mut WrappedKernel<KS>, &mut WrappedKernel<KD>), Error>
     where
-        KS: Kernel + 'static,
-        KD: Kernel + 'static,
+        KS: 'static,
+        KD: 'static,
     {
         if src_id == dst_id {
             return Err(Error::LockError);
@@ -847,8 +852,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: Kernel + 'static,
-        KD: Kernel + 'static,
+        KS: LocalKernel + 'static,
+        KD: LocalKernel + 'static,
         B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
@@ -1058,8 +1063,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: Kernel + 'static,
-        KD: Kernel + 'static,
+        KS: LocalKernel + 'static,
+        KD: LocalKernel + 'static,
         B: BufferWriter,
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
@@ -1088,8 +1093,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: Kernel + 'static,
-        KD: Kernel + 'static,
+        KS: LocalKernel + 'static,
+        KD: LocalKernel + 'static,
         CW: CircuitWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut CW,
         FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
@@ -1408,7 +1413,7 @@ impl LocalDomain {
     /// Add a block to this local domain and return a typed reference to it.
     pub fn add<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
     where
-        K: Kernel + KernelInterface + 'static,
+        K: LocalKernel + LocalKernelInterface + 'static,
     {
         // SAFETY: LocalDomain values are builder handles created from a unique
         // `&mut Flowgraph`. The public API only exposes synchronous mutation.
@@ -1425,8 +1430,8 @@ impl LocalDomain {
         dst_port_fn: FD,
     ) -> Result<(), Error>
     where
-        KS: Kernel + 'static,
-        KD: Kernel + 'static,
+        KS: LocalKernel + 'static,
+        KD: LocalKernel + 'static,
         B: BufferWriter,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
@@ -1510,7 +1515,7 @@ impl LocalDomain {
         dst_port_fn: FD,
     ) -> Result<(), Error>
     where
-        KS: Kernel + 'static,
+        KS: LocalKernel + 'static,
         KD: SendKernel + 'static,
         B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,

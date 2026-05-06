@@ -100,7 +100,7 @@ pub fn sync_vs_async(c: &mut Criterion) {
             async_io::block_on(async {
                 for _ in 0..N {
                     let (kernel, mo, meta) = mocker.parts_mut();
-                    let _ = black_box(kernel.work(&mut io, mo, meta).await);
+                    let _ = black_box(Kernel::work(kernel, &mut io, mo, meta).await);
                 }
             })
         });

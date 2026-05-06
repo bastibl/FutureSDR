@@ -6,7 +6,7 @@ pub struct Timer;
 
 impl Timer {
     /// Complete after `duration` has elapsed.
-    pub fn after(duration: Duration) -> impl Future<Output = ()> + Send {
+    pub fn after(duration: Duration) -> impl Future<Output = ()> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             async move {
@@ -16,12 +16,7 @@ impl Timer {
         #[cfg(target_arch = "wasm32")]
         {
             async move {
-                let (tx, rx) = futures::channel::oneshot::channel();
-                wasm_bindgen_futures::spawn_local(async move {
-                    gloo_timers::future::sleep(duration).await;
-                    let _ = tx.send(());
-                });
-                let _ = rx.await;
+                gloo_timers::future::sleep(duration).await;
             }
         }
     }

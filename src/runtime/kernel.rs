@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use crate::runtime::dev::BlockMeta;
+use crate::runtime::dev::LocalWorkIo;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
 use futuresdr::runtime::Result;
@@ -94,5 +95,62 @@ pub trait Kernel {
         _b: &mut BlockMeta,
     ) -> impl Future<Output = Result<()>> {
         async { Ok(()) }
+    }
+}
+
+/// Processing logic for explicitly local blocks.
+///
+/// `LocalKernel` mirrors [`Kernel`] but receives [`LocalWorkIo`], allowing a
+/// block to wait on non-`Send` futures. Such blocks are accepted only by local
+/// flowgraph entry points.
+pub trait LocalKernel {
+    /// Process stream data and emit messages.
+    fn work(
+        &mut self,
+        _io: &mut LocalWorkIo,
+        _mo: &mut MessageOutputs,
+        _b: &mut BlockMeta,
+    ) -> impl Future<Output = Result<()>> {
+        async { Ok(()) }
+    }
+
+    /// Initialize the kernel before normal work starts.
+    fn init(
+        &mut self,
+        _mo: &mut MessageOutputs,
+        _b: &mut BlockMeta,
+    ) -> impl Future<Output = Result<()>> {
+        async { Ok(()) }
+    }
+
+    /// De-initialize the kernel after work has stopped.
+    fn deinit(
+        &mut self,
+        _mo: &mut MessageOutputs,
+        _b: &mut BlockMeta,
+    ) -> impl Future<Output = Result<()>> {
+        async { Ok(()) }
+    }
+}
+
+impl<T: Kernel> LocalKernel for T {
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
+        mo: &mut MessageOutputs,
+        b: &mut BlockMeta,
+    ) -> Result<()> {
+        let mut work_io = WorkIo::from_local(io);
+        let result = Kernel::work(self, &mut work_io, mo, b).await;
+        io.absorb_work_io(work_io);
+        result
+    }
+
+    async fn init(&mut self, mo: &mut MessageOutputs, b: &mut BlockMeta) -> Result<()> {
+        Kernel::init(self, mo, b).await
+    }
+
+    async fn deinit(&mut self, mo: &mut MessageOutputs, b: &mut BlockMeta) -> Result<()> {
+        Kernel::deinit(self, mo, b).await
     }
 }

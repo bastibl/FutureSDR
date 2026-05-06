@@ -73,6 +73,7 @@ pub mod macros {
     pub use async_trait::async_trait as async_trait_orig;
 
     pub use futuresdr_macros::Block;
+    pub use futuresdr_macros::LocalBlock;
     pub use futuresdr_macros::async_trait;
     pub use futuresdr_macros::connect;
 }
@@ -111,6 +112,7 @@ pub struct RuntimeId(pub(crate) usize);
 pub mod __private {
     pub use super::connect_add::ConnectAdd;
     pub use super::kernel_interface::KernelInterface;
+    pub use super::kernel_interface::LocalKernelInterface;
     #[cfg(not(target_arch = "wasm32"))]
     pub use super::kernel_interface::SendKernelInterface;
 }

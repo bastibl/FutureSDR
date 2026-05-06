@@ -2,11 +2,11 @@ use crate::runtime::BlockRef;
 use crate::runtime::Error;
 use crate::runtime::Flowgraph;
 use crate::runtime::Result;
-use crate::runtime::dev::Kernel;
+#[cfg(target_arch = "wasm32")]
+use crate::runtime::dev::LocalKernel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
-#[cfg(target_arch = "wasm32")]
-use crate::runtime::kernel_interface::KernelInterface;
+use crate::runtime::kernel_interface::LocalKernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
 
@@ -20,7 +20,7 @@ pub trait ConnectAdd {
 #[cfg(not(target_arch = "wasm32"))]
 impl<K> ConnectAdd for K
 where
-    K: SendKernel + SendKernelInterface + 'static,
+    K: SendKernel + SendKernelInterface + LocalKernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 
@@ -32,7 +32,7 @@ where
 #[cfg(target_arch = "wasm32")]
 impl<K> ConnectAdd for K
 where
-    K: Kernel + KernelInterface + 'static,
+    K: LocalKernel + LocalKernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 
@@ -41,11 +41,11 @@ where
     }
 }
 
-impl<K: Kernel + 'static> ConnectAdd for BlockRef<K> {
+impl<K: 'static> ConnectAdd for BlockRef<K> {
     type Added = BlockRef<K>;
 
     fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        self.with(&*fg, |_| ())?;
+        fg.validate_block_ref(&self)?;
         Ok(self)
     }
 }
