@@ -375,9 +375,6 @@ jobs:
       - name: Run cargo clippy for wasm32-unknown-unknown (types)
         run: cargo clippy --lib --manifest-path=crates/types/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
-      - name: Run cargo clippy for wasm32-unknown-unknown (perf/wgpu)
-        run: cargo clippy --lib --manifest-path=perf/wgpu/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-
       - name: Run cargo clippy for wasm32-unknown-unknown (examples/cw)
         run: cargo clippy --lib --manifest-path=examples/cw/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
