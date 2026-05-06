@@ -79,8 +79,6 @@ pub mod macros {
 pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
 #[cfg(not(target_arch = "wasm32"))]
-pub use flowgraph::LocalBlockRef;
-#[cfg(not(target_arch = "wasm32"))]
 pub use flowgraph::LocalDomain;
 pub use flowgraph_handle::FlowgraphBlockHandle;
 pub use flowgraph_handle::FlowgraphHandle;

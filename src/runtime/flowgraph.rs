@@ -154,10 +154,6 @@ pub struct BlockRef<K> {
     _marker: PhantomData<fn() -> K>,
 }
 
-/// Typed reference to a block that was added to a local domain.
-#[cfg(not(target_arch = "wasm32"))]
-pub type LocalBlockRef<K> = BlockRef<K>;
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum BlockPlacement {
     Normal {
