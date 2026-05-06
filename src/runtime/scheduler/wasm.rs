@@ -12,14 +12,11 @@ use crate::runtime::flowgraph::NormalStoredBlock;
 use crate::runtime::scheduler::Scheduler;
 
 /// WASM Scheduler
+///
+/// This is at the moment a dummy implementation, as there is no mutli-threaded executor available
+/// on wasm.
 #[derive(Clone, Debug)]
 pub struct WasmScheduler;
-
-/// Placeholder normal scheduler type for WASM runtimes.
-pub type DummyScheduler = WasmScheduler;
-
-/// Local scheduler type for WASM runtimes.
-pub type WasmLocalScheduler = WasmScheduler;
 
 impl WasmScheduler {
     /// Create WASM Scheduler
@@ -32,23 +29,25 @@ impl Scheduler for WasmScheduler {
     fn run_domain(
         &self,
         blocks: Vec<NormalStoredBlock>,
-        main_channel: &Sender<FlowgraphMessage>,
+        _main_channel: &Sender<FlowgraphMessage>,
     ) -> Vec<Task<(BlockId, NormalStoredBlock)>> {
-        let mut tasks = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            let main_channel = main_channel.clone();
-            let task = self.spawn(async move {
-                let mut block = block;
-                let id = block.as_ref().id();
-                block.as_mut().run(main_channel).await;
-                (id, block)
-            });
-            tasks.push(task);
-        }
-        tasks
+        drop(blocks);
+        panic!("wasm flowgraph blocks are run through Flowgraph's local compatibility shim")
     }
 
-    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+    fn spawn<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        Task::spawn_local(future)
+    }
+}
+
+/// WASM Async Task
+pub struct Task<T>(oneshot::Receiver<T>);
+
+impl<T: 'static> Task<T> {
+    pub(crate) fn spawn_local(future: impl Future<Output = T> + 'static) -> Self {
         let (tx, rx) = oneshot::channel::<T>();
         wasm_bindgen_futures::spawn_local(async move {
             let t = future.await;
@@ -60,9 +59,6 @@ impl Scheduler for WasmScheduler {
         Task(rx)
     }
 }
-
-/// WASM Async Task
-pub struct Task<T>(oneshot::Receiver<T>);
 
 impl<T> Task<T> {
     /// Detach from Task (dummy function for WASM)

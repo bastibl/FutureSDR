@@ -4,8 +4,6 @@ use axum::Router;
 use futures::channel::oneshot;
 use futures::prelude::*;
 use std::fmt;
-#[cfg(target_arch = "wasm32")]
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -28,18 +26,12 @@ use crate::runtime::channel::mpsc::Receiver;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::mpsc::channel;
 use crate::runtime::config;
-#[cfg(target_arch = "wasm32")]
-use crate::runtime::scheduler::DummyScheduler;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::scheduler::LocalScheduler;
 use crate::runtime::scheduler::Scheduler;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::scheduler::SmolScheduler;
 use crate::runtime::scheduler::Task;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::scheduler::ThreadLocalScheduler;
 #[cfg(target_arch = "wasm32")]
-use crate::runtime::scheduler::WasmLocalScheduler;
+use crate::runtime::scheduler::WasmScheduler;
 
 static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -64,26 +56,24 @@ type DynSpawn = dyn Spawn + 'static;
 /// port on native targets. It is generic over the scheduler implementation, but
 /// most applications can use [`Runtime::new`] with the default scheduler.
 #[cfg(not(target_arch = "wasm32"))]
-pub struct Runtime<S = SmolScheduler, LS = ThreadLocalScheduler> {
+pub struct Runtime<S = SmolScheduler> {
     id: RuntimeId,
     scheduler: S,
-    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
     _control_port: ControlPort,
 }
 
 #[cfg(target_arch = "wasm32")]
 /// Executor and control-plane owner for [`Flowgraph`]s and async tasks on WASM.
-pub struct Runtime<S = DummyScheduler, LS = WasmLocalScheduler> {
+pub struct Runtime<S = WasmScheduler> {
     id: RuntimeId,
     scheduler: S,
-    _local_scheduler: PhantomData<fn() -> LS>,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
     _control_port: ControlPort,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Runtime<SmolScheduler, ThreadLocalScheduler> {
+impl Runtime<SmolScheduler> {
     /// Construct a new [`Runtime`] using [`SmolScheduler::default()`].
     pub fn new() -> Self {
         Self::with_custom_routes(Router::new())
@@ -99,8 +89,6 @@ impl Runtime<SmolScheduler, ThreadLocalScheduler> {
         runtime::init();
 
         let scheduler = SmolScheduler::default();
-        let local_scheduler_factory: Arc<dyn Fn() -> ThreadLocalScheduler + Send + Sync> =
-            Arc::new(ThreadLocalScheduler::default);
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
         let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
@@ -109,14 +97,12 @@ impl Runtime<SmolScheduler, ThreadLocalScheduler> {
             scheduler: Arc::new(RuntimeSpawner {
                 runtime_id: id,
                 scheduler: scheduler.clone(),
-                local_scheduler_factory: local_scheduler_factory.clone(),
             }),
         };
 
         Runtime {
             id,
             scheduler,
-            local_scheduler_factory,
             flowgraphs,
             _control_port: ControlPort::new(handle, routes),
         }
@@ -124,28 +110,28 @@ impl Runtime<SmolScheduler, ThreadLocalScheduler> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Default for Runtime<SmolScheduler, ThreadLocalScheduler> {
+impl Default for Runtime<SmolScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S, LS> Drop for Runtime<S, LS> {
+impl<S> Drop for Runtime<S> {
     fn drop(&mut self) {
         debug!("Runtime dropped");
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-impl<S, LS> Drop for Runtime<S, LS> {
+impl<S> Drop for Runtime<S> {
     fn drop(&mut self) {
         debug!("Runtime dropped");
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-impl Runtime<DummyScheduler, WasmLocalScheduler> {
+impl Runtime<WasmScheduler> {
     /// Construct a runtime using the WASM scheduler.
     pub fn new() -> Self {
         runtime::init();
@@ -154,8 +140,7 @@ impl Runtime<DummyScheduler, WasmLocalScheduler> {
         let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         Runtime {
             id,
-            scheduler: DummyScheduler::new(),
-            _local_scheduler: PhantomData,
+            scheduler: WasmScheduler::new(),
             flowgraphs,
             _control_port: ControlPort::new(),
         }
@@ -163,14 +148,14 @@ impl Runtime<DummyScheduler, WasmLocalScheduler> {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl Default for Runtime<DummyScheduler, WasmLocalScheduler> {
+impl Default for Runtime<WasmScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: Scheduler, LS: LocalScheduler> Runtime<S, LS> {
+impl<S: Scheduler> Runtime<S> {
     /// Create a flowgraph owned by this runtime.
     pub fn flowgraph(&self) -> Flowgraph {
         Flowgraph::new_with_runtime(Some(self.id))
@@ -217,7 +202,6 @@ impl<S: Scheduler, LS: LocalScheduler> Runtime<S, LS> {
         let task = self.scheduler.spawn(run_flowgraph(
             fg,
             self.scheduler.clone(),
-            self.local_scheduler_factory.clone(),
             fg_inbox.clone(),
             fg_inbox_rx,
             tx,
@@ -260,7 +244,7 @@ impl<S: Scheduler, LS: LocalScheduler> Runtime<S, LS> {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl<S: Scheduler, LS> Runtime<S, LS> {
+impl<S: Scheduler> Runtime<S> {
     /// Create a flowgraph owned by this runtime.
     pub fn flowgraph(&self) -> Flowgraph {
         Flowgraph::new_with_runtime(Some(self.id))
@@ -278,7 +262,10 @@ impl<S: Scheduler, LS> Runtime<S, LS> {
     }
 
     /// Spawn an async task on the runtime scheduler.
-    pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+    pub fn spawn<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
         self.scheduler.spawn(future)
     }
 
@@ -289,13 +276,7 @@ impl<S: Scheduler, LS> Runtime<S, LS> {
         let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = self.scheduler.spawn(run_flowgraph(
-            fg,
-            self.scheduler.clone(),
-            fg_inbox.clone(),
-            fg_inbox_rx,
-            tx,
-        ));
+        let task = Task::spawn_local(run_flowgraph(fg, fg_inbox.clone(), fg_inbox_rx, tx));
 
         rx.await
             .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
@@ -321,7 +302,7 @@ impl<S: Scheduler, LS> Runtime<S, LS> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: Scheduler + Sync> Runtime<S, ThreadLocalScheduler> {
+impl<S: Scheduler + Sync> Runtime<S> {
     /// Construct a [`Runtime`] with a custom [`Scheduler`].
     pub fn with_scheduler(scheduler: S) -> Self {
         Self::with_config(scheduler, Router::new())
@@ -331,8 +312,6 @@ impl<S: Scheduler + Sync> Runtime<S, ThreadLocalScheduler> {
     pub fn with_config(scheduler: S, routes: Router) -> Self {
         runtime::init();
 
-        let local_scheduler_factory: Arc<dyn Fn() -> ThreadLocalScheduler + Send + Sync> =
-            Arc::new(ThreadLocalScheduler::default);
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
         let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
@@ -341,14 +320,12 @@ impl<S: Scheduler + Sync> Runtime<S, ThreadLocalScheduler> {
             scheduler: Arc::new(RuntimeSpawner {
                 runtime_id: id,
                 scheduler: scheduler.clone(),
-                local_scheduler_factory: local_scheduler_factory.clone(),
             }),
         };
 
         Runtime {
             id,
             scheduler,
-            local_scheduler_factory,
             flowgraphs,
             _control_port: ControlPort::new(handle, routes),
         }
@@ -362,48 +339,7 @@ impl<S: Scheduler + Sync> Runtime<S, ThreadLocalScheduler> {
             scheduler: Arc::new(RuntimeSpawner {
                 runtime_id: self.id,
                 scheduler: self.scheduler.clone(),
-                local_scheduler_factory: self.local_scheduler_factory.clone(),
             }),
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl<S: Scheduler + Sync, LS: LocalScheduler + Sync> Runtime<S, LS> {
-    /// Construct a runtime with a custom normal scheduler and local scheduler factory.
-    pub fn with_scheduler_and_local(
-        scheduler: S,
-        local_scheduler_factory: impl Fn() -> LS + Send + Sync + 'static,
-    ) -> Self {
-        Self::with_config_and_local(scheduler, Arc::new(local_scheduler_factory), Router::new())
-    }
-
-    /// Construct a runtime with custom schedulers and webserver routes.
-    pub fn with_config_and_local(
-        scheduler: S,
-        local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
-        routes: Router,
-    ) -> Self {
-        runtime::init();
-
-        let flowgraphs = Arc::new(Mutex::new(Vec::new()));
-        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
-        let handle = RuntimeHandle {
-            runtime_id: id,
-            flowgraphs: flowgraphs.clone(),
-            scheduler: Arc::new(RuntimeSpawner {
-                runtime_id: id,
-                scheduler: scheduler.clone(),
-                local_scheduler_factory: local_scheduler_factory.clone(),
-            }),
-        };
-
-        Runtime {
-            id,
-            scheduler,
-            local_scheduler_factory,
-            flowgraphs,
-            _control_port: ControlPort::new(handle, routes),
         }
     }
 }
@@ -419,7 +355,6 @@ impl<S: Scheduler> Runtime<S> {
         Runtime {
             id,
             scheduler,
-            _local_scheduler: PhantomData,
             flowgraphs,
             _control_port: ControlPort::new(),
         }
@@ -442,18 +377,16 @@ trait Spawn {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-struct RuntimeSpawner<S, LS> {
+struct RuntimeSpawner<S> {
     runtime_id: RuntimeId,
     scheduler: S,
-    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-impl<S, LS> Spawn for RuntimeSpawner<S, LS>
+impl<S> Spawn for RuntimeSpawner<S>
 where
     S: SpawnBound,
-    LS: LocalScheduler + Sync,
 {
     async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
         if let Some(runtime_id) = fg.runtime_id
@@ -470,7 +403,6 @@ where
         let task = self.scheduler.spawn(run_flowgraph(
             fg,
             self.scheduler.clone(),
-            self.local_scheduler_factory.clone(),
             fg_inbox.clone(),
             fg_inbox_rx,
             tx,
@@ -493,13 +425,7 @@ impl<S: SpawnBound> Spawn for S {
         let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = self.spawn(run_flowgraph(
-            fg,
-            self.clone(),
-            fg_inbox.clone(),
-            fg_inbox_rx,
-            tx,
-        ));
+        let task = Task::spawn_local(run_flowgraph(fg, fg_inbox.clone(), fg_inbox_rx, tx));
 
         rx.await.or(Err(Error::RuntimeError(
             "run_flowgraph crashed".to_string(),
@@ -571,10 +497,9 @@ impl RuntimeHandle {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) async fn run_flowgraph<S: Scheduler, LS: LocalScheduler>(
+pub(crate) async fn run_flowgraph<S: Scheduler>(
     mut fg: Flowgraph,
     scheduler: S,
-    local_scheduler_factory: Arc<dyn Fn() -> LS + Send + Sync>,
     main_channel: Sender<FlowgraphMessage>,
     main_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
@@ -583,15 +508,10 @@ pub(crate) async fn run_flowgraph<S: Scheduler, LS: LocalScheduler>(
 
     let (mut inboxes, ids) = fg.inboxes()?;
     let blocks = fg.take_blocks()?;
-    let local_domains = fg.take_local_domains()?;
     let stream_edges_desc = fg.stream_edge_endpoints();
     let message_edges_desc = fg.message_edges.clone();
     let block_tasks = scheduler.run_domain(blocks, &main_channel);
-    let local_tasks = local_domains
-        .into_iter()
-        .filter(|blocks| !blocks.is_empty())
-        .map(|blocks| (local_scheduler_factory)().run_domain(blocks, main_channel.clone()))
-        .collect::<Vec<_>>();
+    let local_tasks = fg.run_local_domains(main_channel.clone())?;
 
     let run_result: Result<(), Error> = async {
         debug!("init blocks");
@@ -808,20 +728,15 @@ pub(crate) async fn run_flowgraph<S: Scheduler, LS: LocalScheduler>(
     }
     fg.restore_blocks(finished_blocks)?;
 
-    let mut finished_local_blocks = Vec::new();
-    for task in local_tasks {
-        finished_local_blocks.extend(task.await);
-    }
-    fg.restore_local_blocks(finished_local_blocks)?;
+    fg.join_local_domains(local_tasks).await?;
 
     run_result?;
     Ok(fg)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn run_flowgraph<S: Scheduler>(
+pub(crate) async fn run_flowgraph(
     mut fg: Flowgraph,
-    scheduler: S,
     main_channel: Sender<FlowgraphMessage>,
     main_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
@@ -829,10 +744,9 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     debug!("in run_flowgraph");
 
     let (mut inboxes, ids) = fg.inboxes()?;
-    let blocks = fg.take_blocks()?;
     let stream_edges_desc = fg.stream_edge_endpoints();
     let message_edges_desc = fg.message_edges.clone();
-    let block_tasks = scheduler.run_domain(blocks, &main_channel);
+    let block_tasks = fg.spawn_wasm_blocks(main_channel.clone())?;
 
     let run_result: Result<(), Error> = async {
         debug!("init blocks");

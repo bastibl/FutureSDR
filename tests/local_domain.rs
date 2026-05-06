@@ -108,11 +108,12 @@ fn runtime_owned_flowgraph_runs_explicit_local_blocks() -> Result<()> {
     let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
     let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
 
+    assert!(src.with_local(&fg, |_| true)?);
     fg.stream(&src, |b| b.output(), &snk, |b| b.input())?;
 
     let fg = rt.run(fg)?;
     assert_eq!(fg.block(&snk)?.n_received(), 4);
-    assert!(src.with(&fg, |_| true)?);
+    assert!(src.with_local(&fg, |_| true)?);
 
     Ok(())
 }
@@ -127,7 +128,24 @@ fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
     let fg = rt.run(fg)?;
 
     assert!(worked.load(Ordering::SeqCst));
-    assert!(blk.with(&fg, |_| true)?);
+    assert!(blk.with_local(&fg, |_| true)?);
+    Ok(())
+}
+
+#[test]
+fn local_streams_reject_different_domains() -> Result<()> {
+    let mut fg = Flowgraph::new();
+    let mut local_a = fg.local_domain();
+    let src = local_a.add(|| VectorSource::<u8, LocalCpuWriter<u8>>::new(vec![1]));
+    let mut local_b = fg.local_domain();
+    let snk = local_b.add(NullSink::<u8, LocalCpuReader<u8>>::new);
+
+    assert!(
+        local_a
+            .stream(&src, |b| b.output(), &snk, |b| b.input())
+            .is_err()
+    );
+
     Ok(())
 }
 

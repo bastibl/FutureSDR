@@ -53,6 +53,8 @@ mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
 mod local_block;
+#[cfg(not(target_arch = "wasm32"))]
+mod local_domain;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
 /// Mocker for unit testing and benchmarking
