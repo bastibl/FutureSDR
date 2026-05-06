@@ -226,6 +226,9 @@ pub struct LocalDomain {
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
 
+#[cfg(target_arch = "wasm32")]
+type WasmBlockTask = crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>;
+
 impl<K> BlockRef<K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
@@ -1391,7 +1394,7 @@ impl Flowgraph {
     pub(crate) fn spawn_wasm_blocks(
         &mut self,
         main_channel: crate::runtime::channel::mpsc::Sender<crate::runtime::FlowgraphMessage>,
-    ) -> Result<Vec<crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>>, Error> {
+    ) -> Result<Vec<WasmBlockTask>, Error> {
         let blocks = self.take_blocks()?;
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {

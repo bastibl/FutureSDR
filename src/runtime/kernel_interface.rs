@@ -18,14 +18,12 @@ use futuresdr::runtime::buffer::BufferReader;
 /// trait. `SendKernelInterface` is public only so downstream runtime internals
 /// can name the send-capable proof of a generated [`KernelInterface`] impl.
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub trait SendKernelInterface: KernelInterface + Send
 where
     Self: KernelInterface<stream_ports_notify_finished(..): Send, call_handler(..): Send>,
 {
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendKernelInterface for T where
     T: KernelInterface<stream_ports_notify_finished(..): Send, call_handler(..): Send> + Send
 {
@@ -120,4 +118,88 @@ pub trait LocalKernelInterface {
         id: PortId,
         _p: Pmt,
     ) -> impl Future<Output = Result<Pmt, Error>>;
+}
+
+fn apply_local_work_io(local_io: &mut LocalWorkIo, work_io: WorkIo) {
+    local_io.call_again = work_io.call_again;
+    local_io.finished = work_io.finished;
+    local_io.block_on = work_io
+        .block_on
+        .map(|f| f as std::pin::Pin<Box<dyn Future<Output = ()>>>);
+}
+
+impl<T> LocalKernelInterface for T
+where
+    T: KernelInterface,
+{
+    fn is_blocking() -> bool {
+        <T as KernelInterface>::is_blocking()
+    }
+
+    fn type_name() -> &'static str {
+        <T as KernelInterface>::type_name()
+    }
+
+    fn stream_inputs(&self) -> Vec<String> {
+        <T as KernelInterface>::stream_inputs(self)
+    }
+
+    fn stream_outputs(&self) -> Vec<String> {
+        <T as KernelInterface>::stream_outputs(self)
+    }
+
+    fn stream_ports_init(&mut self, block_id: BlockId, inbox: BlockInbox) {
+        <T as KernelInterface>::stream_ports_init(self, block_id, inbox);
+    }
+
+    fn stream_ports_validate(&self) -> Result<(), Error> {
+        <T as KernelInterface>::stream_ports_validate(self)
+    }
+
+    fn stream_input_finish(&mut self, port_id: PortId) -> Result<(), Error> {
+        <T as KernelInterface>::stream_input_finish(self, port_id)
+    }
+
+    fn stream_ports_notify_finished(&mut self) -> impl Future<Output = ()> {
+        <T as KernelInterface>::stream_ports_notify_finished(self)
+    }
+
+    fn stream_input(&mut self, id: &PortId) -> Result<&mut dyn BufferReader, Error> {
+        <T as KernelInterface>::stream_input(self, id)
+    }
+
+    fn connect_stream_output(
+        &mut self,
+        id: &PortId,
+        reader: &mut dyn BufferReader,
+    ) -> Result<(), Error> {
+        <T as KernelInterface>::connect_stream_output(self, id, reader)
+    }
+
+    fn message_inputs() -> &'static [&'static str] {
+        <T as KernelInterface>::message_inputs()
+    }
+
+    fn message_outputs() -> &'static [&'static str] {
+        <T as KernelInterface>::message_outputs()
+    }
+
+    async fn call_handler(
+        &mut self,
+        io: &mut LocalWorkIo,
+        mo: &mut MessageOutputs,
+        meta: &mut BlockMeta,
+        id: PortId,
+        p: Pmt,
+    ) -> Result<Pmt, Error> {
+        let mut work_io = WorkIo {
+            call_again: io.call_again,
+            finished: io.finished,
+            block_on: None,
+        };
+        let result =
+            <T as KernelInterface>::call_handler(self, &mut work_io, mo, meta, id, p).await;
+        apply_local_work_io(io, work_io);
+        result
+    }
 }

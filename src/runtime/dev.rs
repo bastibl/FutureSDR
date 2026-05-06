@@ -4,7 +4,6 @@
 //! App authors building and running flowgraphs should generally prefer
 //! [`crate::prelude`] and the top-level [`crate::runtime`] APIs.
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use super::block::Block;
 #[doc(hidden)]
 pub use super::block::BlockObject;
@@ -57,7 +56,6 @@ pub mod prelude {
     pub use crate::runtime::buffer::slab;
     pub use crate::runtime::channel::mpsc;
     pub use crate::runtime::channel::oneshot;
-    #[cfg(not(target_arch = "wasm32"))]
     pub use crate::runtime::dev::Block;
     pub use crate::runtime::dev::BlockInbox;
     pub use crate::runtime::dev::BlockMeta;

@@ -11,7 +11,6 @@ use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::PortId;
 use crate::runtime::Result;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::Block;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
@@ -20,24 +19,19 @@ use crate::runtime::buffer::BufferReader;
 use crate::runtime::config;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::Kernel;
 use crate::runtime::dev::LocalKernel;
 use crate::runtime::dev::LocalWorkIo;
 use crate::runtime::dev::MessageOutputs;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::WorkIo;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::LocalKernelInterface;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
 use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct WrappedKernel<K> {
     /// Block metadata
     pub meta: BlockMeta,
@@ -69,7 +63,7 @@ pub(crate) struct WrappedLocalKernel<K> {
     pub inbox_tx: BlockInbox,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<K: KernelInterface + 'static> WrappedKernel<K> {
     /// Create typed block wrapper.
     pub fn new(mut kernel: K, id: BlockId) -> Self {
@@ -470,7 +464,6 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<K: KernelInterface + 'static> BlockObject for WrappedKernel<K> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -561,8 +554,8 @@ impl<K: LocalKernelInterface + 'static> BlockObject for WrappedLocalKernel<K> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
         match self.run_impl(main_inbox.clone()).await {
@@ -587,8 +580,6 @@ impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     }
 }
 
-#[async_trait::async_trait(?Send)]
-#[cfg(not(target_arch = "wasm32"))]
 #[async_trait::async_trait(?Send)]
 impl<K: KernelInterface + Kernel + 'static> LocalBlock for WrappedKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
@@ -639,7 +630,6 @@ impl<K: LocalKernelInterface + LocalKernel + 'static> LocalBlock for WrappedLoca
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<K> Deref for WrappedKernel<K> {
     type Target = K;
 
@@ -648,7 +638,6 @@ impl<K> Deref for WrappedKernel<K> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<K> DerefMut for WrappedKernel<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.kernel

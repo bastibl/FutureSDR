@@ -1102,15 +1102,11 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
     } else {
         quote! { ::futuresdr::runtime::dev::WorkIo }
     };
-    let port_getters = if local {
-        quote! {}
-    } else {
-        quote! {
-            impl #generics #struct_name #unconstraint_generics
-                #where_clause
-            {
-                #(#port_getter_fns)*
-            }
+    let port_getters = quote! {
+        impl #generics #struct_name #unconstraint_generics
+            #where_clause
+        {
+            #(#port_getter_fns)*
         }
     };
 

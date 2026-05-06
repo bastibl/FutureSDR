@@ -399,7 +399,6 @@ pub trait BufferReader: Any {
     fn port_id(&self) -> PortId;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendBufferReader for T where T: BufferReader<notify_finished(..): Send> + Send + 'static {}
 
 /// Type-erased writer side of a stream buffer.
@@ -435,7 +434,6 @@ pub trait BufferWriter {
     fn port_id(&self) -> PortId;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendBufferWriter for T
 where
     T: BufferWriter<notify_finished(..): Send> + Send,
@@ -460,7 +458,6 @@ pub trait CircuitWriter: BufferWriter {
 /// Send-capable circuit writer marker.
 pub trait SendCircuitWriter: CircuitWriter + SendBufferWriter {}
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendCircuitWriter for T where T: CircuitWriter + SendBufferWriter {}
 
 /// Trait alias-style marker for sample types supported by CPU buffers.
@@ -496,7 +493,6 @@ pub trait CpuBufferReader: BufferReader + Default {
     fn max_items(&self) -> usize;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendCpuBufferReader for T where T: CpuBufferReader + SendBufferReader {}
 
 /// Send-capable writer marker for out-of-place CPU stream buffers.
@@ -527,7 +523,6 @@ pub trait CpuBufferWriter: BufferWriter + Default {
     fn max_items(&self) -> usize;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendCpuBufferWriter for T where T: CpuBufferWriter + SendBufferWriter {}
 
 /// Owned buffer chunk passed through an in-place stream circuit.
@@ -588,13 +583,11 @@ pub trait InplaceWriter: BufferWriter + Default {
 /// Send-capable in-place reader marker.
 pub trait SendInplaceReader: InplaceReader + SendBufferReader {}
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendInplaceReader for T where T: InplaceReader + SendBufferReader {}
 
 /// Send-capable in-place writer marker.
 pub trait SendInplaceWriter: InplaceWriter + SendBufferWriter {}
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<T> SendInplaceWriter for T where T: InplaceWriter + SendBufferWriter {}
 
 #[cfg(not(target_arch = "wasm32"))]

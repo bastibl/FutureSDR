@@ -36,7 +36,7 @@ use futuresdr::runtime::dev::prelude::*;
 ///     }
 /// });
 /// ```
-#[derive(Block, LocalBlock)]
+#[derive(Block)]
 pub struct Apply<F, A, B, IN = DefaultCpuReader<A>, OUT = DefaultCpuWriter<B>>
 where
     F: FnMut(&A) -> B + Send + 'static,
@@ -100,49 +100,6 @@ where
     async fn work(
         &mut self,
         io: &mut WorkIo,
-        _mo: &mut MessageOutputs,
-        _meta: &mut BlockMeta,
-    ) -> Result<()> {
-        let (i, i_tags) = self.input.slice_with_tags();
-        let (o, mut o_tags) = self.output.slice_with_tags();
-        let i_len = i.len();
-
-        let m = std::cmp::min(i_len, o.len());
-        if m > 0 {
-            for (v, r) in i.iter().zip(o.iter_mut()) {
-                *r = (self.f)(v);
-            }
-
-            i_tags.iter().for_each(|t| {
-                if t.index < m {
-                    o_tags.add_tag(t.index, t.tag.clone())
-                }
-            });
-
-            self.input.consume(m);
-            self.output.produce(m);
-        }
-
-        if self.input.finished() && m == i_len {
-            io.finished = true;
-        }
-
-        Ok(())
-    }
-}
-
-#[doc(hidden)]
-impl<F, A, B, IN, OUT> LocalKernel for Apply<F, A, B, IN, OUT>
-where
-    F: FnMut(&A) -> B + Send + 'static,
-    A: Send + 'static,
-    B: Send + 'static,
-    IN: CpuBufferReader<Item = A>,
-    OUT: CpuBufferWriter<Item = B>,
-{
-    async fn work(
-        &mut self,
-        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

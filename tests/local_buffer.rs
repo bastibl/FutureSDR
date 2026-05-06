@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futuresdr::blocks::VectorSource;
 use futuresdr::runtime::__private::KernelInterface;
-#[cfg(not(target_arch = "wasm32"))]
+use futuresdr::runtime::__private::LocalKernelInterface;
 use futuresdr::runtime::__private::SendKernelInterface;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::PortId;
@@ -25,6 +25,7 @@ use futuresdr::runtime::buffer::SendInplaceWriter;
 use futuresdr::runtime::buffer::circuit;
 use futuresdr::runtime::dev::BlockInbox;
 use futuresdr::runtime::dev::Kernel;
+use futuresdr::runtime::dev::LocalKernel;
 use futuresdr::runtime::dev::SendKernel;
 
 struct TestKernel;
@@ -34,9 +35,9 @@ impl Kernel for TestKernel {}
 fn assert_kernel<T: SendKernel>() {}
 fn assert_cpu_reader<T: SendCpuBufferReader>() {}
 fn assert_cpu_writer<T: SendCpuBufferWriter>() {}
-fn assert_local_kernel<T: futuresdr::runtime::dev::Kernel>() {}
+fn assert_local_kernel<T: LocalKernel>() {}
 fn assert_kernel_interface<T: KernelInterface>() {}
-#[cfg(not(target_arch = "wasm32"))]
+fn assert_local_kernel_interface<T: LocalKernelInterface>() {}
 fn assert_send_kernel_interface<T: SendKernelInterface>() {}
 fn assert_local_cpu_reader<T: CpuBufferReader>() {}
 fn assert_local_cpu_writer<T: CpuBufferWriter>() {}
@@ -68,7 +69,7 @@ fn normal_and_local_types_use_the_same_traits() {
 #[test]
 fn derived_block_interface_is_local_first() {
     assert_kernel_interface::<VectorSource<u8, LocalCpuWriter<u8>>>();
-    #[cfg(not(target_arch = "wasm32"))]
+    assert_local_kernel_interface::<VectorSource<u8, LocalCpuWriter<u8>>>();
     assert_send_kernel_interface::<VectorSource<u8, DefaultCpuWriter<u8>>>();
 }
 

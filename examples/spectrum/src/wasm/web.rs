@@ -390,15 +390,13 @@ pub fn web() {
     mount_to_body(|| view! { <Gui /> })
 }
 
-#[derive(Block)]
+#[derive(LocalBlock)]
 pub struct Sink {
     #[input]
     input: slab::Reader<f32>,
     time_data: WriteSignal<Vec<u8>>,
     waterfall_data: WriteSignal<Vec<u8>>,
 }
-
-unsafe impl Send for Sink {}
 
 impl Sink {
     pub fn new(time_data: WriteSignal<Vec<u8>>, waterfall_data: WriteSignal<Vec<u8>>) -> Self {
@@ -410,10 +408,10 @@ impl Sink {
     }
 }
 
-impl Kernel for Sink {
+impl LocalKernel for Sink {
     async fn work(
         &mut self,
-        io: &mut WorkIo,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

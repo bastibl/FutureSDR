@@ -27,7 +27,7 @@ use crate::runtime::dev::prelude::*;
 ///
 /// let sink = WasmWsSink::<f32>::new("ws://localhost:9001".to_string(), 4);
 /// ```
-#[derive(Block)]
+#[derive(LocalBlock)]
 pub struct WasmWsSink<T>
 where
     T: CpuSample,
@@ -93,13 +93,13 @@ where
 }
 
 #[doc(hidden)]
-impl<T> Kernel for WasmWsSink<T>
+impl<T> LocalKernel for WasmWsSink<T>
 where
     T: CpuSample,
 {
     async fn work(
         &mut self,
-        io: &mut WorkIo,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

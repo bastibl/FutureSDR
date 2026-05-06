@@ -113,7 +113,6 @@ pub mod __private {
     pub use super::connect_add::ConnectAdd;
     pub use super::kernel_interface::KernelInterface;
     pub use super::kernel_interface::LocalKernelInterface;
-    #[cfg(not(target_arch = "wasm32"))]
     pub use super::kernel_interface::SendKernelInterface;
 }
 
