@@ -115,9 +115,9 @@ fn local_domain_accepts_non_send_blocks() -> Result<()> {
 }
 
 #[test]
-fn runtime_owned_flowgraph_runs_local_domain_blocks() -> Result<()> {
+fn flowgraph_runs_local_domain_blocks() -> Result<()> {
     let rt = Runtime::new();
-    let mut fg = rt.flowgraph();
+    let mut fg = Flowgraph::new();
 
     let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
     let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
@@ -135,7 +135,7 @@ fn runtime_owned_flowgraph_runs_local_domain_blocks() -> Result<()> {
 #[test]
 fn stream_dyn_connects_local_source_to_normal_blocks() -> Result<()> {
     let rt = Runtime::new();
-    let mut fg = rt.flowgraph();
+    let mut fg = Flowgraph::new();
 
     let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
     let snk0 = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
@@ -154,7 +154,7 @@ fn stream_dyn_connects_local_source_to_normal_blocks() -> Result<()> {
 #[test]
 fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
     let rt = Runtime::new();
-    let mut fg = rt.flowgraph();
+    let mut fg = Flowgraph::new();
     let worked = Arc::new(AtomicBool::new(false));
     let blk = fg.add(BlockingNoop::new(worked.clone()));
 
@@ -179,15 +179,5 @@ fn local_streams_reject_different_domains() -> Result<()> {
             .is_err()
     );
 
-    Ok(())
-}
-
-#[test]
-fn runtime_rejects_flowgraph_from_other_runtime() -> Result<()> {
-    let rt_a = Runtime::new();
-    let rt_b = Runtime::new();
-    let fg = rt_a.flowgraph();
-
-    assert!(rt_b.run(fg).is_err());
     Ok(())
 }

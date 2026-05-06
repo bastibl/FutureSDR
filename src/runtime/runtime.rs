@@ -98,11 +98,6 @@ impl Default for Runtime<DefaultScheduler> {
 }
 
 impl<S: Scheduler> Runtime<S> {
-    /// Create a flowgraph owned by this runtime.
-    pub fn flowgraph(&self) -> Flowgraph {
-        Flowgraph::new_with_runtime(Some(self.id))
-    }
-
     /// Spawn an async task on the runtime scheduler.
     pub fn spawn<T: Send + 'static>(
         &self,
@@ -117,7 +112,7 @@ impl<S: Scheduler> Runtime<S> {
     /// [`RunningFlowgraph`] can be used to send messages, stop the graph, or
     /// wait for completion.
     pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        let running = start_flowgraph(self.id, self.scheduler.clone(), fg).await?;
+        let running = start_flowgraph(self.scheduler.clone(), fg).await?;
         self.flowgraphs
             .try_lock()
             .ok_or(Error::LockError)?
@@ -252,7 +247,7 @@ impl<S> PartialEq for RuntimeHandle<S> {
 impl<S: Scheduler> RuntimeHandle<S> {
     /// Start a [`Flowgraph`] on the runtime.
     pub async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        let running = start_flowgraph(self.runtime_id, self.scheduler.clone(), fg).await?;
+        let running = start_flowgraph(self.scheduler.clone(), fg).await?;
         self.add_flowgraph(running.handle()).await;
         Ok(running)
     }
@@ -282,23 +277,10 @@ impl<S: Scheduler> RuntimeHandle<S> {
     }
 }
 
-fn validate_flowgraph(runtime_id: RuntimeId, fg: &Flowgraph) -> Result<(), Error> {
-    if let Some(fg_runtime_id) = fg.runtime_id
-        && fg_runtime_id != runtime_id
-    {
-        return Err(Error::RuntimeError(
-            "flowgraph belongs to a different runtime".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 async fn start_flowgraph<S: Scheduler>(
-    runtime_id: RuntimeId,
     scheduler: S,
     fg: Flowgraph,
 ) -> Result<RunningFlowgraph, Error> {
-    validate_flowgraph(runtime_id, &fg)?;
     let queue_size = config::config().queue_size;
     let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
 

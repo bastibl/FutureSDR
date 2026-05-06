@@ -99,9 +99,6 @@ pub use futuresdr_types::PmtKind;
 pub use futuresdr_types::PortId;
 
 /// Identifier for one runtime instance.
-///
-/// Flowgraphs created through [`Runtime::flowgraph`] are stamped with this id
-/// and can only be started by the runtime that created them.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct RuntimeId(pub(crate) usize);
 

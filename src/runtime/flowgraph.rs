@@ -16,7 +16,6 @@ use crate::runtime::Error;
 use crate::runtime::FlowgraphId;
 use crate::runtime::PortId;
 use crate::runtime::Result;
-use crate::runtime::RuntimeId;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::Block;
 use crate::runtime::block::BlockObject;
@@ -395,7 +394,6 @@ impl<K> From<&BlockRef<K>> for BlockId {
 /// ```
 pub struct Flowgraph {
     pub(crate) id: FlowgraphId,
-    pub(crate) runtime_id: Option<RuntimeId>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) blocks: Vec<Option<Box<dyn Block>>>,
     #[cfg(target_arch = "wasm32")]
@@ -412,13 +410,8 @@ pub struct Flowgraph {
 impl Flowgraph {
     /// Create an empty [`Flowgraph`].
     pub fn new() -> Flowgraph {
-        Self::new_with_runtime(None)
-    }
-
-    pub(crate) fn new_with_runtime(runtime_id: Option<RuntimeId>) -> Flowgraph {
         Flowgraph {
             id: FlowgraphId(NEXT_FLOWGRAPH_ID.fetch_add(1, Ordering::Relaxed)),
-            runtime_id,
             blocks: Vec::new(),
             block_placements: Vec::new(),
             block_inboxes: Vec::new(),
