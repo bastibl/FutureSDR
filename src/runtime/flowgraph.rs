@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 
 use crate::runtime::BlockId;
 use crate::runtime::BlockPortCtx;
-use crate::runtime::BufferId;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphId;
 use crate::runtime::PortId;
@@ -44,7 +43,6 @@ use crate::runtime::wrapped_kernel::WrappedKernel;
 use crate::runtime::wrapped_kernel::WrappedLocalKernel;
 
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);
-static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Shared typed access to a block stored inside a [`Flowgraph`].
 ///
@@ -176,10 +174,9 @@ pub(crate) enum LocalBlockKind {
     LocalKernel,
 }
 
-/// Type-erased stream edge with a globally unique buffer id.
+/// Type-erased stream edge between two stream ports.
 #[derive(Debug, Clone)]
 pub(crate) struct StreamEdge {
-    pub(crate) buffer_id: BufferId,
     pub(crate) src_block: BlockId,
     pub(crate) src_port: PortId,
     pub(crate) dst_block: BlockId,
@@ -188,7 +185,6 @@ pub(crate) struct StreamEdge {
 
 impl StreamEdge {
     pub(crate) fn endpoints(&self) -> (BlockId, PortId, BlockId, PortId) {
-        let _ = self.buffer_id;
         (
             self.src_block,
             self.src_port.clone(),
@@ -1186,7 +1182,6 @@ impl Flowgraph {
         dst_port: &mut B::Reader,
     ) -> StreamEdge {
         let edge = StreamEdge {
-            buffer_id: BufferId(NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)),
             src_block: src_port.block_id(),
             src_port: src_port.port_id(),
             dst_block: dst_port.block_id(),
@@ -1221,7 +1216,6 @@ impl Flowgraph {
             })?;
 
         Ok(StreamEdge {
-            buffer_id: BufferId(NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)),
             src_block: src_block_id,
             src_port: src_port_id.clone(),
             dst_block: dst_block_id,

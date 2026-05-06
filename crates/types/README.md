@@ -7,8 +7,8 @@ This crate contains:
 
 - `Pmt`: the polymorphic message value passed to message handlers and encoded
   by the REST API.
-- `BlockId`, `FlowgraphId`, `PortId`, and `BufferId`: lightweight identifiers
-  used by control and description APIs.
+- `BlockId`, `FlowgraphId`, and `PortId`: lightweight identifiers used by
+  control and description APIs.
 - `FlowgraphDescription` and `BlockDescription`: serializable descriptions of a
   running or constructed flowgraph.
 

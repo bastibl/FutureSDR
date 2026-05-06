@@ -89,7 +89,6 @@ pub use timer::Timer;
 
 pub use futuresdr_types::BlockDescription;
 pub use futuresdr_types::BlockId;
-pub use futuresdr_types::BufferId;
 pub use futuresdr_types::FlowgraphDescription;
 pub use futuresdr_types::FlowgraphId;
 pub use futuresdr_types::Pmt;
