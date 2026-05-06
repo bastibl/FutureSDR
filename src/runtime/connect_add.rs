@@ -3,12 +3,20 @@ use crate::runtime::Error;
 use crate::runtime::Flowgraph;
 use crate::runtime::Result;
 use crate::runtime::dev::SendKernel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::flowgraph::LocalDomain;
 use crate::runtime::kernel_interface::SendKernelInterface;
 
-#[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub trait AddLocal: Sized {
+    #[cfg(target_arch = "wasm32")]
     fn add_local(self, fg: &mut Flowgraph) -> BlockRef<Self>;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_local(
+        block: impl FnOnce() -> Self + Send + 'static,
+        domain: &mut LocalDomain,
+    ) -> BlockRef<Self>;
 }
 
 #[doc(hidden)]

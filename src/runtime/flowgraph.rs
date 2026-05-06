@@ -1898,6 +1898,17 @@ impl LocalDomain {
     /// Add a block to this local domain and return a typed reference to it.
     pub fn add<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
     where
+        K: crate::runtime::__private::AddLocal + 'static,
+    {
+        crate::runtime::__private::AddLocal::add_local(block, self)
+    }
+
+    #[doc(hidden)]
+    pub fn __add_local_from_kernel<K>(
+        &mut self,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
         K: Kernel + KernelInterface + 'static,
     {
         // SAFETY: LocalDomain values are builder handles created from a unique
@@ -1906,8 +1917,11 @@ impl LocalDomain {
         fg.add_kernel_to_domain(self.domain_id, block)
     }
 
-    /// Add an explicitly local block to this local domain.
-    pub fn add_local<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
+    #[doc(hidden)]
+    pub fn __add_local_from_local_kernel<K>(
+        &mut self,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
     where
         K: LocalKernel + LocalKernelInterface + 'static,
     {

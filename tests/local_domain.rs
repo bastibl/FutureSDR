@@ -107,7 +107,7 @@ fn local_domain_accepts_non_send_blocks() -> Result<()> {
     let mut fg = Flowgraph::new();
     {
         let mut local = fg.local_domain();
-        local.add_local(NonSendLocalBlock::new);
+        local.add(NonSendLocalBlock::new);
     }
 
     Runtime::new().run(fg)?;

@@ -80,6 +80,8 @@ pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
 #[cfg(not(target_arch = "wasm32"))]
 pub use flowgraph::LocalBlockRef;
+#[cfg(not(target_arch = "wasm32"))]
+pub use flowgraph::LocalDomain;
 pub use flowgraph_handle::FlowgraphBlockHandle;
 pub use flowgraph_handle::FlowgraphHandle;
 pub use flowgraph_task::FlowgraphTask;
@@ -102,7 +104,6 @@ pub use futuresdr_types::PortId;
 /// expansions can reference generated implementation details.
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(target_arch = "wasm32")]
     pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
     pub use super::kernel_interface::KernelInterface;
