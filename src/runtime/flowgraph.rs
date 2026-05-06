@@ -40,6 +40,8 @@ use crate::runtime::local_domain::LocalBlockBuilder;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::LocalDomainController;
 #[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::local_domain::LocalDomainState;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::default_local_executor_factory;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 use crate::runtime::wrapped_kernel::WrappedLocalKernel;
@@ -170,8 +172,15 @@ pub(crate) enum BlockPlacement {
     Local {
         domain_id: usize,
         local_id: usize,
-        auto: bool,
+        kind: LocalBlockKind,
     },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum LocalBlockKind {
+    Kernel,
+    LocalKernel,
 }
 
 /// Type-erased stream edge with a globally unique buffer id.
@@ -267,7 +276,7 @@ impl<K: 'static> BlockRef<K> {
             BlockPlacement::Local {
                 domain_id,
                 local_id,
-                auto,
+                kind,
                 ..
             } => {
                 let domain = fg
@@ -279,13 +288,9 @@ impl<K: 'static> BlockRef<K> {
                 }
                 let block_id = self.id;
                 domain.controller.exec(move |state| {
-                    let block = state
-                        .blocks
-                        .get(local_id)
-                        .and_then(Option::as_ref)
-                        .ok_or(Error::InvalidBlock(block_id))?
-                        .as_ref();
-                    Ok(f(Flowgraph::local_kernel_ref(block, block_id, auto)?))
+                    Ok(f(Flowgraph::local_state_kernel_ref(
+                        state, local_id, block_id, kind,
+                    )?))
                 })
             }
         }
@@ -310,7 +315,7 @@ impl<K: 'static> BlockRef<K> {
             BlockPlacement::Local {
                 domain_id,
                 local_id,
-                auto,
+                kind,
                 ..
             } => {
                 let domain = fg
@@ -322,13 +327,9 @@ impl<K: 'static> BlockRef<K> {
                 }
                 let block_id = self.id;
                 domain.controller.exec(move |state| {
-                    let block = state
-                        .blocks
-                        .get_mut(local_id)
-                        .and_then(Option::as_mut)
-                        .ok_or(Error::InvalidBlock(block_id))?
-                        .as_mut();
-                    Ok(f(Flowgraph::local_kernel_mut(block, block_id, auto)?))
+                    Ok(f(Flowgraph::local_state_kernel_mut(
+                        state, local_id, block_id, kind,
+                    )?))
                 })
             }
         }
@@ -470,36 +471,18 @@ impl Flowgraph {
         let block_name = <K as KernelInterface>::type_name();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
-        let placement = if <K as KernelInterface>::is_blocking() {
+        if <K as KernelInterface>::is_blocking() {
             let domain_id = self.auto_local_domain();
-            let local_id = self.local_domains[domain_id].blocks;
-            self.local_domains[domain_id].blocks += 1;
-            self.blocks.push(None);
-            let builder: LocalBlockBuilder = Box::new(move || Box::new(b));
-            let inbox = self.local_domains[domain_id]
-                .controller
-                .build(local_id, builder)
-                .expect("failed to insert blocking block into local domain");
-            self.block_inboxes.push(Some(inbox));
-            BlockPlacement::Local {
+            self.add_local_block_builder(
                 domain_id,
-                local_id,
-                auto: true,
-            }
+                LocalBlockKind::Kernel,
+                <K as KernelInterface>::message_inputs(),
+                move |_| Box::new(move || Box::new(b)),
+                "failed to insert blocking block into local domain",
+            )
         } else {
             let inbox = b.inbox();
-            self.blocks.push(Some(Box::new(b)));
-            self.block_inboxes.push(Some(inbox));
-            BlockPlacement::Normal { domain_id: 0 }
-        };
-        self.block_placements.push(placement);
-        self.block_message_inputs
-            .push(Some(<K as KernelInterface>::message_inputs()));
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
+            self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
         }
     }
 
@@ -518,18 +501,7 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.blocks.push(Some(Box::new(b)));
-        let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs
-            .push(Some(<K as KernelInterface>::message_inputs()));
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
-        }
+        self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
     }
 
     /// Add a block to the local runtime path and return a typed reference to it.
@@ -553,18 +525,7 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.blocks.push(Some(Box::new(b)));
-        let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs
-            .push(Some(<K as KernelInterface>::message_inputs()));
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
-        }
+        self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -579,18 +540,11 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.blocks.push(Some(Box::new(b)));
-        let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs
-            .push(Some(<K as LocalKernelInterface>::message_inputs()));
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
-        }
+        self.add_normal_block(
+            Box::new(b),
+            inbox,
+            <K as LocalKernelInterface>::message_inputs(),
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -601,6 +555,73 @@ impl Flowgraph {
         self.block_inboxes.push(None);
         self.block_message_inputs.push(None);
         block_id
+    }
+
+    fn block_ref<K>(&self, block_id: BlockId, placement: BlockPlacement) -> BlockRef<K> {
+        BlockRef {
+            id: block_id,
+            flowgraph_id: self.id,
+            placement,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_normal_block<K>(
+        &mut self,
+        block: Box<dyn Block>,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> BlockRef<K> {
+        let block_id = BlockId(self.blocks.len());
+        let placement = BlockPlacement::Normal { domain_id: 0 };
+        self.blocks.push(Some(block));
+        self.block_placements.push(placement);
+        self.block_inboxes.push(Some(inbox));
+        self.block_message_inputs.push(Some(message_inputs));
+        self.block_ref(block_id, placement)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn add_normal_block<K>(
+        &mut self,
+        block: Box<dyn LocalBlock>,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> BlockRef<K> {
+        let block_id = BlockId(self.blocks.len());
+        let placement = BlockPlacement::Normal { domain_id: 0 };
+        self.blocks.push(Some(block));
+        self.block_placements.push(placement);
+        self.block_inboxes.push(Some(inbox));
+        self.block_message_inputs.push(Some(message_inputs));
+        self.block_ref(block_id, placement)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_local_block_builder<K>(
+        &mut self,
+        domain_id: usize,
+        kind: LocalBlockKind,
+        message_inputs: &'static [&'static str],
+        builder: impl FnOnce(BlockId) -> LocalBlockBuilder,
+        expect_msg: &str,
+    ) -> BlockRef<K> {
+        let local_id = self.local_domains[domain_id].blocks;
+        self.local_domains[domain_id].blocks += 1;
+        let placement = BlockPlacement::Local {
+            domain_id,
+            local_id,
+            kind,
+        };
+        let block_id = self.reserve_block_id(placement);
+        let inbox = self.local_domains[domain_id]
+            .controller
+            .build(local_id, builder(block_id))
+            .expect(expect_msg);
+        self.block_inboxes[block_id.0] = Some(inbox);
+        self.block_message_inputs[block_id.0] = Some(message_inputs);
+        self.block_ref(block_id, placement)
     }
 
     /// Add a block to the default local domain.
@@ -648,7 +669,7 @@ impl Flowgraph {
         K: LocalKernel + LocalKernelInterface + 'static,
     {
         self.ensure_default_local_domain();
-        self.add_local_to_domain(0, false, block)
+        self.add_local_to_domain(0, block)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -660,72 +681,47 @@ impl Flowgraph {
     where
         K: Kernel + KernelInterface + 'static,
     {
-        let local_id = self.local_domains[domain_id].blocks;
-        self.local_domains[domain_id].blocks += 1;
-        let placement = BlockPlacement::Local {
+        self.add_local_block_builder(
             domain_id,
-            local_id,
-            auto: true,
-        };
-        let block_id = self.reserve_block_id(placement);
-        let builder: LocalBlockBuilder = Box::new(move || {
-            let mut b = WrappedKernel::new(block(), block_id);
-            let block_name = <K as KernelInterface>::type_name();
-            b.meta
-                .set_instance_name(format!("{}-{}", block_name, block_id.0));
-            Box::new(b)
-        });
-        let inbox = self.local_domains[domain_id]
-            .controller
-            .build(local_id, builder)
-            .expect("failed to build block in local domain");
-        self.block_inboxes[block_id.0] = Some(inbox);
-        self.block_message_inputs[block_id.0] = Some(<K as KernelInterface>::message_inputs());
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
-        }
+            LocalBlockKind::Kernel,
+            <K as KernelInterface>::message_inputs(),
+            move |block_id| {
+                Box::new(move || {
+                    let mut b = WrappedKernel::new(block(), block_id);
+                    let block_name = <K as KernelInterface>::type_name();
+                    b.meta
+                        .set_instance_name(format!("{}-{}", block_name, block_id.0));
+                    Box::new(b)
+                })
+            },
+            "failed to build block in local domain",
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn add_local_to_domain<K>(
         &mut self,
         domain_id: usize,
-        auto: bool,
         block: impl FnOnce() -> K + Send + 'static,
     ) -> BlockRef<K>
     where
         K: LocalKernel + LocalKernelInterface + 'static,
     {
-        let local_id = self.local_domains[domain_id].blocks;
-        self.local_domains[domain_id].blocks += 1;
-        let placement = BlockPlacement::Local {
+        self.add_local_block_builder(
             domain_id,
-            local_id,
-            auto,
-        };
-        let block_id = self.reserve_block_id(placement);
-        let builder: LocalBlockBuilder = Box::new(move || {
-            let mut b = WrappedLocalKernel::new(block(), block_id);
-            let block_name = <K as LocalKernelInterface>::type_name().to_string();
-            b.meta
-                .set_instance_name(format!("{}-{}", block_name, block_id.0));
-            Box::new(b)
-        });
-        let inbox = self.local_domains[domain_id]
-            .controller
-            .build(local_id, builder)
-            .expect("failed to build local block in local domain");
-        self.block_inboxes[block_id.0] = Some(inbox);
-        self.block_message_inputs[block_id.0] = Some(<K as LocalKernelInterface>::message_inputs());
-        BlockRef {
-            id: block_id,
-            flowgraph_id: self.id,
-            placement,
-            _marker: PhantomData,
-        }
+            LocalBlockKind::LocalKernel,
+            <K as LocalKernelInterface>::message_inputs(),
+            move |block_id| {
+                Box::new(move || {
+                    let mut b = WrappedLocalKernel::new(block(), block_id);
+                    let block_name = <K as LocalKernelInterface>::type_name();
+                    b.meta
+                        .set_instance_name(format!("{}-{}", block_name, block_id.0));
+                    Box::new(b)
+                })
+            },
+            "failed to build local block in local domain",
+        )
     }
 
     pub(crate) fn validate_block_ref<K>(&self, block: &BlockRef<K>) -> Result<(), Error> {
@@ -886,18 +882,17 @@ impl Flowgraph {
     fn local_kernel_ref<K: 'static>(
         block: &dyn BlockObject,
         block_id: BlockId,
-        auto: bool,
+        kind: LocalBlockKind,
     ) -> Result<&K, Error> {
-        if auto {
-            block
+        match kind {
+            LocalBlockKind::Kernel => block
                 .as_any()
                 .downcast_ref::<WrappedKernel<K>>()
-                .map(|block| &block.kernel)
-        } else {
-            block
+                .map(|block| &block.kernel),
+            LocalBlockKind::LocalKernel => block
                 .as_any()
                 .downcast_ref::<WrappedLocalKernel<K>>()
-                .map(|block| &block.kernel)
+                .map(|block| &block.kernel),
         }
         .ok_or_else(|| {
             Error::ValidationError(format!(
@@ -912,18 +907,17 @@ impl Flowgraph {
     fn local_kernel_mut<K: 'static>(
         block: &mut dyn BlockObject,
         block_id: BlockId,
-        auto: bool,
+        kind: LocalBlockKind,
     ) -> Result<&mut K, Error> {
-        if auto {
-            block
+        match kind {
+            LocalBlockKind::Kernel => block
                 .as_any_mut()
                 .downcast_mut::<WrappedKernel<K>>()
-                .map(|block| &mut block.kernel)
-        } else {
-            block
+                .map(|block| &mut block.kernel),
+            LocalBlockKind::LocalKernel => block
                 .as_any_mut()
                 .downcast_mut::<WrappedLocalKernel<K>>()
-                .map(|block| &mut block.kernel)
+                .map(|block| &mut block.kernel),
         }
         .ok_or_else(|| {
             Error::ValidationError(format!(
@@ -932,6 +926,88 @@ impl Flowgraph {
                 std::any::type_name::<K>()
             ))
         })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_state_block(
+        state: &LocalDomainState,
+        local_id: usize,
+        block_id: BlockId,
+    ) -> Result<&dyn BlockObject, Error> {
+        state
+            .blocks
+            .get(local_id)
+            .and_then(Option::as_ref)
+            .map(|block| block.as_ref() as &dyn BlockObject)
+            .ok_or(Error::InvalidBlock(block_id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_state_block_mut(
+        state: &mut LocalDomainState,
+        local_id: usize,
+        block_id: BlockId,
+    ) -> Result<&mut dyn BlockObject, Error> {
+        state
+            .blocks
+            .get_mut(local_id)
+            .and_then(Option::as_mut)
+            .map(|block| block.as_mut() as &mut dyn BlockObject)
+            .ok_or(Error::InvalidBlock(block_id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_state_kernel_ref<K: 'static>(
+        state: &LocalDomainState,
+        local_id: usize,
+        block_id: BlockId,
+        kind: LocalBlockKind,
+    ) -> Result<&K, Error> {
+        let block = Self::local_state_block(state, local_id, block_id)?;
+        Self::local_kernel_ref(block, block_id, kind)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_state_kernel_mut<K: 'static>(
+        state: &mut LocalDomainState,
+        local_id: usize,
+        block_id: BlockId,
+        kind: LocalBlockKind,
+    ) -> Result<&mut K, Error> {
+        let block = Self::local_state_block_mut(state, local_id, block_id)?;
+        Self::local_kernel_mut(block, block_id, kind)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn two_local_state_kernels_mut<KS: 'static, KD: 'static>(
+        state: &mut LocalDomainState,
+        src: (usize, BlockId, LocalBlockKind),
+        dst: (usize, BlockId, LocalBlockKind),
+    ) -> Result<(&mut KS, &mut KD), Error> {
+        let (src_local, src_id, src_kind) = src;
+        let (dst_local, dst_id, dst_kind) = dst;
+        if src_local == dst_local {
+            return Err(Error::LockError);
+        }
+        let invalid_block = if src_local >= state.blocks.len() {
+            src_id
+        } else {
+            dst_id
+        };
+        let [src_slot, dst_slot] = state
+            .blocks
+            .get_disjoint_mut([src_local, dst_local])
+            .map_err(|err| match err {
+                std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                    Error::InvalidBlock(invalid_block)
+                }
+                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+            })?;
+        let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+        let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+        let src = Self::local_kernel_mut(src_block, src_id, src_kind)?;
+        let dst = Self::local_kernel_mut(dst_block, dst_id, dst_kind)?;
+        Ok((src, dst))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1122,6 +1198,123 @@ impl Flowgraph {
         edge
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_local_local_stream<KS, KD, B, FS, FD>(
+        &self,
+        src: (BlockId, usize, usize, LocalBlockKind),
+        src_port: FS,
+        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        let (src_id, src_domain, src_local, src_kind) = src;
+        let (dst_id, dst_domain, dst_local, dst_kind) = dst;
+        if src_domain != dst_domain {
+            return Err(Error::ValidationError(
+                "stream connections between different local domains are not supported".to_string(),
+            ));
+        }
+        let domain = self
+            .local_domains
+            .get(src_domain)
+            .ok_or(Error::InvalidBlock(src_id))?;
+        domain.controller.exec(move |state| {
+            let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
+                state,
+                (src_local, src_id, src_kind),
+                (dst_local, dst_id, dst_kind),
+            )?;
+            Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wrapped_kernel_mut<K: 'static>(
+        block: &mut dyn BlockObject,
+        block_id: BlockId,
+    ) -> Result<&mut WrappedKernel<K>, Error> {
+        block
+            .as_any_mut()
+            .downcast_mut::<WrappedKernel<K>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    block_id,
+                    std::any::type_name::<K>()
+                ))
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_local_normal_stream<KS, KD, B, FS, FD>(
+        &mut self,
+        src: (BlockId, usize, usize, LocalBlockKind),
+        src_port: FS,
+        dst_id: BlockId,
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        let (src_id, domain_id, local_id, kind) = src;
+        let mut normal = self.blocks[dst_id.0].take().ok_or(Error::LockError)?;
+        let (edge_result, restored) =
+            self.local_domains[domain_id]
+                .controller
+                .exec(move |state| {
+                    let src = Self::local_state_kernel_mut::<KS>(state, local_id, src_id, kind)?;
+                    let edge_result =
+                        Self::wrapped_kernel_mut::<KD>(normal.as_mut(), dst_id).map(|dst| {
+                            Self::connect_stream_ports(src_port(src), dst_port(&mut dst.kernel))
+                        });
+                    Ok((edge_result, normal))
+                })?;
+        self.blocks[dst_id.0] = Some(restored);
+        edge_result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_normal_local_stream<KS, KD, B, FS, FD>(
+        &mut self,
+        src_id: BlockId,
+        src_port: FS,
+        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        let (dst_id, domain_id, local_id, kind) = dst;
+        let mut normal = self.blocks[src_id.0].take().ok_or(Error::LockError)?;
+        let (edge_result, restored) =
+            self.local_domains[domain_id]
+                .controller
+                .exec(move |state| {
+                    let dst = Self::local_state_kernel_mut::<KD>(state, local_id, dst_id, kind)?;
+                    let edge_result =
+                        Self::wrapped_kernel_mut::<KS>(normal.as_mut(), src_id).map(|src| {
+                            Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(dst))
+                        });
+                    Ok((edge_result, normal))
+                })?;
+        self.blocks[src_id.0] = Some(restored);
+        edge_result
+    }
+
     /// Connect stream ports through typed block handles owned by this flowgraph.
     ///
     /// This is the typed block-level stream API used by the
@@ -1154,146 +1347,49 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id: src_domain,
                     local_id: src_local,
-                    auto: src_auto,
+                    kind: src_kind,
                     ..
                 },
                 BlockPlacement::Local {
                     domain_id: dst_domain,
                     local_id: dst_local,
-                    auto: dst_auto,
+                    kind: dst_kind,
                     ..
                 },
-            ) if src_domain == dst_domain => {
-                if src_local == dst_local {
-                    return Err(Error::LockError);
-                }
-                let domain = self
-                    .local_domains
-                    .get(src_domain)
-                    .ok_or(Error::InvalidBlock(src_id))?;
-                let invalid_block = if src_local >= domain.blocks {
-                    src_id
-                } else {
-                    dst_id
-                };
-                domain.controller.exec(move |state| {
-                    let slots = state.blocks.get_disjoint_mut([src_local, dst_local]);
-                    let [src_slot, dst_slot] = slots.map_err(|err| match err {
-                        std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                            Error::InvalidBlock(invalid_block)
-                        }
-                        std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-                    })?;
-                    let src = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-                    let dst = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-                    let src = Self::local_kernel_mut(src, src_id, src_auto)?;
-                    let dst = Self::local_kernel_mut(dst, dst_id, dst_auto)?;
-                    Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
-                })?
-            }
-            (
-                BlockPlacement::Local {
-                    domain_id: _src_domain,
-                    local_id: _src_local,
-                    ..
-                },
-                BlockPlacement::Local {
-                    domain_id: _dst_domain,
-                    local_id: _dst_local,
-                    ..
-                },
-            ) => {
-                return Err(Error::ValidationError(
-                    "stream connections between different local domains are not supported"
-                        .to_string(),
-                ));
-            }
+            ) => self.connect_local_local_stream::<KS, KD, B, FS, FD>(
+                (src_id, src_domain, src_local, src_kind),
+                src_port,
+                (dst_id, dst_domain, dst_local, dst_kind),
+                dst_port,
+            )?,
             (
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
-                    auto,
+                    kind,
                     ..
                 },
                 BlockPlacement::Normal { .. },
-            ) => {
-                let mut normal = self.blocks[dst_id.0].take().ok_or(Error::LockError)?;
-                let (edge_result, restored) =
-                    self.local_domains[domain_id]
-                        .controller
-                        .exec(move |state| {
-                            let src = state
-                                .blocks
-                                .get_mut(local_id)
-                                .and_then(Option::as_mut)
-                                .ok_or(Error::InvalidBlock(src_id))?
-                                .as_mut();
-                            let edge_result =
-                                Self::local_kernel_mut(src, src_id, auto).and_then(|src| {
-                                    let dst = normal
-                                        .as_mut()
-                                        .as_any_mut()
-                                        .downcast_mut::<WrappedKernel<KD>>()
-                                        .ok_or_else(|| {
-                                            Error::ValidationError(format!(
-                                                "block {:?} has unexpected type for {}",
-                                                dst_id,
-                                                std::any::type_name::<KD>()
-                                            ))
-                                        })?;
-                                    Ok(Self::connect_stream_ports(
-                                        src_port(src),
-                                        dst_port(&mut dst.kernel),
-                                    ))
-                                });
-                            Ok((edge_result, normal))
-                        })?;
-                self.blocks[dst_id.0] = Some(restored);
-                edge_result?
-            }
+            ) => self.connect_local_normal_stream::<KS, KD, B, FS, FD>(
+                (src_id, domain_id, local_id, kind),
+                src_port,
+                dst_id,
+                dst_port,
+            )?,
             (
                 BlockPlacement::Normal { .. },
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
-                    auto,
+                    kind,
                     ..
                 },
-            ) => {
-                let mut normal = self.blocks[src_id.0].take().ok_or(Error::LockError)?;
-                let (edge_result, restored) =
-                    self.local_domains[domain_id]
-                        .controller
-                        .exec(move |state| {
-                            let dst = state
-                                .blocks
-                                .get_mut(local_id)
-                                .and_then(Option::as_mut)
-                                .ok_or(Error::InvalidBlock(dst_id))?
-                                .as_mut();
-                            let edge_result =
-                                Self::local_kernel_mut(dst, dst_id, auto).and_then(|dst| {
-                                    let src = normal
-                                        .as_mut()
-                                        .as_any_mut()
-                                        .downcast_mut::<WrappedKernel<KS>>()
-                                        .ok_or_else(|| {
-                                            Error::ValidationError(format!(
-                                                "block {:?} has unexpected type for {}",
-                                                src_id,
-                                                std::any::type_name::<KS>()
-                                            ))
-                                        })?;
-                                    Ok(Self::connect_stream_ports(
-                                        src_port(&mut src.kernel),
-                                        dst_port(dst),
-                                    ))
-                                });
-                            Ok((edge_result, normal))
-                        })?;
-                self.blocks[src_id.0] = Some(restored);
-                edge_result?
-            }
+            ) => self.connect_normal_local_stream::<KS, KD, B, FS, FD>(
+                src_id,
+                src_port,
+                (dst_id, domain_id, local_id, kind),
+                dst_port,
+            )?,
         };
         self.stream_edges.push(edge);
         Ok(())
@@ -1683,7 +1779,7 @@ impl LocalDomain {
         // SAFETY: LocalDomain values are builder handles created from a unique
         // `&mut Flowgraph`. The public API only exposes synchronous mutation.
         let fg = unsafe { &mut *self.fg };
-        fg.add_local_to_domain(self.domain_id, false, block)
+        fg.add_local_to_domain(self.domain_id, block)
     }
 
     /// Connect two stream ports inside this local domain.
@@ -1710,13 +1806,13 @@ impl LocalDomain {
             BlockPlacement::Local {
                 domain_id: src_domain,
                 local_id: src_local,
-                auto: src_auto,
+                kind: src_kind,
                 ..
             },
             BlockPlacement::Local {
                 domain_id: dst_domain,
                 local_id: dst_local,
-                auto: dst_auto,
+                kind: dst_kind,
                 ..
             },
         ) = (src_block.placement, dst_block.placement)
@@ -1730,27 +1826,13 @@ impl LocalDomain {
                 "local stream endpoints must be in this local domain".to_string(),
             ));
         }
-        if src_local == dst_local {
-            return Err(Error::LockError);
-        }
 
-        let edge = fg.local_domains[self.domain_id]
-            .controller
-            .exec(move |state| {
-                let [src_slot, dst_slot] = state
-                    .blocks
-                    .get_disjoint_mut([src_local, dst_local])
-                    .map_err(|_| Error::LockError)?;
-                let src = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-                let dst = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-                let src = Flowgraph::local_kernel_mut(src, src_id, src_auto)?;
-                let dst = Flowgraph::local_kernel_mut(dst, dst_id, dst_auto)?;
-
-                Ok(Flowgraph::connect_stream_ports(
-                    src_port_fn(src),
-                    dst_port_fn(dst),
-                ))
-            })?;
+        let edge = fg.connect_local_local_stream::<KS, KD, B, FS, FD>(
+            (src_id, src_domain, src_local, src_kind),
+            src_port_fn,
+            (dst_id, dst_domain, dst_local, dst_kind),
+            dst_port_fn,
+        )?;
         fg.stream_edges.push(edge);
         Ok(())
     }
