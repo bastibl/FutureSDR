@@ -15,7 +15,8 @@ pub trait AddLocal: Sized {
     #[cfg(not(target_arch = "wasm32"))]
     fn add_local(
         block: impl FnOnce() -> Self + Send + 'static,
-        domain: &mut LocalDomain,
+        fg: &mut Flowgraph,
+        domain: LocalDomain,
     ) -> BlockRef<Self>;
 }
 

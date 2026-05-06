@@ -1258,10 +1258,11 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
             #[cfg(not(target_arch = "wasm32"))]
             fn add_local(
                 block: impl FnOnce() -> Self + Send + 'static,
-                domain: &mut ::futuresdr::runtime::LocalDomain,
+                fg: &mut ::futuresdr::runtime::Flowgraph,
+                domain: ::futuresdr::runtime::LocalDomain,
             ) -> ::futuresdr::runtime::BlockRef<Self>
             {
-                domain.#add_local_method(block)
+                fg.#add_local_method(domain, block)
             }
         }
 

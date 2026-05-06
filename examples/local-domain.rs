@@ -12,15 +12,17 @@ fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
     let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
 
-    {
-        let mut local = fg.local_domain();
+    let local = fg.local_domain();
 
-        let src = local.add(|| VectorSource::<u8, LocalCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
-        let head = local.add(|| Head::<u8, LocalCpuReader<u8>, DefaultCpuWriter<u8>>::new(3));
+    let src = fg.add_local(local, || {
+        VectorSource::<u8, LocalCpuWriter<u8>>::new(vec![1, 2, 3, 4])
+    });
+    let head = fg.add_local(local, || {
+        Head::<u8, LocalCpuReader<u8>, DefaultCpuWriter<u8>>::new(3)
+    });
 
-        local.stream(&src, |b| b.output(), &head, |b| b.input())?;
-        local.stream_to_normal(&head, |b| b.output(), &snk, |b| b.input())?;
-    }
+    fg.stream(&src, |b| b.output(), &head, |b| b.input())?;
+    fg.stream(&head, |b| b.output(), &snk, |b| b.input())?;
 
     let fg = Runtime::new().run(fg)?;
     let snk = fg.block(&snk)?;

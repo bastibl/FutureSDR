@@ -4,8 +4,6 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-#[cfg(not(target_arch = "wasm32"))]
-use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -24,8 +22,6 @@ use crate::runtime::block::LocalBlock;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitWriter;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;
@@ -222,12 +218,12 @@ impl LocalDomainBlocks {
     }
 }
 
-/// Builder for a local scheduling domain inside a [`Flowgraph`].
+/// Handle for a local scheduling domain inside a [`Flowgraph`].
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct LocalDomain {
-    fg: *mut Flowgraph,
+    flowgraph_id: FlowgraphId,
     domain_id: usize,
-    _not_send_or_sync: PhantomData<Rc<()>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -425,9 +421,8 @@ impl Flowgraph {
         let domain_id = self.local_domains.len();
         self.local_domains.push(LocalDomainBlocks::new());
         LocalDomain {
-            fg: self as *mut Flowgraph,
+            flowgraph_id: self.id,
             domain_id,
-            _not_send_or_sync: PhantomData,
         }
     }
 
@@ -436,13 +431,6 @@ impl Flowgraph {
         let domain_id = self.local_domains.len();
         self.local_domains.push(LocalDomainBlocks::new());
         domain_id
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn ensure_default_local_domain(&mut self) {
-        if self.local_domains.is_empty() {
-            self.local_domains.push(LocalDomainBlocks::new());
-        }
     }
 
     /// Add a block and return a typed reference to it.
@@ -612,14 +600,49 @@ impl Flowgraph {
         self.block_ref(block_id, placement)
     }
 
-    /// Add a block to the default local domain.
+    /// Add a block to a local domain.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn add_local<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
+    pub fn add_local<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: crate::runtime::__private::AddLocal + 'static,
+    {
+        crate::runtime::__private::AddLocal::add_local(block, self, domain)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn __add_local_from_kernel<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
     where
         K: Kernel + KernelInterface + 'static,
     {
-        self.ensure_default_local_domain();
-        self.add_kernel_to_domain(0, block)
+        let domain_id = self
+            .validate_local_domain(domain)
+            .expect("local domain belongs to another flowgraph");
+        self.add_kernel_to_domain(domain_id, block)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn __add_local_from_local_kernel<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: LocalKernel + LocalKernelInterface + 'static,
+    {
+        let domain_id = self
+            .validate_local_domain(domain)
+            .expect("local domain belongs to another flowgraph");
+        self.add_local_to_domain(domain_id, block)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -685,6 +708,20 @@ impl Flowgraph {
             return Err(Error::InvalidBlock(block.id));
         }
         Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn validate_local_domain(&self, domain: LocalDomain) -> Result<usize, Error> {
+        if domain.flowgraph_id != self.id {
+            return Err(Error::ValidationError(format!(
+                "local domain belongs to flowgraph {}, not {}",
+                domain.flowgraph_id, self.id
+            )));
+        }
+        if domain.domain_id >= self.local_domains.len() {
+            return Err(Error::ValidationError("invalid local domain".to_string()));
+        }
+        Ok(domain.domain_id)
     }
 
     fn placement(&self, block_id: BlockId) -> Result<BlockPlacement, Error> {
@@ -1231,7 +1268,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: SendBufferWriter + 'static,
+        B: BufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1263,7 +1300,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: SendBufferWriter + 'static,
+        B: BufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1448,7 +1485,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: SendBufferWriter + 'static,
+        B: BufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1887,131 +1924,6 @@ impl Flowgraph {
             domain.running = false;
         }
         Ok(())
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl LocalDomain {
-    /// Add a block to this local domain and return a typed reference to it.
-    pub fn add<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
-    where
-        K: crate::runtime::__private::AddLocal + 'static,
-    {
-        crate::runtime::__private::AddLocal::add_local(block, self)
-    }
-
-    #[doc(hidden)]
-    pub fn __add_local_from_kernel<K>(
-        &mut self,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
-        // SAFETY: LocalDomain values are builder handles created from a unique
-        // `&mut Flowgraph`. The public API only exposes synchronous mutation.
-        let fg = unsafe { &mut *self.fg };
-        fg.add_kernel_to_domain(self.domain_id, block)
-    }
-
-    #[doc(hidden)]
-    pub fn __add_local_from_local_kernel<K>(
-        &mut self,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: LocalKernel + LocalKernelInterface + 'static,
-    {
-        // SAFETY: LocalDomain values are builder handles created from a unique
-        // `&mut Flowgraph`. The public API only exposes synchronous mutation.
-        let fg = unsafe { &mut *self.fg };
-        fg.add_local_to_domain(self.domain_id, block)
-    }
-
-    /// Connect two stream ports inside this local domain.
-    pub fn stream<KS, KD, B, FS, FD>(
-        &mut self,
-        src_block: &BlockRef<KS>,
-        src_port_fn: FS,
-        dst_block: &BlockRef<KD>,
-        dst_port_fn: FD,
-    ) -> Result<(), Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: BufferWriter,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        let fg = unsafe { &mut *self.fg };
-        fg.validate_block_ref(src_block)?;
-        fg.validate_block_ref(dst_block)?;
-        let src_id = src_block.id;
-        let dst_id = dst_block.id;
-        let (
-            BlockPlacement::Local {
-                domain_id: src_domain,
-                local_id: src_local,
-                kind: src_kind,
-                ..
-            },
-            BlockPlacement::Local {
-                domain_id: dst_domain,
-                local_id: dst_local,
-                kind: dst_kind,
-                ..
-            },
-        ) = (src_block.placement, dst_block.placement)
-        else {
-            return Err(Error::ValidationError(
-                "local stream endpoints must be local blocks".to_string(),
-            ));
-        };
-        if src_domain != self.domain_id || dst_domain != self.domain_id {
-            return Err(Error::ValidationError(
-                "local stream endpoints must be in this local domain".to_string(),
-            ));
-        }
-
-        let edge = fg.connect_local_local_stream::<KS, KD, B, FS, FD>(
-            (src_id, src_domain, src_local, src_kind),
-            src_port_fn,
-            (dst_id, dst_domain, dst_local, dst_kind),
-            dst_port_fn,
-        )?;
-        fg.stream_edges.push(edge);
-        Ok(())
-    }
-
-    /// Connect a local-domain output to a normal flowgraph block input.
-    pub fn stream_to_normal<KS, KD, B, FS, FD>(
-        &mut self,
-        src_block: &BlockRef<KS>,
-        src_port_fn: FS,
-        dst_block: &BlockRef<KD>,
-        dst_port_fn: FD,
-    ) -> Result<(), Error>
-    where
-        KS: 'static,
-        KD: SendKernel + 'static,
-        B: SendBufferWriter + 'static,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        let fg = unsafe { &mut *self.fg };
-        fg.validate_block_ref(src_block)?;
-        fg.validate_block_ref(dst_block)?;
-        let BlockPlacement::Local { domain_id, .. } = src_block.placement else {
-            return Err(Error::ValidationError(
-                "local source block must be a local block".to_string(),
-            ));
-        };
-        if domain_id != self.domain_id {
-            return Err(Error::ValidationError(
-                "local source block must be in this local domain".to_string(),
-            ));
-        }
-        fg.stream::<KS, KD, B, FS, FD>(src_block, src_port_fn, dst_block, dst_port_fn)
     }
 }
 
