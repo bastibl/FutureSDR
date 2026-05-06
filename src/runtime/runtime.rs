@@ -36,20 +36,10 @@ use crate::runtime::scheduler::WasmScheduler;
 
 static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(not(target_arch = "wasm32"))]
 trait SpawnBound: Scheduler + Sync + 'static {}
-#[cfg(not(target_arch = "wasm32"))]
 impl<T: Scheduler + Sync + 'static> SpawnBound for T {}
 
-#[cfg(target_arch = "wasm32")]
-trait SpawnBound: Scheduler + 'static {}
-#[cfg(target_arch = "wasm32")]
-impl<T: Scheduler + 'static> SpawnBound for T {}
-
-#[cfg(not(target_arch = "wasm32"))]
 type DynSpawn = dyn Spawn + Send + Sync + 'static;
-#[cfg(target_arch = "wasm32")]
-type DynSpawn = dyn Spawn + 'static;
 
 /// Executor and control-plane owner for [`Flowgraph`]s and async tasks.
 ///
@@ -344,7 +334,7 @@ impl<S: Scheduler + Sync> Runtime<S> {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl<S: Scheduler> Runtime<S> {
+impl<S: Scheduler + Sync> Runtime<S> {
     /// Construct a [`Runtime`] with a custom [`Scheduler`].
     pub fn with_scheduler(scheduler: S) -> Self {
         runtime::init();
