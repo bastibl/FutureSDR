@@ -52,8 +52,7 @@ pub trait BlockObject: Any {
 /// Custom blocks implement [`Kernel`](crate::runtime::dev::Kernel); this trait
 /// is implemented by the normal runtime wrapper around send-capable kernels and
 /// is mainly useful for runtime extensions.
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[async_trait::async_trait]
 pub trait Block: BlockObject + Send {
     /// Run the block.
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>);
