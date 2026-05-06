@@ -579,7 +579,6 @@ impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[async_trait::async_trait(?Send)]
 impl<K: KernelInterface + Kernel + 'static> LocalBlock for WrappedKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {

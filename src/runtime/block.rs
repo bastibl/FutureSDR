@@ -71,17 +71,6 @@ pub(crate) trait LocalBlock: BlockObject {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>);
 }
 
-#[cfg(target_arch = "wasm32")]
-#[async_trait::async_trait(?Send)]
-impl<T> LocalBlock for T
-where
-    T: Block,
-{
-    async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
-        Block::run(self, main_inbox).await;
-    }
-}
-
 impl fmt::Debug for dyn LocalBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalBlock")
