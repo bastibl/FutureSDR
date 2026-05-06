@@ -8,8 +8,6 @@
 //!   send-capable block kernels.
 //! - `#[derive(LocalBlock)]`, which generates the runtime interface for
 //!   explicitly local block kernels.
-//! - `#[async_trait]`, a small compatibility wrapper for async traits that use
-//!   non-`Send` futures on WASM.
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::Attribute;
@@ -1347,23 +1345,4 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
 fn pretty_print(ts: &proc_macro2::TokenStream) -> String {
     let syntax_tree = syn::parse2(ts.clone()).unwrap();
     prettyplease::unparse(&syntax_tree)
-}
-
-//=========================================================================
-// ASYNC_TRAIT
-//=========================================================================
-
-/// Custom version of async_trait that uses non-send futures for WASM.
-#[proc_macro_attribute]
-pub fn async_trait(
-    _attr: proc_macro::TokenStream,
-    fun: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let fun: proc_macro2::TokenStream = fun.into();
-    quote!(
-        #[cfg_attr(not(target_arch = "wasm32"), futuresdr::runtime::macros::async_trait_orig)]
-        #[cfg_attr(target_arch = "wasm32", futuresdr::runtime::macros::async_trait_orig(?Send))]
-        #fun
-    )
-    .into()
 }

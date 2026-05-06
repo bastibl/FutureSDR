@@ -65,12 +65,8 @@ mod wrapped_kernel;
 
 /// Macros for building flowgraphs and implementing blocks.
 pub mod macros {
-    #[doc(hidden)]
-    pub use async_trait::async_trait as async_trait_orig;
-
     pub use futuresdr_macros::Block;
     pub use futuresdr_macros::LocalBlock;
-    pub use futuresdr_macros::async_trait;
     pub use futuresdr_macros::connect;
 }
 

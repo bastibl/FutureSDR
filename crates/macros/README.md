@@ -76,9 +76,3 @@ Supported attributes:
 `LocalBlock` supports the same attributes as `Block`, but targets the local
 runtime path and `LocalKernel` implementations. Use it for non-`Send` state,
 non-`Send` futures, or local-only buffers.
-
-## `#[async_trait]`
-
-FutureSDR's `async_trait` wrapper uses sendable futures on native targets and
-non-`Send` futures on WASM. It is mainly used by runtime extension traits that
-need the same source code to compile for both targets.
