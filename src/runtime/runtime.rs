@@ -36,35 +36,30 @@ use crate::runtime::scheduler::WasmScheduler;
 
 static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(0);
 
-trait SpawnBound: Scheduler + Sync + 'static {}
-impl<T: Scheduler + Sync + 'static> SpawnBound for T {}
+#[cfg(not(target_arch = "wasm32"))]
+/// Default scheduler used by [`Runtime`] and [`RuntimeHandle`] on native targets.
+pub type DefaultScheduler = SmolScheduler;
 
-type DynSpawn = dyn Spawn + Send + Sync + 'static;
+#[cfg(target_arch = "wasm32")]
+/// Default scheduler used by [`Runtime`] and [`RuntimeHandle`] on WASM targets.
+pub type DefaultScheduler = WasmScheduler;
 
 /// Executor and control-plane owner for [`Flowgraph`]s and async tasks.
 ///
 /// A [`Runtime`] owns a scheduler, starts flowgraphs, and provides a control
 /// port on native targets. It is generic over the scheduler implementation, but
 /// most applications can use [`Runtime::new`] with the default scheduler.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct Runtime<S = SmolScheduler> {
+pub struct Runtime<S = DefaultScheduler> {
     id: RuntimeId,
     scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
-    _control_port: ControlPort,
-}
-
-#[cfg(target_arch = "wasm32")]
-/// Executor and control-plane owner for [`Flowgraph`]s and async tasks on WASM.
-pub struct Runtime<S = WasmScheduler> {
-    id: RuntimeId,
-    scheduler: S,
-    flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    _control_port: ControlPort<S>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Runtime<SmolScheduler> {
-    /// Construct a new [`Runtime`] using [`SmolScheduler::default()`].
+impl Runtime<DefaultScheduler> {
+    /// Construct a new [`Runtime`] using [`DefaultScheduler::default()`].
     pub fn new() -> Self {
         Self::with_custom_routes(Router::new())
     }
@@ -76,37 +71,17 @@ impl Runtime<SmolScheduler> {
 
     /// Construct a runtime with additional routes for the integrated webserver.
     pub fn with_custom_routes(routes: Router) -> Self {
-        runtime::init();
-
-        let scheduler = SmolScheduler::default();
-        let flowgraphs = Arc::new(Mutex::new(Vec::new()));
-        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
-        let handle = RuntimeHandle {
-            runtime_id: id,
-            flowgraphs: flowgraphs.clone(),
-            scheduler: Arc::new(RuntimeSpawner {
-                runtime_id: id,
-                scheduler: scheduler.clone(),
-            }),
-        };
-
-        Runtime {
-            id,
-            scheduler,
-            flowgraphs,
-            _control_port: ControlPort::new(handle, routes),
-        }
+        Self::with_config(DefaultScheduler::default(), routes)
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Default for Runtime<SmolScheduler> {
+impl Default for Runtime<DefaultScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<S> Drop for Runtime<S> {
     fn drop(&mut self) {
         debug!("Runtime dropped");
@@ -114,51 +89,24 @@ impl<S> Drop for Runtime<S> {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl<S> Drop for Runtime<S> {
-    fn drop(&mut self) {
-        debug!("Runtime dropped");
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Runtime<WasmScheduler> {
+impl Runtime<DefaultScheduler> {
     /// Construct a runtime using the WASM scheduler.
     pub fn new() -> Self {
-        runtime::init();
-
-        let flowgraphs = Arc::new(Mutex::new(Vec::new()));
-        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
-        Runtime {
-            id,
-            scheduler: WasmScheduler::new(),
-            flowgraphs,
-        }
+        Self::with_scheduler(DefaultScheduler::default())
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-impl Default for Runtime<WasmScheduler> {
+impl Default for Runtime<DefaultScheduler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl<S: Scheduler> Runtime<S> {
     /// Create a flowgraph owned by this runtime.
     pub fn flowgraph(&self) -> Flowgraph {
         Flowgraph::new_with_runtime(Some(self.id))
-    }
-
-    fn validate_flowgraph(&self, fg: &Flowgraph) -> Result<(), Error> {
-        if let Some(runtime_id) = fg.runtime_id
-            && runtime_id != self.id
-        {
-            return Err(Error::RuntimeError(
-                "flowgraph belongs to a different runtime".to_string(),
-            ));
-        }
-        Ok(())
     }
 
     /// Spawn an async task on the runtime scheduler.
@@ -169,43 +117,48 @@ impl<S: Scheduler> Runtime<S> {
         self.scheduler.spawn(future)
     }
 
-    /// Spawn an async task and detach its handle.
-    pub fn spawn_background<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) {
-        self.scheduler.spawn(future).detach();
-    }
-
     /// Start a [`Flowgraph`] on the [`Runtime`] and await initialization.
     ///
     /// Returns once the flowgraph is initialized and running. The returned
     /// [`RunningFlowgraph`] can be used to send messages, stop the graph, or
     /// wait for completion.
     pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        self.validate_flowgraph(&fg)?;
-        let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
-
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = self.scheduler.spawn(run_flowgraph(
-            fg,
-            self.scheduler.clone(),
-            fg_inbox.clone(),
-            fg_inbox_rx,
-            tx,
-        ));
-
-        rx.await
-            .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
-
-        let handle = FlowgraphHandle::new(fg_inbox);
+        let running = start_flowgraph(self.id, self.scheduler.clone(), fg).await?;
         self.flowgraphs
             .try_lock()
             .ok_or(Error::LockError)?
-            .push(handle.clone());
+            .push(running.handle());
+        Ok(running)
+    }
 
-        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
+    /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
+    pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
+        self.start_async(fg).await?.wait_async().await
+    }
+
+    /// Get the [`Scheduler`] that is associated with the [`Runtime`].
+    pub fn scheduler(&self) -> &S {
+        &self.scheduler
+    }
+
+    /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
+    pub fn handle(&self) -> RuntimeHandle<S> {
+        RuntimeHandle {
+            runtime_id: self.id,
+            scheduler: self.scheduler.clone(),
+            flowgraphs: self.flowgraphs.clone(),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: Scheduler> Runtime<S> {
+    /// Spawn an async task and detach its handle.
+    pub fn spawn_background<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) {
+        self.scheduler.spawn(future).detach();
     }
 
     /// Start a [`Flowgraph`] on the [`Runtime`].
@@ -219,74 +172,6 @@ impl<S: Scheduler> Runtime<S> {
     pub fn run(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
         let running = async_io::block_on(self.start_async(fg))?;
         running.wait()
-    }
-
-    /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
-    pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
-        self.start_async(fg).await?.wait_async().await
-    }
-
-    /// Get the [`Scheduler`] that is associated with the [`Runtime`].
-    pub fn scheduler(&self) -> &S {
-        &self.scheduler
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl<S: Scheduler> Runtime<S> {
-    /// Create a flowgraph owned by this runtime.
-    pub fn flowgraph(&self) -> Flowgraph {
-        Flowgraph::new_with_runtime(Some(self.id))
-    }
-
-    fn validate_flowgraph(&self, fg: &Flowgraph) -> Result<(), Error> {
-        if let Some(runtime_id) = fg.runtime_id
-            && runtime_id != self.id
-        {
-            return Err(Error::RuntimeError(
-                "flowgraph belongs to a different runtime".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Spawn an async task on the runtime scheduler.
-    pub fn spawn<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        self.scheduler.spawn(future)
-    }
-
-    /// Start a [`Flowgraph`] on the [`Runtime`] and await initialization.
-    pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        self.validate_flowgraph(&fg)?;
-        let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
-
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = Task::spawn_local(run_flowgraph(fg, fg_inbox.clone(), fg_inbox_rx, tx));
-
-        rx.await
-            .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
-
-        let handle = FlowgraphHandle::new(fg_inbox);
-        self.flowgraphs
-            .try_lock()
-            .ok_or(Error::LockError)?
-            .push(handle.clone());
-
-        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
-    }
-
-    /// Start a [`Flowgraph`] on the [`Runtime`] and await its termination.
-    pub async fn run_async(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
-        self.start_async(fg).await?.wait_async().await
-    }
-
-    /// Get the [`Scheduler`] that is associated with the [`Runtime`].
-    pub fn scheduler(&self) -> &S {
-        &self.scheduler
     }
 }
 
@@ -305,11 +190,8 @@ impl<S: Scheduler + Sync> Runtime<S> {
         let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
             runtime_id: id,
+            scheduler: scheduler.clone(),
             flowgraphs: flowgraphs.clone(),
-            scheduler: Arc::new(RuntimeSpawner {
-                runtime_id: id,
-                scheduler: scheduler.clone(),
-            }),
         };
 
         Runtime {
@@ -319,22 +201,10 @@ impl<S: Scheduler + Sync> Runtime<S> {
             _control_port: ControlPort::new(handle, routes),
         }
     }
-
-    /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
-    pub fn handle(&self) -> RuntimeHandle {
-        RuntimeHandle {
-            runtime_id: self.id,
-            flowgraphs: self.flowgraphs.clone(),
-            scheduler: Arc::new(RuntimeSpawner {
-                runtime_id: self.id,
-                scheduler: self.scheduler.clone(),
-            }),
-        }
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
-impl<S: Scheduler + Sync> Runtime<S> {
+impl<S: Scheduler> Runtime<S> {
     /// Construct a [`Runtime`] with a custom [`Scheduler`].
     pub fn with_scheduler(scheduler: S) -> Self {
         runtime::init();
@@ -347,81 +217,6 @@ impl<S: Scheduler + Sync> Runtime<S> {
             flowgraphs,
         }
     }
-
-    /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
-    pub fn handle(&self) -> RuntimeHandle {
-        RuntimeHandle {
-            runtime_id: self.id,
-            flowgraphs: self.flowgraphs.clone(),
-            scheduler: Arc::new(self.scheduler.clone()),
-        }
-    }
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-trait Spawn {
-    async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error>;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-struct RuntimeSpawner<S> {
-    runtime_id: RuntimeId,
-    scheduler: S,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-impl<S> Spawn for RuntimeSpawner<S>
-where
-    S: SpawnBound,
-{
-    async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        if let Some(runtime_id) = fg.runtime_id
-            && runtime_id != self.runtime_id
-        {
-            return Err(Error::RuntimeError(
-                "flowgraph belongs to a different runtime".to_string(),
-            ));
-        }
-        let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
-
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = self.scheduler.spawn(run_flowgraph(
-            fg,
-            self.scheduler.clone(),
-            fg_inbox.clone(),
-            fg_inbox_rx,
-            tx,
-        ));
-
-        rx.await.or(Err(Error::RuntimeError(
-            "run_flowgraph crashed".to_string(),
-        )))??;
-
-        let handle = FlowgraphHandle::new(fg_inbox);
-        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-impl<S: SpawnBound> Spawn for S {
-    async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        let queue_size = config::config().queue_size;
-        let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
-
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-        let task = Task::spawn_local(run_flowgraph(fg, fg_inbox.clone(), fg_inbox_rx, tx));
-
-        rx.await.or(Err(Error::RuntimeError(
-            "run_flowgraph crashed".to_string(),
-        )))??;
-
-        let handle = FlowgraphHandle::new(fg_inbox);
-        Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
-    }
 }
 
 /// Clonable runtime control handle used by web handlers and external control code.
@@ -429,14 +224,23 @@ impl<S: SpawnBound> Spawn for S {
 /// A `RuntimeHandle` can start new flowgraphs on the same scheduler as the
 /// owning [`Runtime`] and look up flowgraphs that have been registered with the
 /// control plane.
-#[derive(Clone)]
-pub struct RuntimeHandle {
+pub struct RuntimeHandle<S = DefaultScheduler> {
     runtime_id: RuntimeId,
-    scheduler: Arc<DynSpawn>,
+    scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
 }
 
-impl fmt::Debug for RuntimeHandle {
+impl<S: Clone> Clone for RuntimeHandle<S> {
+    fn clone(&self) -> Self {
+        Self {
+            runtime_id: self.runtime_id,
+            scheduler: self.scheduler.clone(),
+            flowgraphs: self.flowgraphs.clone(),
+        }
+    }
+}
+
+impl<S> fmt::Debug for RuntimeHandle<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeHandle")
             .field("runtime_id", &self.runtime_id)
@@ -445,16 +249,16 @@ impl fmt::Debug for RuntimeHandle {
     }
 }
 
-impl PartialEq for RuntimeHandle {
+impl<S> PartialEq for RuntimeHandle<S> {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.scheduler, &other.scheduler)
+        self.runtime_id == other.runtime_id
     }
 }
 
-impl RuntimeHandle {
+impl<S: Scheduler> RuntimeHandle<S> {
     /// Start a [`Flowgraph`] on the runtime.
     pub async fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        let running = self.scheduler.start(fg).await?;
+        let running = start_flowgraph(self.runtime_id, self.scheduler.clone(), fg).await?;
         self.add_flowgraph(running.handle()).await;
         Ok(running)
     }
@@ -482,6 +286,65 @@ impl RuntimeHandle {
             .map(|x| FlowgraphId(x.0))
             .collect()
     }
+}
+
+fn validate_flowgraph(runtime_id: RuntimeId, fg: &Flowgraph) -> Result<(), Error> {
+    if let Some(fg_runtime_id) = fg.runtime_id
+        && fg_runtime_id != runtime_id
+    {
+        return Err(Error::RuntimeError(
+            "flowgraph belongs to a different runtime".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn start_flowgraph<S: Scheduler>(
+    runtime_id: RuntimeId,
+    scheduler: S,
+    fg: Flowgraph,
+) -> Result<RunningFlowgraph, Error> {
+    validate_flowgraph(runtime_id, &fg)?;
+    let queue_size = config::config().queue_size;
+    let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
+
+    let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+    let task = spawn_run_flowgraph(scheduler, fg, fg_inbox.clone(), fg_inbox_rx, tx);
+
+    rx.await
+        .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
+
+    let handle = FlowgraphHandle::new(fg_inbox);
+    Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_run_flowgraph<S: Scheduler>(
+    scheduler: S,
+    fg: Flowgraph,
+    fg_inbox: Sender<FlowgraphMessage>,
+    fg_inbox_rx: Receiver<FlowgraphMessage>,
+    initialized: oneshot::Sender<Result<(), Error>>,
+) -> Task<Result<Flowgraph, Error>> {
+    let scheduler_clone = scheduler.clone();
+    scheduler.spawn(run_flowgraph(
+        fg,
+        scheduler_clone,
+        fg_inbox,
+        fg_inbox_rx,
+        initialized,
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_run_flowgraph<S: Scheduler>(
+    _scheduler: S,
+    fg: Flowgraph,
+    fg_inbox: Sender<FlowgraphMessage>,
+    fg_inbox_rx: Receiver<FlowgraphMessage>,
+    initialized: oneshot::Sender<Result<(), Error>>,
+) -> Task<Result<Flowgraph, Error>> {
+    Task::spawn_local(run_flowgraph(fg, fg_inbox, fg_inbox_rx, initialized))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

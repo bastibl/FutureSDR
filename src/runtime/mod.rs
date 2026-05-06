@@ -84,6 +84,7 @@ pub use flowgraph_handle::FlowgraphBlockHandle;
 pub use flowgraph_handle::FlowgraphHandle;
 pub use flowgraph_task::FlowgraphTask;
 pub use running_flowgraph::RunningFlowgraph;
+pub use runtime::DefaultScheduler;
 pub use runtime::Runtime;
 pub use runtime::RuntimeHandle;
 pub use timer::Timer;

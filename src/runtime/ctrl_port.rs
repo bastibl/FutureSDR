@@ -22,6 +22,7 @@ use crate::runtime::Pmt;
 use crate::runtime::PortId;
 use crate::runtime::RuntimeHandle;
 use crate::runtime::config;
+use crate::runtime::scheduler::Scheduler;
 
 macro_rules! relative {
     ($path:expr_2021) => {
@@ -33,13 +34,15 @@ macro_rules! relative {
     };
 }
 
-async fn flowgraphs(State(rt): State<RuntimeHandle>) -> Json<Vec<FlowgraphId>> {
+async fn flowgraphs<S: Scheduler + Sync>(
+    State(rt): State<RuntimeHandle<S>>,
+) -> Json<Vec<FlowgraphId>> {
     Json::from(rt.get_flowgraphs().await)
 }
 
-async fn flowgraph_description(
+async fn flowgraph_description<S: Scheduler + Sync>(
     Path(fg): Path<usize>,
-    State(rt): State<RuntimeHandle>,
+    State(rt): State<RuntimeHandle<S>>,
 ) -> Result<Json<FlowgraphDescription>, StatusCode> {
     let fg = rt.get_flowgraph(FlowgraphId(fg));
     if let Some(fg) = fg.await
@@ -50,9 +53,9 @@ async fn flowgraph_description(
     Err(StatusCode::BAD_REQUEST)
 }
 
-async fn block_description(
+async fn block_description<S: Scheduler + Sync>(
     Path((fg, blk)): Path<(usize, BlockId)>,
-    State(rt): State<RuntimeHandle>,
+    State(rt): State<RuntimeHandle<S>>,
 ) -> Result<Json<BlockDescription>, StatusCode> {
     let fg = rt.get_flowgraph(FlowgraphId(fg));
     if let Some(fg) = fg.await
@@ -64,9 +67,9 @@ async fn block_description(
     Err(StatusCode::BAD_REQUEST)
 }
 
-async fn handler_id(
+async fn handler_id<S: Scheduler + Sync>(
     Path((fg, blk, handler)): Path<(usize, BlockId, PortId)>,
-    State(rt): State<RuntimeHandle>,
+    State(rt): State<RuntimeHandle<S>>,
 ) -> Result<Json<Pmt>, StatusCode> {
     let fg = rt.get_flowgraph(FlowgraphId(fg));
     if let Some(fg) = fg.await
@@ -78,9 +81,9 @@ async fn handler_id(
     Err(StatusCode::BAD_REQUEST)
 }
 
-async fn handler_id_post(
+async fn handler_id_post<S: Scheduler + Sync>(
     Path((fg, blk, handler)): Path<(usize, BlockId, PortId)>,
-    State(rt): State<RuntimeHandle>,
+    State(rt): State<RuntimeHandle<S>>,
     Json(pmt): Json<Pmt>,
 ) -> Result<Json<Pmt>, StatusCode> {
     let fg = rt.get_flowgraph(FlowgraphId(fg));
@@ -93,13 +96,13 @@ async fn handler_id_post(
     Err(StatusCode::BAD_REQUEST)
 }
 
-pub struct ControlPort {
+pub struct ControlPort<S> {
     thread: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
-    handle: RuntimeHandle,
+    handle: RuntimeHandle<S>,
 }
 
-impl ControlPort {
-    pub fn new(handle: RuntimeHandle, routes: Router) -> Self {
+impl<S: Scheduler + Sync> ControlPort<S> {
+    pub fn new(handle: RuntimeHandle<S>, routes: Router) -> Self {
         let mut cp = ControlPort {
             handle,
             thread: None,
@@ -189,7 +192,7 @@ impl ControlPort {
     }
 }
 
-impl Drop for ControlPort {
+impl<S> Drop for ControlPort<S> {
     fn drop(&mut self) {
         if let Some((tx, handle)) = self.thread.take() {
             let _ = tx.send(());
