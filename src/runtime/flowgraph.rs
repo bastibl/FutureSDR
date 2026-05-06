@@ -226,7 +226,6 @@ impl LocalDomainBlocks {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct LocalDomain {
     fg: *mut Flowgraph,
-    flowgraph_id: FlowgraphId,
     domain_id: usize,
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
@@ -430,7 +429,6 @@ impl Flowgraph {
         self.local_domains.push(LocalDomainBlocks::new());
         LocalDomain {
             fg: self as *mut Flowgraph,
-            flowgraph_id: self.id,
             domain_id,
             _not_send_or_sync: PhantomData,
         }
@@ -627,44 +625,6 @@ impl Flowgraph {
         self.add_kernel_to_domain(0, block)
     }
 
-    /// Add a block to an explicit local domain.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn add_local_to<K>(
-        &mut self,
-        domain: &LocalDomain,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
-        self.validate_local_domain(domain)
-            .expect("local domain belongs to another flowgraph");
-        self.add_kernel_to_domain(domain.domain_id, block)
-    }
-
-    /// Add a block to an explicit local domain.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn local_add<K>(
-        &mut self,
-        domain: &LocalDomain,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
-        self.add_local_to(domain, block)
-    }
-
-    /// Add an explicitly local block to the default local domain.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn add_local_kernel<K>(&mut self, block: impl FnOnce() -> K + Send + 'static) -> BlockRef<K>
-    where
-        K: LocalKernel + LocalKernelInterface + 'static,
-    {
-        self.ensure_default_local_domain();
-        self.add_local_to_domain(0, block)
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     fn add_kernel_to_domain<K>(
         &mut self,
@@ -726,20 +686,6 @@ impl Flowgraph {
         }
         if self.block_placements.get(block.id.0).copied() != Some(block.placement) {
             return Err(Error::InvalidBlock(block.id));
-        }
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn validate_local_domain(&self, domain: &LocalDomain) -> Result<(), Error> {
-        if domain.flowgraph_id != self.id {
-            return Err(Error::ValidationError(format!(
-                "local domain belongs to flowgraph {}, not {}",
-                domain.flowgraph_id, self.id
-            )));
-        }
-        if domain.domain_id >= self.local_domains.len() {
-            return Err(Error::ValidationError("invalid local domain".to_string()));
         }
         Ok(())
     }
