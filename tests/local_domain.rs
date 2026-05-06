@@ -133,6 +133,25 @@ fn runtime_owned_flowgraph_runs_local_domain_blocks() -> Result<()> {
 }
 
 #[test]
+fn stream_dyn_connects_local_source_to_normal_blocks() -> Result<()> {
+    let rt = Runtime::new();
+    let mut fg = rt.flowgraph();
+
+    let src = fg.add_local(|| VectorSource::<u8, DefaultCpuWriter<u8>>::new(vec![1, 2, 3, 4]));
+    let snk0 = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
+    let snk1 = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
+
+    fg.stream_dyn(src, "output", snk0, "input")?;
+    fg.stream_dyn(src, "output", snk1, "input")?;
+
+    let fg = rt.run(fg)?;
+    assert_eq!(fg.block(&snk0)?.n_received(), 4);
+    assert_eq!(fg.block(&snk1)?.n_received(), 4);
+
+    Ok(())
+}
+
+#[test]
 fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
     let rt = Runtime::new();
     let mut fg = rt.flowgraph();

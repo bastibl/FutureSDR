@@ -1198,6 +1198,39 @@ impl Flowgraph {
         edge
     }
 
+    fn connect_stream_ports_dyn(
+        src_block_id: BlockId,
+        src_port_id: &PortId,
+        src_block: &mut dyn BlockObject,
+        dst_block_id: BlockId,
+        dst_port_id: &PortId,
+        dst_block: &mut dyn BlockObject,
+    ) -> Result<StreamEdge, Error> {
+        let reader = dst_block.stream_input(dst_port_id).map_err(|e| match e {
+            Error::InvalidStreamPort(_, port) => {
+                Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst_block_id), port)
+            }
+            o => o,
+        })?;
+
+        src_block
+            .connect_stream_output(src_port_id, reader)
+            .map_err(|e| match e {
+                Error::InvalidStreamPort(_, port) => {
+                    Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(src_block_id), port)
+                }
+                o => o,
+            })?;
+
+        Ok(StreamEdge {
+            buffer_id: BufferId(NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)),
+            src_block: src_block_id,
+            src_port: src_port_id.clone(),
+            dst_block: dst_block_id,
+            dst_port: dst_port_id.clone(),
+        })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_local_local_stream<KS, KD, B, FS, FD>(
         &self,
@@ -1308,6 +1341,155 @@ impl Flowgraph {
                     let edge_result =
                         Self::wrapped_kernel_mut::<KS>(normal.as_mut(), src_id).map(|src| {
                             Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(dst))
+                        });
+                    Ok((edge_result, normal))
+                })?;
+        self.blocks[src_id.0] = Some(restored);
+        edge_result
+    }
+
+    fn connect_normal_normal_stream_dyn(
+        &mut self,
+        src_block_id: BlockId,
+        src_port_id: &PortId,
+        dst_block_id: BlockId,
+        dst_port_id: &PortId,
+    ) -> Result<StreamEdge, Error> {
+        if src_block_id == dst_block_id {
+            return Err(Error::LockError);
+        }
+        let len = self.blocks.len();
+        let invalid_block = if src_block_id.0 >= len {
+            src_block_id
+        } else {
+            dst_block_id
+        };
+        let [src_slot, dst_slot] = self
+            .blocks
+            .get_disjoint_mut([src_block_id.0, dst_block_id.0])
+            .map_err(|err| match err {
+                std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                    Error::InvalidBlock(invalid_block)
+                }
+                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+            })?;
+        let src_block = src_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
+        let dst_block = dst_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
+        Self::connect_stream_ports_dyn(
+            src_block_id,
+            src_port_id,
+            src_block,
+            dst_block_id,
+            dst_port_id,
+            dst_block,
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_local_local_stream_dyn(
+        &self,
+        src: (BlockId, usize, usize),
+        src_port_id: PortId,
+        dst: (BlockId, usize, usize),
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        let (src_id, src_domain, src_local) = src;
+        let (dst_id, dst_domain, dst_local) = dst;
+        if src_domain != dst_domain {
+            return Err(Error::ValidationError(
+                "stream connections between different local domains are not supported".to_string(),
+            ));
+        }
+        let domain = self
+            .local_domains
+            .get(src_domain)
+            .ok_or(Error::InvalidBlock(src_id))?;
+        domain.controller.exec(move |state| {
+            if src_local == dst_local {
+                return Err(Error::LockError);
+            }
+            let invalid_block = if src_local >= state.blocks.len() {
+                src_id
+            } else {
+                dst_id
+            };
+            let [src_slot, dst_slot] = state
+                .blocks
+                .get_disjoint_mut([src_local, dst_local])
+                .map_err(|err| match err {
+                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                        Error::InvalidBlock(invalid_block)
+                    }
+                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+                })?;
+            let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+            let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+            Self::connect_stream_ports_dyn(
+                src_id,
+                &src_port_id,
+                src_block,
+                dst_id,
+                &dst_port_id,
+                dst_block,
+            )
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_local_normal_stream_dyn(
+        &mut self,
+        src: (BlockId, usize, usize),
+        src_port_id: PortId,
+        dst_id: BlockId,
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        let (src_id, domain_id, local_id) = src;
+        let mut normal = self.blocks[dst_id.0].take().ok_or(Error::LockError)?;
+        let (edge_result, restored) =
+            self.local_domains[domain_id]
+                .controller
+                .exec(move |state| {
+                    let edge_result = Self::local_state_block_mut(state, local_id, src_id)
+                        .and_then(|src_block| {
+                            Self::connect_stream_ports_dyn(
+                                src_id,
+                                &src_port_id,
+                                src_block,
+                                dst_id,
+                                &dst_port_id,
+                                normal.as_mut(),
+                            )
+                        });
+                    Ok((edge_result, normal))
+                })?;
+        self.blocks[dst_id.0] = Some(restored);
+        edge_result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect_normal_local_stream_dyn(
+        &mut self,
+        src_id: BlockId,
+        src_port_id: PortId,
+        dst: (BlockId, usize, usize),
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        let (dst_id, domain_id, local_id) = dst;
+        let mut normal = self.blocks[src_id.0].take().ok_or(Error::LockError)?;
+        let (edge_result, restored) =
+            self.local_domains[domain_id]
+                .controller
+                .exec(move |state| {
+                    let edge_result = Self::local_state_block_mut(state, local_id, dst_id)
+                        .and_then(|dst_block| {
+                            Self::connect_stream_ports_dyn(
+                                src_id,
+                                &src_port_id,
+                                normal.as_mut(),
+                                dst_id,
+                                &dst_port_id,
+                                dst_block,
+                            )
                         });
                     Ok((edge_result, normal))
                 })?;
@@ -1506,49 +1688,63 @@ impl Flowgraph {
         let dst_block_id = dst_block_id.into();
         let dst_port_id = dst_port_id.into();
 
-        if src_block_id == dst_block_id {
-            return Err(Error::LockError);
-        }
-        let len = self.blocks.len();
-        let invalid_block = if src_block_id.0 >= len {
-            src_block_id
-        } else {
-            dst_block_id
+        let edge = match (self.placement(src_block_id)?, self.placement(dst_block_id)?) {
+            (BlockPlacement::Normal { .. }, BlockPlacement::Normal { .. }) => self
+                .connect_normal_normal_stream_dyn(
+                    src_block_id,
+                    &src_port_id,
+                    dst_block_id,
+                    &dst_port_id,
+                )?,
+            #[cfg(not(target_arch = "wasm32"))]
+            (
+                BlockPlacement::Local {
+                    domain_id: src_domain,
+                    local_id: src_local,
+                    ..
+                },
+                BlockPlacement::Local {
+                    domain_id: dst_domain,
+                    local_id: dst_local,
+                    ..
+                },
+            ) => self.connect_local_local_stream_dyn(
+                (src_block_id, src_domain, src_local),
+                src_port_id,
+                (dst_block_id, dst_domain, dst_local),
+                dst_port_id,
+            )?,
+            #[cfg(not(target_arch = "wasm32"))]
+            (
+                BlockPlacement::Local {
+                    domain_id,
+                    local_id,
+                    ..
+                },
+                BlockPlacement::Normal { .. },
+            ) => self.connect_local_normal_stream_dyn(
+                (src_block_id, domain_id, local_id),
+                src_port_id,
+                dst_block_id,
+                dst_port_id,
+            )?,
+            #[cfg(not(target_arch = "wasm32"))]
+            (
+                BlockPlacement::Normal { .. },
+                BlockPlacement::Local {
+                    domain_id,
+                    local_id,
+                    ..
+                },
+            ) => self.connect_normal_local_stream_dyn(
+                src_block_id,
+                src_port_id,
+                (dst_block_id, domain_id, local_id),
+                dst_port_id,
+            )?,
         };
-        let [src_slot, dst_slot] = self
-            .blocks
-            .get_disjoint_mut([src_block_id.0, dst_block_id.0])
-            .map_err(|err| match err {
-                std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                    Error::InvalidBlock(invalid_block)
-                }
-                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-            })?;
-        let src_block = src_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
-        let dst_block = dst_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
-        let reader = dst_block.stream_input(&dst_port_id).map_err(|e| match e {
-            Error::InvalidStreamPort(_, port) => {
-                Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst_block_id), port)
-            }
-            o => o,
-        })?;
 
-        src_block
-            .connect_stream_output(&src_port_id, reader)
-            .map_err(|e| match e {
-                Error::InvalidStreamPort(_, port) => {
-                    Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(src_block_id), port)
-                }
-                o => o,
-            })?;
-
-        self.stream_edges.push(StreamEdge {
-            buffer_id: BufferId(NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)),
-            src_block: src_block_id,
-            src_port: src_port_id,
-            dst_block: dst_block_id,
-            dst_port: dst_port_id,
-        });
+        self.stream_edges.push(edge);
         Ok(())
     }
 
