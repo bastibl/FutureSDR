@@ -12,19 +12,6 @@ pub trait ConnectAdd {
     fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error>;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl<K> ConnectAdd for K
-where
-    K: SendKernel + SendKernelInterface + 'static,
-{
-    type Added = BlockRef<K>;
-
-    fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        Ok(fg.add(self))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 impl<K> ConnectAdd for K
 where
     K: SendKernel + SendKernelInterface + 'static,
