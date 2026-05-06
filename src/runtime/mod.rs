@@ -32,9 +32,7 @@ pub mod dev;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod ctrl_port;
-#[cfg(target_arch = "wasm32")]
-#[path = "ctrl_port_wasm.rs"]
-mod ctrl_port;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::ctrl_port::ControlPort;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]

@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use crate::runtime;
 use crate::runtime::BlockDescription;
 use crate::runtime::BlockMessage;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::ControlPort;
 use crate::runtime::Error;
 use crate::runtime::Flowgraph;
@@ -69,7 +70,6 @@ pub struct Runtime<S = WasmScheduler> {
     id: RuntimeId,
     scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
-    _control_port: ControlPort,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -142,7 +142,6 @@ impl Runtime<WasmScheduler> {
             id,
             scheduler: WasmScheduler::new(),
             flowgraphs,
-            _control_port: ControlPort::new(),
         }
     }
 }
@@ -356,7 +355,6 @@ impl<S: Scheduler> Runtime<S> {
             id,
             scheduler,
             flowgraphs,
-            _control_port: ControlPort::new(),
         }
     }
 
