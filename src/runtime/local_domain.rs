@@ -1,40 +1,25 @@
-#[cfg(not(target_arch = "wasm32"))]
 use async_executor::LocalExecutor;
-#[cfg(not(target_arch = "wasm32"))]
 use futures::channel::oneshot;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::Error;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::FlowgraphMessage;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::LocalBlock;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::channel::mpsc::Sender;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::config;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::BlockInbox;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) type LocalBlockBuilder = Box<dyn FnOnce() -> Box<dyn LocalBlock> + Send + 'static>;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static> + Send + 'static>;
 
-#[cfg(not(target_arch = "wasm32"))]
 type SyncReply<T> = mpsc::Sender<Result<T, Error>>;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct LocalDomainState {
     pub(crate) blocks: Vec<Option<Box<dyn LocalBlock>>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 enum LocalDomainMessage {
     Build {
         local_id: usize,
@@ -50,13 +35,11 @@ enum LocalDomainMessage {
     Terminate,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct LocalDomainController {
     tx: mpsc::Sender<LocalDomainMessage>,
     join: Option<thread::JoinHandle<()>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl LocalDomainController {
     pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::channel();
@@ -123,7 +106,6 @@ impl LocalDomainController {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for LocalDomainController {
     fn drop(&mut self) {
         let _ = self.tx.send(LocalDomainMessage::Terminate);
@@ -135,7 +117,6 @@ impl Drop for LocalDomainController {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn run_domain_thread(rx: mpsc::Receiver<LocalDomainMessage>) {
     let mut state = LocalDomainState { blocks: Vec::new() };
 
@@ -167,7 +148,6 @@ fn run_domain_thread(rx: mpsc::Receiver<LocalDomainMessage>) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn insert_at(
     blocks: &mut Vec<Option<Box<dyn LocalBlock>>>,
     local_id: usize,
@@ -185,7 +165,6 @@ fn insert_at(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn run_local_domain(
     state: &mut LocalDomainState,
     ex: LocalExecutor<'static>,
@@ -217,7 +196,6 @@ async fn run_local_domain(
     .try_for_each(|(local_id, block)| insert_at(&mut state.blocks, local_id, block))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn default_local_executor_factory() -> LocalExecutorFactory {
     Box::new(LocalExecutor::new)
 }
