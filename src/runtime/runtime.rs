@@ -5,8 +5,6 @@ use futures::channel::oneshot;
 use futures::prelude::*;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 use crate::runtime;
 use crate::runtime::BlockDescription;
@@ -24,7 +22,6 @@ use crate::runtime::FlowgraphTask;
 use crate::runtime::Pmt;
 use crate::runtime::PortId;
 use crate::runtime::RunningFlowgraph;
-use crate::runtime::RuntimeId;
 use crate::runtime::channel::mpsc::Receiver;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::mpsc::channel;
@@ -35,8 +32,6 @@ use crate::runtime::scheduler::SmolScheduler;
 use crate::runtime::scheduler::Task;
 #[cfg(target_arch = "wasm32")]
 use crate::runtime::scheduler::WasmScheduler;
-
-static NEXT_RUNTIME_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Default scheduler used by [`Runtime`] and [`RuntimeHandle`] on native targets.
@@ -52,7 +47,6 @@ pub type DefaultScheduler = WasmScheduler;
 /// port on native targets. It is generic over the scheduler implementation, but
 /// most applications can use [`Runtime::new`] with the default scheduler.
 pub struct Runtime<S = DefaultScheduler> {
-    id: RuntimeId,
     scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -133,7 +127,6 @@ impl<S: Scheduler> Runtime<S> {
     /// Create a clonable [`RuntimeHandle`] for starting and querying flowgraphs.
     pub fn handle(&self) -> RuntimeHandle<S> {
         RuntimeHandle {
-            runtime_id: self.id,
             scheduler: self.scheduler.clone(),
             flowgraphs: self.flowgraphs.clone(),
         }
@@ -176,15 +169,12 @@ impl<S: Scheduler + Sync> Runtime<S> {
         runtime::init();
 
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
-        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         let handle = RuntimeHandle {
-            runtime_id: id,
             scheduler: scheduler.clone(),
             flowgraphs: flowgraphs.clone(),
         };
 
         Runtime {
-            id,
             scheduler,
             flowgraphs,
             _control_port: ControlPort::new(handle, routes),
@@ -199,9 +189,7 @@ impl<S: Scheduler> Runtime<S> {
         runtime::init();
 
         let flowgraphs = Arc::new(Mutex::new(Vec::new()));
-        let id = RuntimeId(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed));
         Runtime {
-            id,
             scheduler,
             flowgraphs,
         }
@@ -214,7 +202,6 @@ impl<S: Scheduler> Runtime<S> {
 /// owning [`Runtime`] and look up flowgraphs that have been registered with the
 /// control plane.
 pub struct RuntimeHandle<S = DefaultScheduler> {
-    runtime_id: RuntimeId,
     scheduler: S,
     flowgraphs: Arc<Mutex<Vec<FlowgraphHandle>>>,
 }
@@ -222,7 +209,6 @@ pub struct RuntimeHandle<S = DefaultScheduler> {
 impl<S: Clone> Clone for RuntimeHandle<S> {
     fn clone(&self) -> Self {
         Self {
-            runtime_id: self.runtime_id,
             scheduler: self.scheduler.clone(),
             flowgraphs: self.flowgraphs.clone(),
         }
@@ -232,7 +218,6 @@ impl<S: Clone> Clone for RuntimeHandle<S> {
 impl<S> fmt::Debug for RuntimeHandle<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeHandle")
-            .field("runtime_id", &self.runtime_id)
             .field("flowgraphs", &self.flowgraphs)
             .finish()
     }
@@ -240,7 +225,7 @@ impl<S> fmt::Debug for RuntimeHandle<S> {
 
 impl<S> PartialEq for RuntimeHandle<S> {
     fn eq(&self, other: &Self) -> bool {
-        self.runtime_id == other.runtime_id
+        Arc::ptr_eq(&self.flowgraphs, &other.flowgraphs)
     }
 }
 

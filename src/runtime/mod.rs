@@ -98,10 +98,6 @@ pub use futuresdr_types::Pmt;
 pub use futuresdr_types::PmtKind;
 pub use futuresdr_types::PortId;
 
-/// Identifier for one runtime instance.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct RuntimeId(pub(crate) usize);
-
 /// Proc-macro and runtime plumbing that is public only so downstream macro
 /// expansions can reference generated implementation details.
 #[doc(hidden)]
