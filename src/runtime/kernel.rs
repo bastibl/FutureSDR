@@ -132,25 +132,3 @@ pub trait LocalKernel {
         async { Ok(()) }
     }
 }
-
-impl<T: Kernel> LocalKernel for T {
-    async fn work(
-        &mut self,
-        io: &mut LocalWorkIo,
-        mo: &mut MessageOutputs,
-        b: &mut BlockMeta,
-    ) -> Result<()> {
-        let mut work_io = WorkIo::from_local(io);
-        let result = Kernel::work(self, &mut work_io, mo, b).await;
-        io.absorb_work_io(work_io);
-        result
-    }
-
-    async fn init(&mut self, mo: &mut MessageOutputs, b: &mut BlockMeta) -> Result<()> {
-        Kernel::init(self, mo, b).await
-    }
-
-    async fn deinit(&mut self, mo: &mut MessageOutputs, b: &mut BlockMeta) -> Result<()> {
-        Kernel::deinit(self, mo, b).await
-    }
-}

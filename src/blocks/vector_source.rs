@@ -21,7 +21,7 @@ use crate::runtime::dev::prelude::*;
 ///
 /// let src = VectorSource::<u8>::new(vec![1, 2, 3]);
 /// ```
-#[derive(Block)]
+#[derive(Block, LocalBlock)]
 pub struct VectorSource<T: Send, O: CpuBufferWriter<Item = T> = DefaultCpuWriter<T>> {
     items: Vec<T>,
     n_copied: usize,
@@ -53,6 +53,42 @@ where
     async fn work(
         &mut self,
         io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let out = self.output.slice();
+
+        let n = cmp::min(out.len(), self.items.len() - self.n_copied);
+
+        if n > 0 {
+            unsafe {
+                let src_ptr = self.items.as_ptr().add(self.n_copied);
+                let dst_ptr = out.as_mut_ptr();
+                ptr::copy_nonoverlapping(src_ptr, dst_ptr, n)
+            };
+
+            self.n_copied += n;
+
+            if self.n_copied == self.items.len() {
+                io.finished = true;
+            }
+
+            self.output.produce(n);
+        }
+
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+impl<T, O> LocalKernel for VectorSource<T, O>
+where
+    T: Send + 'static,
+    O: CpuBufferWriter<Item = T>,
+{
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

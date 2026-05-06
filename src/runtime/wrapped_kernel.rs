@@ -37,7 +37,24 @@ use crate::runtime::kernel_interface::SendKernelInterface;
 use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WrappedKernel<K> {
+    /// Block metadata
+    pub meta: BlockMeta,
+    /// Message outputs
+    pub mo: MessageOutputs,
+    /// Kernel
+    pub kernel: K,
+    /// Block ID
+    pub id: BlockId,
+    /// Inbox for Actor Model
+    pub inbox: BlockInboxReader,
+    /// Sending-side of Inbox
+    pub inbox_tx: BlockInbox,
+}
+
+/// Typed local block wrapper around a concrete local kernel instance.
+pub(crate) struct WrappedLocalKernel<K> {
     /// Block metadata
     pub meta: BlockMeta,
     /// Message outputs
@@ -253,9 +270,9 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
     }
 }
 
-impl<K: LocalKernelInterface + 'static> WrappedKernel<K> {
+impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
     /// Create typed local block wrapper.
-    pub fn new_local(mut kernel: K, id: BlockId) -> Self {
+    pub fn new(mut kernel: K, id: BlockId) -> Self {
         let (tx, rx) = crate::runtime::block_inbox::channel(config::config().queue_size);
         kernel.stream_ports_init(id, tx.clone());
         Self {
@@ -280,7 +297,7 @@ impl<K: LocalKernelInterface + 'static> WrappedKernel<K> {
             .instance_name()
             .unwrap_or(K::type_name())
             .to_owned();
-        let WrappedKernel {
+        let WrappedLocalKernel {
             meta,
             mo,
             kernel,
@@ -453,7 +470,53 @@ impl<K: LocalKernelInterface + 'static> WrappedKernel<K> {
     }
 }
 
-impl<K: LocalKernelInterface + 'static> BlockObject for WrappedKernel<K> {
+#[cfg(not(target_arch = "wasm32"))]
+impl<K: KernelInterface + 'static> BlockObject for WrappedKernel<K> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn inbox(&self) -> BlockInbox {
+        self.inbox_tx.clone()
+    }
+    fn id(&self) -> BlockId {
+        self.id
+    }
+
+    fn stream_input(&mut self, id: &PortId) -> Result<&mut dyn BufferReader, Error> {
+        self.kernel.stream_input(id)
+    }
+    fn connect_stream_output(
+        &mut self,
+        id: &PortId,
+        reader: &mut dyn BufferReader,
+    ) -> Result<(), Error> {
+        self.kernel.connect_stream_output(id, reader)
+    }
+
+    fn message_inputs(&self) -> &'static [&'static str] {
+        K::message_inputs()
+    }
+    fn connect(
+        &mut self,
+        src_port: &PortId,
+        dst_box: BlockInbox,
+        dst_port: &PortId,
+    ) -> Result<(), Error> {
+        self.mo.connect(src_port, dst_box, dst_port)
+    }
+
+    fn type_name(&self) -> &str {
+        K::type_name()
+    }
+    fn is_blocking(&self) -> bool {
+        K::is_blocking()
+    }
+}
+
+impl<K: LocalKernelInterface + 'static> BlockObject for WrappedLocalKernel<K> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -500,9 +563,7 @@ impl<K: LocalKernelInterface + 'static> BlockObject for WrappedKernel<K> {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[async_trait::async_trait]
-impl<K: SendKernelInterface + LocalKernelInterface + SendKernel + 'static> Block
-    for WrappedKernel<K>
-{
+impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
         match self.run_impl(main_inbox.clone()).await {
             Ok(_) => {
@@ -527,7 +588,34 @@ impl<K: SendKernelInterface + LocalKernelInterface + SendKernel + 'static> Block
 }
 
 #[async_trait::async_trait(?Send)]
-impl<K: LocalKernelInterface + LocalKernel + 'static> LocalBlock for WrappedKernel<K> {
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait(?Send)]
+impl<K: KernelInterface + Kernel + 'static> LocalBlock for WrappedKernel<K> {
+    async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
+        match self.run_impl(main_inbox.clone()).await {
+            Ok(_) => {
+                let _ = main_inbox
+                    .send(FlowgraphMessage::BlockDone { block_id: self.id })
+                    .await;
+                return;
+            }
+            Err(e) => {
+                let instance_name = self
+                    .meta
+                    .instance_name()
+                    .unwrap_or("<instance name not set>")
+                    .to_string();
+                error!("{}: Error in Block.run() {:?}", instance_name, e);
+                let _ = main_inbox
+                    .send(FlowgraphMessage::BlockError { block_id: self.id })
+                    .await;
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl<K: LocalKernelInterface + LocalKernel + 'static> LocalBlock for WrappedLocalKernel<K> {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
         match self.run_local_impl(main_inbox.clone()).await {
             Ok(_) => {
@@ -551,6 +639,7 @@ impl<K: LocalKernelInterface + LocalKernel + 'static> LocalBlock for WrappedKern
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<K> Deref for WrappedKernel<K> {
     type Target = K;
 
@@ -559,7 +648,22 @@ impl<K> Deref for WrappedKernel<K> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<K> DerefMut for WrappedKernel<K> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.kernel
+    }
+}
+
+impl<K> Deref for WrappedLocalKernel<K> {
+    type Target = K;
+
+    fn deref(&self) -> &Self::Target {
+        &self.kernel
+    }
+}
+
+impl<K> DerefMut for WrappedLocalKernel<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.kernel
     }

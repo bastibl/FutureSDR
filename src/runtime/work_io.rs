@@ -1,8 +1,6 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
 
 /// Work-loop control flags returned from [`Kernel::work`](crate::runtime::dev::Kernel::work).
 ///
@@ -31,15 +29,6 @@ impl WorkIo {
     pub fn block_on<F: Future<Output = ()> + Send + 'static>(&mut self, f: F) {
         self.block_on = Some(Box::pin(f));
     }
-
-    #[doc(hidden)]
-    pub fn from_local(io: &mut LocalWorkIo) -> Self {
-        Self {
-            call_again: io.call_again,
-            finished: io.finished,
-            block_on: io.block_on.take().and_then(LocalBlockOn::into_send),
-        }
-    }
 }
 
 impl fmt::Debug for WorkIo {
@@ -61,20 +50,13 @@ pub struct LocalWorkIo {
     /// Mark the block as finished.
     pub finished: bool,
     /// Future that must resolve before the block is called again.
-    pub block_on: Option<LocalBlockOn>,
+    pub block_on: Option<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl LocalWorkIo {
     /// Set the future that should wake this block again.
     pub fn block_on<F: Future<Output = ()> + 'static>(&mut self, f: F) {
-        self.block_on = Some(LocalBlockOn::Local(Box::pin(f)));
-    }
-
-    #[doc(hidden)]
-    pub fn absorb_work_io(&mut self, io: WorkIo) {
-        self.call_again = io.call_again;
-        self.finished = io.finished;
-        self.block_on = io.block_on.map(LocalBlockOn::Send);
+        self.block_on = Some(Box::pin(f));
     }
 }
 
@@ -84,33 +66,5 @@ impl fmt::Debug for LocalWorkIo {
             .field("call_again", &self.call_again)
             .field("finished", &self.finished)
             .finish()
-    }
-}
-
-/// Future stored by [`LocalWorkIo`].
-pub enum LocalBlockOn {
-    /// Send-capable future produced by a normal kernel running on the local path.
-    Send(Pin<Box<dyn Future<Output = ()> + Send>>),
-    /// Local future produced by an explicit local kernel.
-    Local(Pin<Box<dyn Future<Output = ()>>>),
-}
-
-impl LocalBlockOn {
-    fn into_send(self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
-        match self {
-            Self::Send(f) => Some(f),
-            Self::Local(_) => None,
-        }
-    }
-}
-
-impl Future for LocalBlockOn {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.get_mut() {
-            Self::Send(f) => f.as_mut().poll(cx),
-            Self::Local(f) => f.as_mut().poll(cx),
-        }
     }
 }

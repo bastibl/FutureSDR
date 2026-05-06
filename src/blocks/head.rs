@@ -19,7 +19,7 @@ use crate::runtime::dev::prelude::*;
 ///
 /// let head = fg.add(Head::<Complex<f32>>::new(1_000_000));
 /// ```
-#[derive(Block)]
+#[derive(Block, LocalBlock)]
 pub struct Head<
     T: Copy + Send + 'static,
     I: CpuBufferReader<Item = T> = DefaultCpuReader<T>,
@@ -57,6 +57,42 @@ where
     async fn work(
         &mut self,
         io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let i = self.input.slice();
+        let o = self.output.slice();
+
+        let m = *[self.n_items as usize, i.len(), o.len()]
+            .iter()
+            .min()
+            .unwrap_or(&0);
+
+        if m > 0 {
+            o[..m].copy_from_slice(&i[..m]);
+
+            self.n_items -= m as u64;
+            if self.n_items == 0 {
+                io.finished = true;
+            }
+            self.input.consume(m);
+            self.output.produce(m);
+        }
+
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+impl<T, I, O> LocalKernel for Head<T, I, O>
+where
+    T: Copy + Send + 'static,
+    I: CpuBufferReader<Item = T>,
+    O: CpuBufferWriter<Item = T>,
+{
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

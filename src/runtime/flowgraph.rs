@@ -29,7 +29,6 @@ use crate::runtime::buffer::CircuitWriter;
 use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
-use crate::runtime::dev::Kernel;
 use crate::runtime::dev::LocalKernel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
@@ -44,7 +43,9 @@ use crate::runtime::local_domain::LocalBlockBuilder;
 use crate::runtime::local_domain::LocalDomainController;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::default_local_executor_factory;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::wrapped_kernel::WrappedKernel;
+use crate::runtime::wrapped_kernel::WrappedLocalKernel;
 
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);
 static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
@@ -54,81 +55,85 @@ static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
 /// The guard dereferences to the block's kernel type and also exposes runtime
 /// metadata such as the block id and instance name. It is only available before
 /// the flowgraph is moved into a running [`Runtime`](crate::runtime::Runtime).
-pub struct TypedBlockGuard<'a, K: Kernel> {
-    wrapped: &'a WrappedKernel<K>,
+pub struct TypedBlockGuard<'a, K> {
+    id: BlockId,
+    meta: &'a BlockMeta,
+    kernel: &'a K,
 }
 
 /// Mutable typed access to a block stored inside a [`Flowgraph`].
 ///
 /// The guard dereferences to the block's kernel type and can be used to update
 /// block state or metadata before the flowgraph is started.
-pub struct TypedBlockGuardMut<'a, K: Kernel> {
-    wrapped: &'a mut WrappedKernel<K>,
+pub struct TypedBlockGuardMut<'a, K> {
+    id: BlockId,
+    meta: &'a mut BlockMeta,
+    kernel: &'a mut K,
 }
 
-impl<K: Kernel> TypedBlockGuard<'_, K> {
+impl<K> TypedBlockGuard<'_, K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
-        self.wrapped.id
+        self.id
     }
 
     /// Get block metadata.
     pub fn meta(&self) -> &BlockMeta {
-        &self.wrapped.meta
+        self.meta
     }
 
     /// Get the block instance name.
     pub fn instance_name(&self) -> Option<&str> {
-        self.wrapped.meta.instance_name()
+        self.meta.instance_name()
     }
 }
 
-impl<K: Kernel> Deref for TypedBlockGuard<'_, K> {
+impl<K> Deref for TypedBlockGuard<'_, K> {
     type Target = K;
 
     fn deref(&self) -> &Self::Target {
-        &self.wrapped.kernel
+        self.kernel
     }
 }
 
-impl<K: Kernel> TypedBlockGuardMut<'_, K> {
+impl<K> TypedBlockGuardMut<'_, K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
-        self.wrapped.id
+        self.id
     }
 
     /// Get block metadata.
     pub fn meta(&self) -> &BlockMeta {
-        &self.wrapped.meta
+        self.meta
     }
 
     /// Mutably access block metadata.
     pub fn meta_mut(&mut self) -> &mut BlockMeta {
-        &mut self.wrapped.meta
+        self.meta
     }
 
     /// Get the block instance name.
     pub fn instance_name(&self) -> Option<&str> {
-        self.wrapped.meta.instance_name()
+        self.meta.instance_name()
     }
 
     /// Set the block instance name.
     pub fn set_instance_name(&mut self, name: &str) {
-        self.wrapped.meta.set_instance_name(name);
+        self.meta.set_instance_name(name);
     }
 }
 
-impl<K: Kernel> Deref for TypedBlockGuardMut<'_, K> {
+impl<K> Deref for TypedBlockGuardMut<'_, K> {
     type Target = K;
 
     fn deref(&self) -> &Self::Target {
-        &self.wrapped.kernel
+        self.kernel
     }
 }
 
-impl<K: Kernel> DerefMut for TypedBlockGuardMut<'_, K> {
+impl<K> DerefMut for TypedBlockGuardMut<'_, K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.wrapped.kernel
+        self.kernel
     }
 }
 
@@ -228,7 +233,7 @@ impl<K> BlockRef<K> {
     }
 }
 
-impl<K: Kernel + 'static> BlockRef<K> {
+impl<K: 'static> BlockRef<K> {
     /// Get a typed handle to the block stored in the given [`Flowgraph`].
     pub fn get<'a>(&self, fg: &'a Flowgraph) -> Result<TypedBlockGuard<'a, K>, Error> {
         fg.block(self)
@@ -262,6 +267,7 @@ impl<K: Kernel + 'static> BlockRef<K> {
             BlockPlacement::Local {
                 domain_id,
                 local_id,
+                auto,
                 ..
             } => {
                 let domain = fg
@@ -278,17 +284,8 @@ impl<K: Kernel + 'static> BlockRef<K> {
                         .get(local_id)
                         .and_then(Option::as_ref)
                         .ok_or(Error::InvalidBlock(block_id))?
-                        .as_ref()
-                        .as_any()
-                        .downcast_ref::<WrappedKernel<K>>()
-                        .ok_or_else(|| {
-                            Error::ValidationError(format!(
-                                "local block {:?} has unexpected type for {}",
-                                block_id,
-                                std::any::type_name::<K>()
-                            ))
-                        })?;
-                    Ok(f(&block.kernel))
+                        .as_ref();
+                    Ok(f(Flowgraph::local_kernel_ref(block, block_id, auto)?))
                 })
             }
         }
@@ -313,6 +310,7 @@ impl<K: Kernel + 'static> BlockRef<K> {
             BlockPlacement::Local {
                 domain_id,
                 local_id,
+                auto,
                 ..
             } => {
                 let domain = fg
@@ -329,17 +327,8 @@ impl<K: Kernel + 'static> BlockRef<K> {
                         .get_mut(local_id)
                         .and_then(Option::as_mut)
                         .ok_or(Error::InvalidBlock(block_id))?
-                        .as_mut()
-                        .as_any_mut()
-                        .downcast_mut::<WrappedKernel<K>>()
-                        .ok_or_else(|| {
-                            Error::ValidationError(format!(
-                                "local block {:?} has unexpected type for {}",
-                                block_id,
-                                std::any::type_name::<K>()
-                            ))
-                        })?;
-                    Ok(f(&mut block.kernel))
+                        .as_mut();
+                    Ok(f(Flowgraph::local_kernel_mut(block, block_id, auto)?))
                 })
             }
         }
@@ -474,7 +463,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add<K>(&mut self, block: K) -> BlockRef<K>
     where
-        K: SendKernel + SendKernelInterface + LocalKernelInterface + 'static,
+        K: SendKernel + SendKernelInterface + 'static,
     {
         let block_id = BlockId(self.blocks.len());
         let mut b = WrappedKernel::new(block, block_id);
@@ -524,7 +513,7 @@ impl Flowgraph {
         K: LocalKernel + LocalKernelInterface + 'static,
     {
         let block_id = BlockId(self.blocks.len());
-        let mut b = WrappedKernel::new_local(block, block_id);
+        let mut b = WrappedLocalKernel::new(block, block_id);
         let block_name = <K as LocalKernelInterface>::type_name().to_string();
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -610,7 +599,7 @@ impl Flowgraph {
         };
         let block_id = self.reserve_block_id(placement);
         let builder: LocalBlockBuilder = Box::new(move || {
-            let mut b = WrappedKernel::new_local(block(), block_id);
+            let mut b = WrappedLocalKernel::new(block(), block_id);
             let block_name = <K as LocalKernelInterface>::type_name().to_string();
             b.meta
                 .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -692,6 +681,7 @@ impl Flowgraph {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn get_typed_wrapped_block_by_id<K: 'static>(
         &self,
         block_id: BlockId,
@@ -709,6 +699,25 @@ impl Flowgraph {
             })
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn get_typed_wrapped_block_by_id<K: 'static>(
+        &self,
+        block_id: BlockId,
+    ) -> Result<&WrappedLocalKernel<K>, Error> {
+        let block = self.raw_block(block_id)?;
+        block
+            .as_any()
+            .downcast_ref::<WrappedLocalKernel<K>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    block_id,
+                    std::any::type_name::<K>()
+                ))
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn get_typed_wrapped_block_mut_by_id<K: 'static>(
         &mut self,
         block_id: BlockId,
@@ -726,6 +735,25 @@ impl Flowgraph {
             })
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn get_typed_wrapped_block_mut_by_id<K: 'static>(
+        &mut self,
+        block_id: BlockId,
+    ) -> Result<&mut WrappedLocalKernel<K>, Error> {
+        let block = self.raw_block_mut(block_id)?;
+        block
+            .as_any_mut()
+            .downcast_mut::<WrappedLocalKernel<K>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    block_id,
+                    std::any::type_name::<K>()
+                ))
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn get_two_typed_wrapped_blocks_mut<KS, KD>(
         &mut self,
         src_id: BlockId,
@@ -781,16 +809,127 @@ impl Flowgraph {
         Ok((src, dst))
     }
 
-    fn get_typed_block_by_id<K: Kernel + 'static>(
-        &self,
+    #[cfg(target_arch = "wasm32")]
+    fn get_two_typed_wrapped_blocks_mut<KS, KD>(
+        &mut self,
+        src_id: BlockId,
+        dst_id: BlockId,
+    ) -> Result<(&mut WrappedLocalKernel<KS>, &mut WrappedLocalKernel<KD>), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+    {
+        if src_id == dst_id {
+            return Err(Error::LockError);
+        }
+
+        let len = self.blocks.len();
+        let invalid_block = if src_id.0 >= len { src_id } else { dst_id };
+        let [src_slot, dst_slot] =
+            self.blocks
+                .get_disjoint_mut([src_id.0, dst_id.0])
+                .map_err(|err| match err {
+                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                        Error::InvalidBlock(invalid_block)
+                    }
+                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+                })?;
+
+        let src = src_slot
+            .as_mut()
+            .ok_or(Error::LockError)?
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<WrappedLocalKernel<KS>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    src_id,
+                    std::any::type_name::<KS>()
+                ))
+            })?;
+        let dst = dst_slot
+            .as_mut()
+            .ok_or(Error::LockError)?
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<WrappedLocalKernel<KD>>()
+            .ok_or_else(|| {
+                Error::ValidationError(format!(
+                    "block {:?} has unexpected type for {}",
+                    dst_id,
+                    std::any::type_name::<KD>()
+                ))
+            })?;
+
+        Ok((src, dst))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_kernel_ref<K: 'static>(
+        block: &dyn BlockObject,
         block_id: BlockId,
-    ) -> Result<TypedBlockGuard<'_, K>, Error> {
-        Ok(TypedBlockGuard {
-            wrapped: self.get_typed_wrapped_block_by_id(block_id)?,
+        auto: bool,
+    ) -> Result<&K, Error> {
+        if auto {
+            block
+                .as_any()
+                .downcast_ref::<WrappedKernel<K>>()
+                .map(|block| &block.kernel)
+        } else {
+            block
+                .as_any()
+                .downcast_ref::<WrappedLocalKernel<K>>()
+                .map(|block| &block.kernel)
+        }
+        .ok_or_else(|| {
+            Error::ValidationError(format!(
+                "local block {:?} has unexpected type for {}",
+                block_id,
+                std::any::type_name::<K>()
+            ))
         })
     }
 
-    fn get_typed_block<K: Kernel + 'static>(
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_kernel_mut<K: 'static>(
+        block: &mut dyn BlockObject,
+        block_id: BlockId,
+        auto: bool,
+    ) -> Result<&mut K, Error> {
+        if auto {
+            block
+                .as_any_mut()
+                .downcast_mut::<WrappedKernel<K>>()
+                .map(|block| &mut block.kernel)
+        } else {
+            block
+                .as_any_mut()
+                .downcast_mut::<WrappedLocalKernel<K>>()
+                .map(|block| &mut block.kernel)
+        }
+        .ok_or_else(|| {
+            Error::ValidationError(format!(
+                "local block {:?} has unexpected type for {}",
+                block_id,
+                std::any::type_name::<K>()
+            ))
+        })
+    }
+
+    fn get_typed_block_by_id<K: 'static>(
+        &self,
+        block_id: BlockId,
+    ) -> Result<TypedBlockGuard<'_, K>, Error> {
+        let wrapped = self.get_typed_wrapped_block_by_id(block_id)?;
+        Ok(TypedBlockGuard {
+            id: wrapped.id,
+            meta: &wrapped.meta,
+            kernel: &wrapped.kernel,
+        })
+    }
+
+    fn get_typed_block<K: 'static>(
         &self,
         block: &BlockRef<K>,
     ) -> Result<TypedBlockGuard<'_, K>, Error> {
@@ -798,26 +937,26 @@ impl Flowgraph {
         self.get_typed_block_by_id(block.id)
     }
 
-    fn get_typed_block_mut<K: Kernel + 'static>(
+    fn get_typed_block_mut<K: 'static>(
         &mut self,
         block: &BlockRef<K>,
     ) -> Result<TypedBlockGuardMut<'_, K>, Error> {
         self.validate_block_ref(block)?;
+        let wrapped = self.get_typed_wrapped_block_mut_by_id::<K>(block.id)?;
         Ok(TypedBlockGuardMut {
-            wrapped: self.get_typed_wrapped_block_mut_by_id::<K>(block.id)?,
+            id: wrapped.id,
+            meta: &mut wrapped.meta,
+            kernel: &mut wrapped.kernel,
         })
     }
 
     /// Get typed shared access to a block in this flowgraph.
-    pub fn block<K: Kernel + 'static>(
-        &self,
-        block: &BlockRef<K>,
-    ) -> Result<TypedBlockGuard<'_, K>, Error> {
+    pub fn block<K: 'static>(&self, block: &BlockRef<K>) -> Result<TypedBlockGuard<'_, K>, Error> {
         self.get_typed_block(block)
     }
 
     /// Get typed mutable access to a block in this flowgraph.
-    pub fn block_mut<K: Kernel + 'static>(
+    pub fn block_mut<K: 'static>(
         &mut self,
         block: &BlockRef<K>,
     ) -> Result<TypedBlockGuardMut<'_, K>, Error> {
@@ -852,8 +991,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: LocalKernel + 'static,
-        KD: LocalKernel + 'static,
+        KS: 'static,
+        KD: 'static,
         B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
@@ -871,11 +1010,13 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id: src_domain,
                     local_id: src_local,
+                    auto: src_auto,
                     ..
                 },
                 BlockPlacement::Local {
                     domain_id: dst_domain,
                     local_id: dst_local,
+                    auto: dst_auto,
                     ..
                 },
             ) if src_domain == dst_domain => {
@@ -899,36 +1040,11 @@ impl Flowgraph {
                         }
                         std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
                     })?;
-                    let src = src_slot
-                        .as_mut()
-                        .ok_or(Error::LockError)?
-                        .as_mut()
-                        .as_any_mut()
-                        .downcast_mut::<WrappedKernel<KS>>()
-                        .ok_or_else(|| {
-                            Error::ValidationError(format!(
-                                "local block {:?} has unexpected type for {}",
-                                src_id,
-                                std::any::type_name::<KS>()
-                            ))
-                        })?;
-                    let dst = dst_slot
-                        .as_mut()
-                        .ok_or(Error::LockError)?
-                        .as_mut()
-                        .as_any_mut()
-                        .downcast_mut::<WrappedKernel<KD>>()
-                        .ok_or_else(|| {
-                            Error::ValidationError(format!(
-                                "local block {:?} has unexpected type for {}",
-                                dst_id,
-                                std::any::type_name::<KD>()
-                            ))
-                        })?;
-                    Ok(Self::connect_stream_ports(
-                        src_port(&mut src.kernel),
-                        dst_port(&mut dst.kernel),
-                    ))
+                    let src = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+                    let dst = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+                    let src = Self::local_kernel_mut(src, src_id, src_auto)?;
+                    let dst = Self::local_kernel_mut(dst, dst_id, dst_auto)?;
+                    Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
                 })?
             }
             (
@@ -952,6 +1068,7 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
+                    auto,
                     ..
                 },
                 BlockPlacement::Normal { .. },
@@ -966,33 +1083,25 @@ impl Flowgraph {
                                 .get_mut(local_id)
                                 .and_then(Option::as_mut)
                                 .ok_or(Error::InvalidBlock(src_id))?
-                                .as_mut()
-                                .as_any_mut()
-                                .downcast_mut::<WrappedKernel<KS>>()
-                                .ok_or_else(|| {
-                                    Error::ValidationError(format!(
-                                        "local block {:?} has unexpected type for {}",
-                                        src_id,
-                                        std::any::type_name::<KS>()
+                                .as_mut();
+                            let edge_result =
+                                Self::local_kernel_mut(src, src_id, auto).and_then(|src| {
+                                    let dst = normal
+                                        .as_mut()
+                                        .as_any_mut()
+                                        .downcast_mut::<WrappedKernel<KD>>()
+                                        .ok_or_else(|| {
+                                            Error::ValidationError(format!(
+                                                "block {:?} has unexpected type for {}",
+                                                dst_id,
+                                                std::any::type_name::<KD>()
+                                            ))
+                                        })?;
+                                    Ok(Self::connect_stream_ports(
+                                        src_port(src),
+                                        dst_port(&mut dst.kernel),
                                     ))
                                 });
-                            let edge_result = src.and_then(|src| {
-                                let dst = normal
-                                    .as_mut()
-                                    .as_any_mut()
-                                    .downcast_mut::<WrappedKernel<KD>>()
-                                    .ok_or_else(|| {
-                                        Error::ValidationError(format!(
-                                            "block {:?} has unexpected type for {}",
-                                            dst_id,
-                                            std::any::type_name::<KD>()
-                                        ))
-                                    })?;
-                                Ok(Self::connect_stream_ports(
-                                    src_port(&mut src.kernel),
-                                    dst_port(&mut dst.kernel),
-                                ))
-                            });
                             Ok((edge_result, normal))
                         })?;
                 self.blocks[dst_id.0] = Some(restored);
@@ -1003,6 +1112,7 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
+                    auto,
                     ..
                 },
             ) => {
@@ -1016,33 +1126,25 @@ impl Flowgraph {
                                 .get_mut(local_id)
                                 .and_then(Option::as_mut)
                                 .ok_or(Error::InvalidBlock(dst_id))?
-                                .as_mut()
-                                .as_any_mut()
-                                .downcast_mut::<WrappedKernel<KD>>()
-                                .ok_or_else(|| {
-                                    Error::ValidationError(format!(
-                                        "local block {:?} has unexpected type for {}",
-                                        dst_id,
-                                        std::any::type_name::<KD>()
+                                .as_mut();
+                            let edge_result =
+                                Self::local_kernel_mut(dst, dst_id, auto).and_then(|dst| {
+                                    let src = normal
+                                        .as_mut()
+                                        .as_any_mut()
+                                        .downcast_mut::<WrappedKernel<KS>>()
+                                        .ok_or_else(|| {
+                                            Error::ValidationError(format!(
+                                                "block {:?} has unexpected type for {}",
+                                                src_id,
+                                                std::any::type_name::<KS>()
+                                            ))
+                                        })?;
+                                    Ok(Self::connect_stream_ports(
+                                        src_port(&mut src.kernel),
+                                        dst_port(dst),
                                     ))
                                 });
-                            let edge_result = dst.and_then(|dst| {
-                                let src = normal
-                                    .as_mut()
-                                    .as_any_mut()
-                                    .downcast_mut::<WrappedKernel<KS>>()
-                                    .ok_or_else(|| {
-                                        Error::ValidationError(format!(
-                                            "block {:?} has unexpected type for {}",
-                                            src_id,
-                                            std::any::type_name::<KS>()
-                                        ))
-                                    })?;
-                                Ok(Self::connect_stream_ports(
-                                    src_port(&mut src.kernel),
-                                    dst_port(&mut dst.kernel),
-                                ))
-                            });
                             Ok((edge_result, normal))
                         })?;
                 self.blocks[src_id.0] = Some(restored);
@@ -1063,8 +1165,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: LocalKernel + 'static,
-        KD: LocalKernel + 'static,
+        KS: 'static,
+        KD: 'static,
         B: BufferWriter,
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
@@ -1093,8 +1195,8 @@ impl Flowgraph {
         dst_port: FD,
     ) -> Result<(), Error>
     where
-        KS: LocalKernel + 'static,
-        KD: LocalKernel + 'static,
+        KS: 'static,
+        KD: 'static,
         CW: CircuitWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut CW,
         FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
@@ -1430,8 +1532,8 @@ impl LocalDomain {
         dst_port_fn: FD,
     ) -> Result<(), Error>
     where
-        KS: LocalKernel + 'static,
-        KD: LocalKernel + 'static,
+        KS: 'static,
+        KD: 'static,
         B: BufferWriter,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
@@ -1445,11 +1547,13 @@ impl LocalDomain {
             BlockPlacement::Local {
                 domain_id: src_domain,
                 local_id: src_local,
+                auto: src_auto,
                 ..
             },
             BlockPlacement::Local {
                 domain_id: dst_domain,
                 local_id: dst_local,
+                auto: dst_auto,
                 ..
             },
         ) = (src_block.placement, dst_block.placement)
@@ -1476,30 +1580,12 @@ impl LocalDomain {
                     .map_err(|_| Error::LockError)?;
                 let src = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
                 let dst = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-                let src = src
-                    .as_any_mut()
-                    .downcast_mut::<WrappedKernel<KS>>()
-                    .ok_or_else(|| {
-                        Error::ValidationError(format!(
-                            "local block {:?} has unexpected type for {}",
-                            src_id,
-                            std::any::type_name::<KS>()
-                        ))
-                    })?;
-                let dst = dst
-                    .as_any_mut()
-                    .downcast_mut::<WrappedKernel<KD>>()
-                    .ok_or_else(|| {
-                        Error::ValidationError(format!(
-                            "local block {:?} has unexpected type for {}",
-                            dst_id,
-                            std::any::type_name::<KD>()
-                        ))
-                    })?;
+                let src = Flowgraph::local_kernel_mut(src, src_id, src_auto)?;
+                let dst = Flowgraph::local_kernel_mut(dst, dst_id, dst_auto)?;
 
                 Ok(Flowgraph::connect_stream_ports(
-                    src_port_fn(&mut src.kernel),
-                    dst_port_fn(&mut dst.kernel),
+                    src_port_fn(src),
+                    dst_port_fn(dst),
                 ))
             })?;
         fg.stream_edges.push(edge);
@@ -1515,7 +1601,7 @@ impl LocalDomain {
         dst_port_fn: FD,
     ) -> Result<(), Error>
     where
-        KS: LocalKernel + 'static,
+        KS: 'static,
         KD: SendKernel + 'static,
         B: SendBufferWriter + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,

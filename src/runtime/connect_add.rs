@@ -6,6 +6,7 @@ use crate::runtime::Result;
 use crate::runtime::dev::LocalKernel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
+#[cfg(target_arch = "wasm32")]
 use crate::runtime::kernel_interface::LocalKernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
@@ -20,7 +21,7 @@ pub trait ConnectAdd {
 #[cfg(not(target_arch = "wasm32"))]
 impl<K> ConnectAdd for K
 where
-    K: SendKernel + SendKernelInterface + LocalKernelInterface + 'static,
+    K: SendKernel + SendKernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 

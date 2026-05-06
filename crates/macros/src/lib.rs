@@ -1102,90 +1102,21 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
     } else {
         quote! { ::futuresdr::runtime::dev::WorkIo }
     };
-    let local_bridge = if local {
+    let port_getters = if local {
         quote! {}
     } else {
         quote! {
-            impl #kernel_interface_impl_generics ::futuresdr::runtime::__private::LocalKernelInterface for #struct_name #unconstraint_generics
-                #kernel_interface_where_clause
+            impl #generics #struct_name #unconstraint_generics
+                #where_clause
             {
-                fn is_blocking() -> bool {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::is_blocking()
-                }
-                fn type_name() -> &'static str {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::type_name()
-                }
-                fn stream_inputs(&self) -> Vec<String> {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_inputs(self)
-                }
-                fn stream_outputs(&self) -> Vec<String> {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_outputs(self)
-                }
-                fn stream_ports_init(&mut self, block_id: ::futuresdr::runtime::BlockId, inbox: ::futuresdr::runtime::dev::BlockInbox) {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_ports_init(self, block_id, inbox)
-                }
-                fn stream_ports_validate(&self) -> ::futuresdr::runtime::Result<(), ::futuresdr::runtime::Error> {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_ports_validate(self)
-                }
-                fn stream_input_finish(&mut self, port_id: ::futuresdr::runtime::PortId) -> ::futuresdr::runtime::Result<(), ::futuresdr::runtime::Error> {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_input_finish(self, port_id)
-                }
-                async fn stream_ports_notify_finished(&mut self) {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_ports_notify_finished(self).await
-                }
-                fn stream_input(
-                    &mut self,
-                    id: &::futuresdr::runtime::PortId,
-                ) -> ::futuresdr::runtime::Result<
-                    &mut dyn ::futuresdr::runtime::buffer::BufferReader,
-                    ::futuresdr::runtime::Error,
-                > {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::stream_input(self, id)
-                }
-                fn connect_stream_output(
-                    &mut self,
-                    id: &::futuresdr::runtime::PortId,
-                    reader: &mut dyn ::futuresdr::runtime::buffer::BufferReader,
-                ) -> ::futuresdr::runtime::Result<(), ::futuresdr::runtime::Error> {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::connect_stream_output(self, id, reader)
-                }
-                fn message_inputs() -> &'static[&'static str] {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::message_inputs()
-                }
-                fn message_outputs() -> &'static[&'static str] {
-                    <Self as ::futuresdr::runtime::__private::KernelInterface>::message_outputs()
-                }
-                async fn call_handler(
-                    &mut self,
-                    io: &mut ::futuresdr::runtime::dev::LocalWorkIo,
-                    mo: &mut ::futuresdr::runtime::dev::MessageOutputs,
-                    meta: &mut ::futuresdr::runtime::dev::BlockMeta,
-                    id: ::futuresdr::runtime::PortId,
-                    p: ::futuresdr::runtime::Pmt) ->
-                        ::futuresdr::runtime::Result<::futuresdr::runtime::Pmt, ::futuresdr::runtime::Error> {
-                            let mut work_io = ::futuresdr::runtime::dev::WorkIo::from_local(io);
-                            let ret = <Self as ::futuresdr::runtime::__private::KernelInterface>::call_handler(
-                                self,
-                                &mut work_io,
-                                mo,
-                                meta,
-                                id,
-                                p,
-                            ).await;
-                            io.absorb_work_io(work_io);
-                            ret
-                }
+                #(#port_getter_fns)*
             }
         }
     };
 
     let expanded = quote! {
 
-        impl #generics #struct_name #unconstraint_generics
-            #where_clause
-        {
-            #(#port_getter_fns)*
-        }
+        #port_getters
 
         impl #kernel_interface_impl_generics #interface_trait for #struct_name #unconstraint_generics
             #kernel_interface_where_clause
@@ -1296,7 +1227,6 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
             }
         }
 
-        #local_bridge
         #kernel
     };
     // println!("{}", pretty_print(&expanded));

@@ -19,7 +19,7 @@ use crate::runtime::dev::prelude::*;
 ///
 /// let sink = fg.add(NullSink::<Complex<f32>>::new());
 /// ```
-#[derive(Block)]
+#[derive(Block, LocalBlock)]
 pub struct NullSink<T: CpuSample, I: CpuBufferReader<Item = T> = DefaultCpuReader<T>> {
     n_received: usize,
     #[input]
@@ -63,6 +63,32 @@ where
     async fn work(
         &mut self,
         io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let n = self.input().slice().len();
+        if n > 0 {
+            self.n_received += n;
+            self.input().consume(n);
+        }
+
+        if self.input().finished() {
+            io.finished = true;
+        }
+
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+impl<T, I> LocalKernel for NullSink<T, I>
+where
+    T: CpuSample,
+    I: CpuBufferReader<Item = T>,
+{
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
