@@ -93,7 +93,7 @@ impl gloo_worker::Worker for Worker {
                     if let Err(e) = async move {
                         let mut fg = Flowgraph::new();
 
-                        let src = fg.add(HackRf::new());
+                        let src = fg.add_local(HackRf::new());
                         let source = src.id();
 
                         let mut last: Complex32 = Complex32::new(0.0, 0.0);

@@ -2,13 +2,7 @@ use crate::runtime::BlockRef;
 use crate::runtime::Error;
 use crate::runtime::Flowgraph;
 use crate::runtime::Result;
-#[cfg(target_arch = "wasm32")]
-use crate::runtime::dev::LocalKernel;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::SendKernel;
-#[cfg(target_arch = "wasm32")]
-use crate::runtime::kernel_interface::LocalKernelInterface;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::kernel_interface::SendKernelInterface;
 
 #[doc(hidden)]
@@ -33,7 +27,7 @@ where
 #[cfg(target_arch = "wasm32")]
 impl<K> ConnectAdd for K
 where
-    K: LocalKernel + LocalKernelInterface + 'static,
+    K: SendKernel + SendKernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 
