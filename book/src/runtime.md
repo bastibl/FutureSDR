@@ -46,7 +46,7 @@ let rt = Runtime::new();
 let running = rt.start(fg)?;
 ```
 
-Both methods return a [`RunningFlowgraph`](https://docs.rs/futuresdr/latest/futuresdr/runtime/struct.RunningFlowgraph.html). It combines the completion task with a [`FlowgraphHandle`](flowgraph.md#flowgraph-handle):
+Both methods return a [`RunningFlowgraph`](https://docs.rs/futuresdr/latest/futuresdr/runtime/struct.RunningFlowgraph.html). It combines the completion task with a [`FlowgraphHandle`](https://docs.rs/futuresdr/latest/futuresdr/runtime/struct.FlowgraphHandle.html):
 
 ```rust
 let running = rt.start(fg)?;

@@ -19,6 +19,6 @@ This crate contains:
 [crates-badge]: https://img.shields.io/crates/v/futuresdr-types.svg
 [crates-url]: https://crates.io/crates/futuresdr-types
 [apache-badge]: https://img.shields.io/badge/license-Apache%202-blue
-[apache-url]: https://github.com/futuresdr/futuresdr/blob/master/LICENSE
+[apache-url]: https://github.com/futuresdr/futuresdr/blob/main/LICENSE
 [docs-badge]: https://img.shields.io/docsrs/futuresdr-types
 [docs-url]: https://docs.rs/futuresdr-types/

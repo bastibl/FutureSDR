@@ -9,7 +9,7 @@ A library for remote interaction with a FutureSDR runtime, flowgraph, and its bl
 [crates-badge]: https://img.shields.io/crates/v/futuresdr-remote.svg
 [crates-url]: https://crates.io/crates/futuresdr-remote
 [apache-badge]: https://img.shields.io/badge/license-Apache%202-blue
-[apache-url]: https://github.com/futuresdr/futuresdr/blob/master/LICENSE
+[apache-url]: https://github.com/futuresdr/futuresdr/blob/main/LICENSE
 [docs-badge]: https://img.shields.io/docsrs/futuresdr-remote
 [docs-url]: https://docs.rs/futuresdr-remote/
 

@@ -255,14 +255,6 @@ impl RefUnwindSafe for FlowExecutor {}
 
 impl FlowExecutor {
     /// Creates a new executor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use async_executor::Executor;
-    ///
-    /// let ex = Executor::new();
-    /// ```
     pub const fn new(worker_count: usize) -> FlowExecutor {
         FlowExecutor {
             state: once_cell::sync::OnceCell::new(),
@@ -270,19 +262,7 @@ impl FlowExecutor {
         }
     }
 
-    /// Spawns a task onto the executor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use async_executor::Executor;
-    ///
-    /// let ex = Executor::new();
-    ///
-    /// let task = ex.spawn(async {
-    ///     println!("Hello world");
-    /// });
-    /// ```
+    /// Spawns a task onto the executor's global queue.
     pub fn spawn<T: Send + 'static>(
         &self,
         future: impl Future<Output = T> + Send + 'static,
