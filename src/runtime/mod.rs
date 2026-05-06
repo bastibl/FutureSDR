@@ -109,6 +109,8 @@ pub struct RuntimeId(pub(crate) usize);
 /// expansions can reference generated implementation details.
 #[doc(hidden)]
 pub mod __private {
+    #[cfg(target_arch = "wasm32")]
+    pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
     pub use super::kernel_interface::KernelInterface;
     pub use super::kernel_interface::LocalKernelInterface;

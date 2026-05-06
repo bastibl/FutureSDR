@@ -29,7 +29,6 @@ use crate::runtime::buffer::CircuitWriter;
 use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::dev::Kernel;
 use crate::runtime::dev::LocalKernel;
 use crate::runtime::dev::SendKernel;
@@ -533,9 +532,44 @@ impl Flowgraph {
         }
     }
 
-    /// Add an explicitly local block and return a typed reference to it.
+    /// Add a block to the local runtime path and return a typed reference to it.
     #[cfg(target_arch = "wasm32")]
     pub fn add_local<K>(&mut self, block: K) -> BlockRef<K>
+    where
+        K: crate::runtime::__private::AddLocal + 'static,
+    {
+        crate::runtime::__private::AddLocal::add_local(block, self)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[doc(hidden)]
+    pub fn __add_local_from_kernel<K>(&mut self, block: K) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
+        let block_id = BlockId(self.blocks.len());
+        let mut b = WrappedKernel::new(block, block_id);
+        let block_name = <K as KernelInterface>::type_name();
+        b.meta
+            .set_instance_name(format!("{}-{}", block_name, block_id.0));
+        let inbox = b.inbox();
+        self.blocks.push(Some(Box::new(b)));
+        let placement = BlockPlacement::Normal { domain_id: 0 };
+        self.block_placements.push(placement);
+        self.block_inboxes.push(Some(inbox));
+        self.block_message_inputs
+            .push(Some(<K as KernelInterface>::message_inputs()));
+        BlockRef {
+            id: block_id,
+            flowgraph_id: self.id,
+            placement,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[doc(hidden)]
+    pub fn __add_local_from_local_kernel<K>(&mut self, block: K) -> BlockRef<K>
     where
         K: LocalKernel + LocalKernelInterface + 'static,
     {

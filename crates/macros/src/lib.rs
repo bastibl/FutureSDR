@@ -1102,6 +1102,26 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
     } else {
         quote! { ::futuresdr::runtime::dev::WorkIo }
     };
+    let mut add_local_generics = kernel_interface_generics.clone();
+    {
+        let where_clause = add_local_generics.make_where_clause();
+        where_clause.predicates.push(parse_quote!(Self: 'static));
+        if local {
+            where_clause
+                .predicates
+                .push(parse_quote!(Self: ::futuresdr::runtime::dev::LocalKernel));
+        } else {
+            where_clause
+                .predicates
+                .push(parse_quote!(Self: ::futuresdr::runtime::dev::Kernel));
+        }
+    }
+    let (add_local_impl_generics, _, add_local_where_clause) = add_local_generics.split_for_impl();
+    let add_local_method = if local {
+        quote! { __add_local_from_local_kernel }
+    } else {
+        quote! { __add_local_from_kernel }
+    };
     let port_getters = quote! {
         impl #generics #struct_name #unconstraint_generics
             #where_clause
@@ -1220,6 +1240,19 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
 
                         #[allow(unreachable_code)]
                         ret.map_err(|e| Error::HandlerError(e.to_string()))
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        #[doc(hidden)]
+        impl #add_local_impl_generics ::futuresdr::runtime::__private::AddLocal for #struct_name #unconstraint_generics
+            #add_local_where_clause
+        {
+            fn add_local(
+                self,
+                fg: &mut ::futuresdr::runtime::Flowgraph,
+            ) -> ::futuresdr::runtime::BlockRef<Self> {
+                fg.#add_local_method(self)
             }
         }
 

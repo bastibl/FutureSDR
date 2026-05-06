@@ -18,12 +18,8 @@ async fn run_inner() -> Result<()> {
 
     let mut fg = Flowgraph::new();
 
-    let src = VectorSource::<f32, H2DWriter<f32>>::new(orig.clone());
     let instance = wgpu::Instance::new().await;
-    let mul = Wgpu::new(instance, 4096, 4, 4);
-    let snk = VectorSink::<f32, D2HReader<f32>>::new(1024);
-
-    connect!(fg, src > mul > snk);
+    let snk = build_flowgraph(&mut fg, orig.clone(), instance)?;
 
     info!("start flowgraph");
     let fg = Runtime::new().run_async(fg).await?;
@@ -38,4 +34,34 @@ async fn run_inner() -> Result<()> {
 
     info!("data matches");
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_flowgraph(
+    mut fg: &mut Flowgraph,
+    orig: Vec<f32>,
+    instance: wgpu::Instance,
+) -> Result<BlockRef<VectorSink<f32, D2HReader<f32>>>> {
+    let src = VectorSource::<f32, H2DWriter<f32>>::new(orig);
+    let mul = Wgpu::new(instance, 4096, 4, 4);
+    let snk = VectorSink::<f32, D2HReader<f32>>::new(1024);
+
+    connect!(fg, src > mul > snk);
+
+    Ok(snk)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_flowgraph(
+    mut fg: &mut Flowgraph,
+    orig: Vec<f32>,
+    instance: wgpu::Instance,
+) -> Result<BlockRef<VectorSink<f32, D2HReader<f32>>>> {
+    let src = fg.add_local(VectorSource::<f32, H2DWriter<f32>>::new(orig));
+    let mul = fg.add_local(Wgpu::new(instance, 4096, 4, 4));
+    let snk = fg.add_local(VectorSink::<f32, D2HReader<f32>>::new(1024));
+
+    connect!(fg, src > mul > snk);
+
+    Ok(snk)
 }

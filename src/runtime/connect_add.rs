@@ -5,6 +5,12 @@ use crate::runtime::Result;
 use crate::runtime::dev::SendKernel;
 use crate::runtime::kernel_interface::SendKernelInterface;
 
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub trait AddLocal: Sized {
+    fn add_local(self, fg: &mut Flowgraph) -> BlockRef<Self>;
+}
+
 #[doc(hidden)]
 pub trait ConnectAdd {
     type Added;
