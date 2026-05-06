@@ -158,7 +158,7 @@ fn stream_dyn_connects_local_source_to_normal_blocks() -> Result<()> {
 }
 
 #[test]
-fn blocking_add_runs_in_auto_local_domain() -> Result<()> {
+fn blocking_add_runs_in_private_local_domain() -> Result<()> {
     let rt = Runtime::new();
     let mut fg = Flowgraph::new();
     let worked = Arc::new(AtomicBool::new(false));

@@ -426,13 +426,6 @@ impl Flowgraph {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn auto_local_domain(&mut self) -> usize {
-        let domain_id = self.local_domains.len();
-        self.local_domains.push(LocalDomainBlocks::new());
-        domain_id
-    }
-
     /// Add a block and return a typed reference to it.
     ///
     /// The returned [`BlockRef`] can be used for explicit typed connections or
@@ -448,7 +441,8 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         if <K as KernelInterface>::is_blocking() {
-            let domain_id = self.auto_local_domain();
+            let domain_id = self.local_domains.len();
+            self.local_domains.push(LocalDomainBlocks::new());
             self.add_local_block_builder(
                 domain_id,
                 LocalBlockKind::Kernel,
