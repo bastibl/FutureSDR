@@ -1260,6 +1260,53 @@ impl Flowgraph {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn connect_cross_local_stream<KS, KD, B, FS, FD>(
+        &self,
+        src: (BlockId, usize, usize, LocalBlockKind),
+        src_port: FS,
+        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + Default + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        let (src_id, src_domain, src_local, src_kind) = src;
+        let (dst_id, dst_domain, dst_local, dst_kind) = dst;
+        let src_handle = self
+            .local_domains
+            .get(src_domain)
+            .ok_or(Error::InvalidBlock(src_id))?
+            .controller
+            .handle();
+        let dst_handle = self
+            .local_domains
+            .get(dst_domain)
+            .ok_or(Error::InvalidBlock(dst_id))?
+            .controller
+            .handle();
+
+        src_handle.exec(move |state| {
+            let src = Self::local_state_kernel_mut::<KS>(state, src_local, src_id, src_kind)?;
+            let src_port = src_port(src);
+            let mut writer = std::mem::take(src_port);
+
+            let (edge_result, writer) = dst_handle.exec(move |state| {
+                let edge_result =
+                    Self::local_state_kernel_mut::<KD>(state, dst_local, dst_id, dst_kind)
+                        .map(|dst| Self::connect_stream_ports(&mut writer, dst_port(dst)));
+                Ok((edge_result, writer))
+            })?;
+
+            *src_port = writer;
+            edge_result
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn wrapped_kernel_mut<K: 'static>(
         block: &mut dyn BlockObject,
         block_id: BlockId,
@@ -1494,7 +1541,8 @@ impl Flowgraph {
     /// This is the typed block-level stream API used by the
     /// [`connect`](crate::runtime::macros::connect) macro.
     ///
-    /// On native targets the selected writer must be send-capable. Use
+    /// On native targets the selected writer must be send-capable and
+    /// default-constructible. Use
     /// [`Flowgraph::stream_local`] for local-only buffers in a local domain.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn stream<KS, KD, B, FS, FD>(
@@ -1507,7 +1555,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: SendBufferWriter + 'static,
+        B: SendBufferWriter + Default + 'static,
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
@@ -1533,12 +1581,23 @@ impl Flowgraph {
                     kind: dst_kind,
                     ..
                 },
-            ) => self.connect_local_local_stream::<KS, KD, B, FS, FD>(
-                (src_id, src_domain, src_local, src_kind),
-                src_port,
-                (dst_id, dst_domain, dst_local, dst_kind),
-                dst_port,
-            )?,
+            ) => {
+                if src_domain == dst_domain {
+                    self.connect_local_local_stream::<KS, KD, B, FS, FD>(
+                        (src_id, src_domain, src_local, src_kind),
+                        src_port,
+                        (dst_id, dst_domain, dst_local, dst_kind),
+                        dst_port,
+                    )?
+                } else {
+                    self.connect_cross_local_stream::<KS, KD, B, FS, FD>(
+                        (src_id, src_domain, src_local, src_kind),
+                        src_port,
+                        (dst_id, dst_domain, dst_local, dst_kind),
+                        dst_port,
+                    )?
+                }
+            }
             (
                 BlockPlacement::Local {
                     domain_id,

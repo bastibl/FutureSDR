@@ -131,6 +131,14 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
                     }
                     break;
                 }
+                BlockMessage::StreamInputDone { input_id } => {
+                    kernel.stream_input_finish(input_id)?;
+                    work_io.call_again = true;
+                }
+                BlockMessage::StreamOutputDone { .. } => {
+                    work_io.finished = true;
+                    work_io.call_again = true;
+                }
                 t => warn!("{} unhandled message during init {:?}", instance_name, t),
             }
         }
@@ -330,6 +338,14 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
                         }
                     }
                     break;
+                }
+                BlockMessage::StreamInputDone { input_id } => {
+                    kernel.stream_input_finish(input_id)?;
+                    work_io.call_again = true;
+                }
+                BlockMessage::StreamOutputDone { .. } => {
+                    work_io.finished = true;
+                    work_io.call_again = true;
                 }
                 t => warn!("{} unhandled message during init {:?}", instance_name, t),
             }

@@ -3,6 +3,9 @@ use futuresdr::blocks::Head;
 use futuresdr::blocks::NullSink;
 use futuresdr::blocks::VectorSource;
 use futuresdr::prelude::*;
+use futuresdr::runtime::buffer::BufferReader;
+use futuresdr::runtime::buffer::CpuBufferReader;
+use futuresdr::runtime::buffer::CpuBufferWriter;
 use futuresdr::runtime::buffer::DefaultCpuReader;
 use futuresdr::runtime::buffer::DefaultCpuWriter;
 use futuresdr::runtime::buffer::LocalCpuReader;
@@ -92,6 +95,98 @@ impl Kernel for BlockingNoop {
     ) -> Result<()> {
         self.worked.store(true, Ordering::SeqCst);
         io.finished = true;
+        Ok(())
+    }
+}
+
+#[derive(LocalBlock)]
+struct NonSendLocalSource {
+    state: Rc<()>,
+    emitted: bool,
+    #[output]
+    output: DefaultCpuWriter<u8>,
+}
+
+impl NonSendLocalSource {
+    fn new() -> Self {
+        Self {
+            state: Rc::new(()),
+            emitted: false,
+            output: DefaultCpuWriter::default(),
+        }
+    }
+}
+
+impl LocalKernel for NonSendLocalSource {
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let _state = &self.state;
+        if self.emitted {
+            io.finished = true;
+            return Ok(());
+        }
+
+        let out = self.output.slice();
+        if out.is_empty() {
+            io.call_again = false;
+            return Ok(());
+        }
+
+        out[0] = 42;
+        self.output.produce(1);
+        self.emitted = true;
+        io.finished = true;
+        Ok(())
+    }
+}
+
+#[derive(LocalBlock)]
+struct NonSendLocalSink {
+    state: Rc<()>,
+    n_received: usize,
+    #[input]
+    input: DefaultCpuReader<u8>,
+}
+
+impl NonSendLocalSink {
+    fn new() -> Self {
+        Self {
+            state: Rc::new(()),
+            n_received: 0,
+            input: DefaultCpuReader::default(),
+        }
+    }
+
+    fn n_received(&self) -> usize {
+        self.n_received
+    }
+}
+
+impl LocalKernel for NonSendLocalSink {
+    async fn work(
+        &mut self,
+        io: &mut LocalWorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let _state = &self.state;
+        let input = self.input.slice();
+        let n = input.len();
+        if n > 0 {
+            self.n_received += n;
+            self.input.consume(n);
+        }
+
+        if self.input.finished() {
+            io.finished = true;
+        } else if n == 0 {
+            io.call_again = false;
+        }
+
         Ok(())
     }
 }
@@ -202,6 +297,24 @@ fn stream_connects_same_domain_local_blocks_with_send_buffer() -> Result<()> {
 
     let fg = rt.run(fg)?;
     assert_eq!(snk.with(&fg, |b| b.n_received())?, 4);
+
+    Ok(())
+}
+
+#[test]
+fn stream_connects_different_local_domains_with_send_buffer() -> Result<()> {
+    let rt = Runtime::new();
+    let mut fg = Flowgraph::new();
+
+    let source_domain = fg.local_domain();
+    let sink_domain = fg.local_domain();
+    let src = fg.add_local(source_domain, NonSendLocalSource::new);
+    let snk = fg.add_local(sink_domain, NonSendLocalSink::new);
+
+    fg.stream(&src, |b| b.output(), &snk, |b| b.input())?;
+
+    let fg = rt.run(fg)?;
+    assert_eq!(snk.with(&fg, |b| b.n_received())?, 1);
 
     Ok(())
 }

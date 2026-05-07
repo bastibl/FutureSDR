@@ -43,6 +43,30 @@ pub(crate) struct LocalDomainController {
     join: Option<thread::JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct LocalDomainHandle {
+    tx: sync_mpsc::Sender<LocalDomainMessage>,
+}
+
+impl LocalDomainHandle {
+    pub(crate) fn exec<R>(
+        &self,
+        f: impl FnOnce(&mut LocalDomainState) -> Result<R, Error> + Send + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(LocalDomainMessage::Exec(Box::new(move |state| {
+                let _ = reply.send(f(state));
+            })))
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
+        async_io::block_on(rx)
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
+    }
+}
+
 impl LocalDomainController {
     pub(crate) fn new() -> Self {
         let (tx, rx) = sync_mpsc::channel();
@@ -57,6 +81,12 @@ impl LocalDomainController {
             tx,
             terminate_tx: Some(terminate_tx),
             join: Some(join),
+        }
+    }
+
+    pub(crate) fn handle(&self) -> LocalDomainHandle {
+        LocalDomainHandle {
+            tx: self.tx.clone(),
         }
     }
 
@@ -84,14 +114,7 @@ impl LocalDomainController {
     where
         R: Send + 'static,
     {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(LocalDomainMessage::Exec(Box::new(move |state| {
-                let _ = reply.send(f(state));
-            })))
-            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
-        async_io::block_on(rx)
-            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
+        self.handle().exec(f)
     }
 
     pub(crate) fn run(
