@@ -4,10 +4,10 @@ use futures::future::Either;
 use std::sync::mpsc as sync_mpsc;
 use std::thread;
 
+use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
-use crate::runtime::BlockId;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
 use crate::runtime::channel::mpsc::Sender;
