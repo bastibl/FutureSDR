@@ -228,6 +228,43 @@ pub struct LocalDomain {
 #[cfg(target_arch = "wasm32")]
 type WasmBlockTask = crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>;
 
+#[cfg(not(target_arch = "wasm32"))]
+type StoredBlock = dyn Block;
+#[cfg(target_arch = "wasm32")]
+type StoredBlock = dyn LocalBlock;
+
+pub(crate) struct BlockEntry {
+    block: Option<Box<StoredBlock>>,
+    placement: BlockPlacement,
+    inbox: Option<BlockInbox>,
+    message_inputs: Option<&'static [&'static str]>,
+}
+
+impl BlockEntry {
+    fn empty(placement: BlockPlacement) -> Self {
+        Self {
+            block: None,
+            placement,
+            inbox: None,
+            message_inputs: None,
+        }
+    }
+
+    fn with_block(
+        block: Box<StoredBlock>,
+        placement: BlockPlacement,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> Self {
+        Self {
+            block: Some(block),
+            placement,
+            inbox: Some(inbox),
+            message_inputs: Some(message_inputs),
+        }
+    }
+}
+
 impl<K> BlockRef<K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
@@ -392,13 +429,7 @@ impl<K> From<&BlockRef<K>> for BlockId {
 /// ```
 pub struct Flowgraph {
     pub(crate) id: FlowgraphId,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) blocks: Vec<Option<Box<dyn Block>>>,
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) blocks: Vec<Option<Box<dyn LocalBlock>>>,
-    pub(crate) block_placements: Vec<BlockPlacement>,
-    pub(crate) block_inboxes: Vec<Option<BlockInbox>>,
-    pub(crate) block_message_inputs: Vec<Option<&'static [&'static str]>>,
+    pub(crate) blocks: Vec<BlockEntry>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) local_domains: Vec<LocalDomainBlocks>,
     pub(crate) stream_edges: Vec<StreamEdge>,
@@ -411,9 +442,6 @@ impl Flowgraph {
         Flowgraph {
             id: FlowgraphId(NEXT_FLOWGRAPH_ID.fetch_add(1, Ordering::Relaxed)),
             blocks: Vec::new(),
-            block_placements: Vec::new(),
-            block_inboxes: Vec::new(),
-            block_message_inputs: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             local_domains: Vec::new(),
             stream_edges: vec![],
@@ -533,10 +561,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn reserve_block_id(&mut self, placement: BlockPlacement) -> BlockId {
         let block_id = BlockId(self.blocks.len());
-        self.blocks.push(None);
-        self.block_placements.push(placement);
-        self.block_inboxes.push(None);
-        self.block_message_inputs.push(None);
+        self.blocks.push(BlockEntry::empty(placement));
         block_id
     }
 
@@ -558,10 +583,8 @@ impl Flowgraph {
     ) -> BlockRef<K> {
         let block_id = BlockId(self.blocks.len());
         let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.blocks.push(Some(block));
-        self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs.push(Some(message_inputs));
+        self.blocks
+            .push(BlockEntry::with_block(block, placement, inbox, message_inputs));
         self.block_ref(block_id, placement)
     }
 
@@ -574,10 +597,8 @@ impl Flowgraph {
     ) -> BlockRef<K> {
         let block_id = BlockId(self.blocks.len());
         let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.blocks.push(Some(block));
-        self.block_placements.push(placement);
-        self.block_inboxes.push(Some(inbox));
-        self.block_message_inputs.push(Some(message_inputs));
+        self.blocks
+            .push(BlockEntry::with_block(block, placement, inbox, message_inputs));
         self.block_ref(block_id, placement)
     }
 
@@ -602,8 +623,9 @@ impl Flowgraph {
             .controller
             .build(local_id, builder(block_id))
             .expect(expect_msg);
-        self.block_inboxes[block_id.0] = Some(inbox);
-        self.block_message_inputs[block_id.0] = Some(message_inputs);
+        let entry = &mut self.blocks[block_id.0];
+        entry.inbox = Some(inbox);
+        entry.message_inputs = Some(message_inputs);
         self.block_ref(block_id, placement)
     }
 
@@ -716,7 +738,7 @@ impl Flowgraph {
                 block.id, block.flowgraph_id, self.id
             )));
         }
-        if self.block_placements.get(block.id.0).copied() != Some(block.placement) {
+        if self.blocks.get(block.id.0).map(|entry| entry.placement) != Some(block.placement) {
             return Err(Error::InvalidBlock(block.id));
         }
         Ok(())
@@ -737,9 +759,9 @@ impl Flowgraph {
     }
 
     fn placement(&self, block_id: BlockId) -> Result<BlockPlacement, Error> {
-        self.block_placements
+        self.blocks
             .get(block_id.0)
-            .copied()
+            .map(|entry| entry.placement)
             .ok_or(Error::InvalidBlock(block_id))
     }
 
@@ -749,6 +771,7 @@ impl Flowgraph {
                 .blocks
                 .get(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
+                .block
                 .as_ref()
                 .map(|block| block.as_ref() as &dyn BlockObject)
                 .ok_or(Error::LockError),
@@ -763,6 +786,7 @@ impl Flowgraph {
                 .blocks
                 .get_mut(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
+                .block
                 .as_mut()
                 .map(|block| block.as_mut() as &mut dyn BlockObject)
                 .ok_or(Error::LockError),
@@ -834,6 +858,7 @@ impl Flowgraph {
                 })?;
 
         let src = src_slot
+            .block
             .as_mut()
             .ok_or(Error::LockError)?
             .as_mut()
@@ -847,6 +872,7 @@ impl Flowgraph {
                 ))
             })?;
         let dst = dst_slot
+            .block
             .as_mut()
             .ok_or(Error::LockError)?
             .as_mut()
@@ -1091,8 +1117,16 @@ impl Flowgraph {
                     std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
                 })?;
 
-        let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-        let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+        let src_block = src_slot
+            .block
+            .as_mut()
+            .ok_or(Error::LockError)?
+            .as_mut();
+        let dst_block = dst_slot
+            .block
+            .as_mut()
+            .ok_or(Error::LockError)?
+            .as_mut();
         let src = Self::wasm_kernel_mut(src_block, src_id)?;
         let dst = Self::wasm_kernel_mut(dst_block, dst_id)?;
 
@@ -1335,7 +1369,7 @@ impl Flowgraph {
         R: Send + 'static,
     {
         let (local_id, domain_id, local_idx) = local;
-        let mut normal = self.blocks[normal_id.0].take().ok_or(Error::LockError)?;
+        let mut normal = self.blocks[normal_id.0].block.take().ok_or(Error::LockError)?;
         let (result, restored) = self.local_domains[domain_id]
             .controller
             .exec(move |state| {
@@ -1345,7 +1379,7 @@ impl Flowgraph {
                 })();
                 Ok((result, normal))
             })?;
-        self.blocks[normal_id.0] = Some(restored);
+        self.blocks[normal_id.0].block = Some(restored);
         result
     }
 
@@ -1426,8 +1460,16 @@ impl Flowgraph {
                 }
                 std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
             })?;
-        let src_block = src_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
-        let dst_block = dst_slot.as_mut().map(Box::as_mut).ok_or(Error::LockError)?;
+        let src_block = src_slot
+            .block
+            .as_mut()
+            .map(Box::as_mut)
+            .ok_or(Error::LockError)?;
+        let dst_block = dst_slot
+            .block
+            .as_mut()
+            .map(Box::as_mut)
+            .ok_or(Error::LockError)?;
         Self::connect_stream_ports_dyn(
             src_block_id,
             src_port_id,
@@ -1955,9 +1997,9 @@ impl Flowgraph {
         let dst_port_id = dst_port_id.into();
 
         let dst_inputs = self
-            .block_message_inputs
+            .blocks
             .get(dst_block_id.0)
-            .and_then(|inputs| *inputs)
+            .and_then(|entry| entry.message_inputs)
             .ok_or(Error::InvalidBlock(dst_block_id))?;
         if !dst_inputs.contains(&dst_port_id.name()) {
             return Err(Error::InvalidMessagePort(
@@ -1966,9 +2008,9 @@ impl Flowgraph {
             ));
         }
         let dst_box = self
-            .block_inboxes
+            .blocks
             .get(dst_block_id.0)
-            .and_then(Option::as_ref)
+            .and_then(|entry| entry.inbox.as_ref())
             .cloned()
             .ok_or(Error::InvalidBlock(dst_block_id))?;
         match self.placement(src_block_id)? {
@@ -2005,8 +2047,8 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn Block>>, Error> {
         let mut blocks = Vec::with_capacity(self.blocks.len());
-        for slot in self.blocks.iter_mut() {
-            if let Some(block) = slot.take() {
+        for entry in self.blocks.iter_mut() {
+            if let Some(block) = entry.block.take() {
                 blocks.push(block);
             }
         }
@@ -2016,8 +2058,8 @@ impl Flowgraph {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn LocalBlock>>, Error> {
         let mut blocks = Vec::with_capacity(self.blocks.len());
-        for slot in self.blocks.iter_mut() {
-            if let Some(block) = slot.take() {
+        for entry in self.blocks.iter_mut() {
+            if let Some(block) = entry.block.take() {
                 blocks.push(block);
             }
         }
@@ -2045,7 +2087,7 @@ impl Flowgraph {
     }
 
     pub(crate) fn block_count(&self) -> usize {
-        self.block_placements.len()
+        self.blocks.len()
     }
 
     pub(crate) fn inboxes(
@@ -2056,9 +2098,9 @@ impl Flowgraph {
         for (id, inbox) in inboxes.iter_mut().enumerate().take(self.block_count()) {
             let block_id = BlockId(id);
             *inbox = Some(
-                self.block_inboxes
+                self.blocks
                     .get(id)
-                    .and_then(Option::as_ref)
+                    .and_then(|entry| entry.inbox.as_ref())
                     .cloned()
                     .ok_or(Error::InvalidBlock(block_id))?,
             );
@@ -2099,14 +2141,14 @@ impl Flowgraph {
         blocks: Vec<(BlockId, Box<dyn Block>)>,
     ) -> Result<(), Error> {
         for (id, block) in blocks {
-            let slot = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
-            if slot.is_some() {
+            let entry = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
+            if entry.block.is_some() {
                 return Err(Error::RuntimeError(format!(
                     "block slot {:?} was restored more than once",
                     id
                 )));
             }
-            *slot = Some(block);
+            entry.block = Some(block);
         }
 
         Ok(())
@@ -2118,14 +2160,14 @@ impl Flowgraph {
         blocks: Vec<(BlockId, Box<dyn LocalBlock>)>,
     ) -> Result<(), Error> {
         for (id, block) in blocks {
-            let slot = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
-            if slot.is_some() {
+            let entry = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
+            if entry.block.is_some() {
                 return Err(Error::RuntimeError(format!(
                     "block slot {:?} was restored more than once",
                     id
                 )));
             }
-            *slot = Some(block);
+            entry.block = Some(block);
         }
 
         Ok(())
