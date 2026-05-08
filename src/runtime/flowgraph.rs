@@ -195,6 +195,16 @@ impl LocalEndpoint {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum StreamPlan {
+    NormalNormal { src: BlockId, dst: BlockId },
+    LocalLocalSame { src: LocalEndpoint, dst: LocalEndpoint },
+    LocalLocalCross { src: LocalEndpoint, dst: LocalEndpoint },
+    LocalToNormal { src: LocalEndpoint, dst: BlockId },
+    NormalToLocal { src: BlockId, dst: LocalEndpoint },
+}
+
 /// Type-erased stream edge between two stream ports.
 #[derive(Debug, Clone)]
 pub(crate) struct StreamEdge {
@@ -764,6 +774,75 @@ impl Flowgraph {
             .get(block_id.0)
             .map(|entry| entry.placement)
             .ok_or(Error::InvalidBlock(block_id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stream_plan(
+        src_id: BlockId,
+        src: BlockPlacement,
+        dst_id: BlockId,
+        dst: BlockPlacement,
+    ) -> StreamPlan {
+        match (src, dst) {
+            (BlockPlacement::Normal { .. }, BlockPlacement::Normal { .. }) => {
+                StreamPlan::NormalNormal {
+                    src: src_id,
+                    dst: dst_id,
+                }
+            }
+            (
+                BlockPlacement::Local {
+                    domain_id: src_domain,
+                    local_id: src_local,
+                    kind: src_kind,
+                },
+                BlockPlacement::Local {
+                    domain_id: dst_domain,
+                    local_id: dst_local,
+                    kind: dst_kind,
+                },
+            ) => {
+                let src = LocalEndpoint::new(src_id, src_domain, src_local, src_kind);
+                let dst = LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind);
+                if src_domain == dst_domain {
+                    StreamPlan::LocalLocalSame { src, dst }
+                } else {
+                    StreamPlan::LocalLocalCross { src, dst }
+                }
+            }
+            (
+                BlockPlacement::Local {
+                    domain_id,
+                    local_id,
+                    kind,
+                },
+                BlockPlacement::Normal { .. },
+            ) => StreamPlan::LocalToNormal {
+                src: LocalEndpoint::new(src_id, domain_id, local_id, kind),
+                dst: dst_id,
+            },
+            (
+                BlockPlacement::Normal { .. },
+                BlockPlacement::Local {
+                    domain_id,
+                    local_id,
+                    kind,
+                },
+            ) => StreamPlan::NormalToLocal {
+                src: src_id,
+                dst: LocalEndpoint::new(dst_id, domain_id, local_id, kind),
+            },
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stream_plan_by_id(&self, src_id: BlockId, dst_id: BlockId) -> Result<StreamPlan, Error> {
+        Ok(Self::stream_plan(
+            src_id,
+            self.placement(src_id)?,
+            dst_id,
+            self.placement(dst_id)?,
+        ))
     }
 
     fn raw_block(&self, block_id: BlockId) -> Result<&dyn BlockObject, Error> {
@@ -1546,69 +1625,20 @@ impl Flowgraph {
         self.validate_block_ref(dst_block)?;
         let src_id = src_block.id;
         let dst_id = dst_block.id;
-        let edge = match (src_block.placement, dst_block.placement) {
-            (BlockPlacement::Normal { .. }, BlockPlacement::Normal { .. }) => {
+        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
+        {
+            StreamPlan::NormalNormal { src: src_id, dst: dst_id } => {
                 let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_id, dst_id)?;
                 Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(&mut dst.kernel))
             }
-            (
-                BlockPlacement::Local {
-                    domain_id: src_domain,
-                    local_id: src_local,
-                    kind: src_kind,
-                    ..
-                },
-                BlockPlacement::Local {
-                    domain_id: dst_domain,
-                    local_id: dst_local,
-                    kind: dst_kind,
-                    ..
-                },
-            ) => {
-                if src_domain == dst_domain {
-                    self.connect_local_local_stream::<KS, KD, B, FS, FD>(
-                        LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
-                        src_port,
-                        LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
-                        dst_port,
-                    )?
-                } else {
-                    self.connect_cross_local_stream::<KS, KD, B, FS, FD>(
-                        LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
-                        src_port,
-                        LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
-                        dst_port,
-                    )?
-                }
-            }
-            (
-                BlockPlacement::Local {
-                    domain_id,
-                    local_id,
-                    kind,
-                    ..
-                },
-                BlockPlacement::Normal { .. },
-            ) => self.connect_local_normal_stream::<KS, KD, B, FS, FD>(
-                LocalEndpoint::new(src_id, domain_id, local_id, kind),
-                src_port,
-                dst_id,
-                dst_port,
-            )?,
-            (
-                BlockPlacement::Normal { .. },
-                BlockPlacement::Local {
-                    domain_id,
-                    local_id,
-                    kind,
-                    ..
-                },
-            ) => self.connect_normal_local_stream::<KS, KD, B, FS, FD>(
-                src_id,
-                src_port,
-                LocalEndpoint::new(dst_id, domain_id, local_id, kind),
-                dst_port,
-            )?,
+            StreamPlan::LocalLocalSame { src, dst } => self
+                .connect_local_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?,
+            StreamPlan::LocalLocalCross { src, dst } => self
+                .connect_cross_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?,
+            StreamPlan::LocalToNormal { src, dst } => self
+                .connect_local_normal_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?,
+            StreamPlan::NormalToLocal { src, dst } => self
+                .connect_normal_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?,
         };
         self.stream_edges.push(edge);
         Ok(())
@@ -1638,26 +1668,10 @@ impl Flowgraph {
         self.validate_block_ref(dst_block)?;
         let src_id = src_block.id;
         let dst_id = dst_block.id;
-        let edge = match (src_block.placement, dst_block.placement) {
-            (
-                BlockPlacement::Local {
-                    domain_id: src_domain,
-                    local_id: src_local,
-                    kind: src_kind,
-                    ..
-                },
-                BlockPlacement::Local {
-                    domain_id: dst_domain,
-                    local_id: dst_local,
-                    kind: dst_kind,
-                    ..
-                },
-            ) => self.connect_local_local_stream::<KS, KD, B, FS, FD>(
-                LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
-                src_port,
-                LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
-                dst_port,
-            )?,
+        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
+        {
+            StreamPlan::LocalLocalSame { src, dst } => self
+                .connect_local_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?,
             _ => {
                 return Err(Error::ValidationError(
                     "local stream connections require source and destination blocks in the same local domain"
@@ -1805,49 +1819,22 @@ impl Flowgraph {
         let dst_block_id = dst_block_id.into();
         let dst_port_id = dst_port_id.into();
 
-        let edge = match (self.placement(src_block_id)?, self.placement(dst_block_id)?) {
-            (BlockPlacement::Normal { .. }, BlockPlacement::Normal { .. }) => self
-                .connect_normal_normal_stream_dyn(
-                    src_block_id,
-                    &src_port_id,
-                    dst_block_id,
-                    &dst_port_id,
-                )?,
-            #[cfg(not(target_arch = "wasm32"))]
-            (BlockPlacement::Local { .. }, BlockPlacement::Local { .. }) => {
+        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
+            StreamPlan::NormalNormal { src, dst } => {
+                self.connect_normal_normal_stream_dyn(src, &src_port_id, dst, &dst_port_id)?
+            }
+            StreamPlan::LocalLocalSame { .. } | StreamPlan::LocalLocalCross { .. } => {
                 return Err(Error::ValidationError(
                     "stream_dyn does not connect local-local streams; use stream_local_dyn for same-domain local stream buffers"
                         .to_string(),
                 ));
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            (
-                BlockPlacement::Local {
-                    domain_id,
-                    local_id,
-                    kind,
-                },
-                BlockPlacement::Normal { .. },
-            ) => self.connect_local_normal_stream_dyn(
-                LocalEndpoint::new(src_block_id, domain_id, local_id, kind),
-                src_port_id,
-                dst_block_id,
-                dst_port_id,
-            )?,
-            #[cfg(not(target_arch = "wasm32"))]
-            (
-                BlockPlacement::Normal { .. },
-                BlockPlacement::Local {
-                    domain_id,
-                    local_id,
-                    kind,
-                },
-            ) => self.connect_normal_local_stream_dyn(
-                src_block_id,
-                src_port_id,
-                LocalEndpoint::new(dst_block_id, domain_id, local_id, kind),
-                dst_port_id,
-            )?,
+            StreamPlan::LocalToNormal { src, dst } => {
+                self.connect_local_normal_stream_dyn(src, src_port_id, dst, dst_port_id)?
+            }
+            StreamPlan::NormalToLocal { src, dst } => {
+                self.connect_normal_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
+            }
         };
 
         self.stream_edges.push(edge);
@@ -1872,24 +1859,10 @@ impl Flowgraph {
         let dst_block_id = dst_block_id.into();
         let dst_port_id = dst_port_id.into();
 
-        let edge = match (self.placement(src_block_id)?, self.placement(dst_block_id)?) {
-            (
-                BlockPlacement::Local {
-                    domain_id: src_domain,
-                    local_id: src_local,
-                    kind: src_kind,
-                },
-                BlockPlacement::Local {
-                    domain_id: dst_domain,
-                    local_id: dst_local,
-                    kind: dst_kind,
-                },
-            ) => self.connect_local_local_stream_dyn(
-                LocalEndpoint::new(src_block_id, src_domain, src_local, src_kind),
-                src_port_id,
-                LocalEndpoint::new(dst_block_id, dst_domain, dst_local, dst_kind),
-                dst_port_id,
-            )?,
+        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
+            StreamPlan::LocalLocalSame { src, dst } => {
+                self.connect_local_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
+            }
             _ => {
                 return Err(Error::ValidationError(
                     "local dynamic stream connections require source and destination blocks in the same local domain"
