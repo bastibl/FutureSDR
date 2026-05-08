@@ -4,6 +4,8 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -1279,20 +1281,23 @@ impl Flowgraph {
                 src.kind,
             )?;
             let src_port = src_port(src);
-            let mut writer = std::mem::take(src_port);
+            let writer = Arc::new(Mutex::new(Some(std::mem::take(src_port))));
+            let dst_writer = Arc::clone(&writer);
 
-            let (edge_result, writer) = dst_handle.exec(move |state| {
-                let edge_result = Self::local_state_kernel_mut::<KD>(
+            let edge_result = dst_handle.exec(move |state| {
+                let mut writer_guard = dst_writer.lock().map_err(|_| Error::LockError)?;
+                let writer = writer_guard.as_mut().ok_or(Error::LockError)?;
+                let dst = Self::local_state_kernel_mut::<KD>(
                     state,
                     dst.local_id,
                     dst.block_id,
                     dst.kind,
-                )
-                .map(|dst| Self::connect_stream_ports(&mut writer, dst_port(dst)));
-                Ok((edge_result, writer))
-            })?;
+                )?;
+                Ok(Self::connect_stream_ports(writer, dst_port(dst)))
+            });
 
-            *src_port = writer;
+            let mut writer_guard = writer.lock().map_err(|_| Error::LockError)?;
+            *src_port = writer_guard.take().ok_or(Error::LockError)?;
             edge_result
         })
     }
@@ -1325,16 +1330,18 @@ impl Flowgraph {
         F: FnOnce(&mut dyn BlockObject, &mut dyn BlockObject) -> Result<R, Error> + Send + 'static,
         R: Send + 'static,
     {
-        let mut normal = self.blocks[normal_id.0].block.take().ok_or(Error::LockError)?;
-        let (result, restored) = self.local_domains[local.domain_id]
-            .exec(move |state| {
-                let result = (|| {
-                    let local = state.block_mut(local.local_id, local.block_id)?;
-                    f(normal.as_mut(), local)
-                })();
-                Ok((result, normal))
-            })?;
-        self.blocks[normal_id.0].block = Some(restored);
+        let normal = self.blocks[normal_id.0].block.take().ok_or(Error::LockError)?;
+        let normal = Arc::new(Mutex::new(Some(normal)));
+        let domain_normal = Arc::clone(&normal);
+
+        let result = self.local_domains[local.domain_id].exec(move |state| {
+            let mut normal_guard = domain_normal.lock().map_err(|_| Error::LockError)?;
+            let normal = normal_guard.as_mut().ok_or(Error::LockError)?;
+            let local = state.block_mut(local.local_id, local.block_id)?;
+            f(normal.as_mut(), local)
+        });
+
+        self.blocks[normal_id.0].block = normal.lock().map_err(|_| Error::LockError)?.take();
         result
     }
 
@@ -2098,14 +2105,20 @@ impl Flowgraph {
         &mut self,
         tasks: Vec<oneshot::Receiver<Result<(), Error>>>,
     ) -> Result<(), Error> {
+        let mut result = Ok(());
         for task in tasks {
-            task.await
-                .map_err(|_| Error::RuntimeError("local domain task canceled".to_string()))??;
+            let task_result = task
+                .await
+                .map_err(|_| Error::RuntimeError("local domain task canceled".to_string()))
+                .and_then(|result| result);
+            if result.is_ok() {
+                result = task_result;
+            }
         }
         for domain in self.local_domains.iter_mut() {
             domain.mark_stopped();
         }
-        Ok(())
+        result
     }
 }
 
