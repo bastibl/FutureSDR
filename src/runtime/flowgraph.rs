@@ -34,11 +34,9 @@ use crate::runtime::kernel_interface::SendKernelInterface;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::LocalBlockBuilder;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::local_domain::LocalDomainController;
+use crate::runtime::local_domain::LocalDomainRuntime;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::local_domain::LocalDomainState;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::local_domain::default_local_executor_factory;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 use crate::runtime::wrapped_kernel::WrappedLocalKernel;
 
@@ -215,24 +213,6 @@ impl StreamEdge {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct LocalDomainBlocks {
-    pub(crate) controller: LocalDomainController,
-    pub(crate) blocks: usize,
-    pub(crate) running: bool,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl LocalDomainBlocks {
-    fn new() -> Self {
-        Self {
-            controller: LocalDomainController::new(),
-            blocks: 0,
-            running: false,
-        }
-    }
-}
-
 /// Handle for a local scheduling domain inside a [`Flowgraph`].
 ///
 /// Local domains run their blocks on a dedicated single-thread executor. They
@@ -333,11 +313,11 @@ impl<K: 'static> BlockRef<K> {
                     .local_domains
                     .get(domain_id)
                     .ok_or(Error::InvalidBlock(self.id))?;
-                if domain.running {
+                if domain.is_running() {
                     return Err(Error::LockError);
                 }
                 let block_id = self.id;
-                domain.controller.exec(move |state| {
+                domain.exec(move |state| {
                     Ok(f(Flowgraph::local_state_kernel_ref(
                         state, local_id, block_id, kind,
                     )?))
@@ -377,11 +357,11 @@ impl<K: 'static> BlockRef<K> {
                     .local_domains
                     .get(domain_id)
                     .ok_or(Error::InvalidBlock(self.id))?;
-                if domain.running {
+                if domain.is_running() {
                     return Err(Error::LockError);
                 }
                 let block_id = self.id;
-                domain.controller.exec(move |state| {
+                domain.exec(move |state| {
                     Ok(f(Flowgraph::local_state_kernel_mut(
                         state, local_id, block_id, kind,
                     )?))
@@ -452,7 +432,7 @@ pub struct Flowgraph {
     pub(crate) id: FlowgraphId,
     pub(crate) blocks: Vec<BlockEntry>,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) local_domains: Vec<LocalDomainBlocks>,
+    pub(crate) local_domains: Vec<LocalDomainRuntime>,
     pub(crate) stream_edges: Vec<StreamEdge>,
     pub(crate) message_edges: Vec<(BlockId, PortId, BlockId, PortId)>,
 }
@@ -479,7 +459,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn local_domain(&mut self) -> LocalDomain {
         let domain_id = self.local_domains.len();
-        self.local_domains.push(LocalDomainBlocks::new());
+        self.local_domains.push(LocalDomainRuntime::new());
         LocalDomain {
             flowgraph_id: self.id,
             domain_id,
@@ -504,7 +484,7 @@ impl Flowgraph {
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         if <K as KernelInterface>::is_blocking() {
             let domain_id = self.local_domains.len();
-            self.local_domains.push(LocalDomainBlocks::new());
+            self.local_domains.push(LocalDomainRuntime::new());
             self.add_local_block_builder(
                 domain_id,
                 LocalBlockKind::Kernel,
@@ -632,8 +612,7 @@ impl Flowgraph {
         builder: impl FnOnce(BlockId) -> LocalBlockBuilder,
         expect_msg: &str,
     ) -> BlockRef<K> {
-        let local_id = self.local_domains[domain_id].blocks;
-        self.local_domains[domain_id].blocks += 1;
+        let local_id = self.local_domains[domain_id].reserve_block();
         let placement = BlockPlacement::Local {
             domain_id,
             local_id,
@@ -641,7 +620,6 @@ impl Flowgraph {
         };
         let block_id = self.reserve_block_id(placement);
         let inbox = self.local_domains[domain_id]
-            .controller
             .build(local_id, builder(block_id))
             .expect(expect_msg);
         let entry = &mut self.blocks[block_id.0];
@@ -961,41 +939,13 @@ impl Flowgraph {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn local_state_block(
-        state: &LocalDomainState,
-        local_id: usize,
-        block_id: BlockId,
-    ) -> Result<&dyn BlockObject, Error> {
-        state
-            .blocks
-            .get(local_id)
-            .and_then(Option::as_ref)
-            .map(|block| block.as_ref() as &dyn BlockObject)
-            .ok_or(Error::InvalidBlock(block_id))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn local_state_block_mut(
-        state: &mut LocalDomainState,
-        local_id: usize,
-        block_id: BlockId,
-    ) -> Result<&mut dyn BlockObject, Error> {
-        state
-            .blocks
-            .get_mut(local_id)
-            .and_then(Option::as_mut)
-            .map(|block| block.as_mut() as &mut dyn BlockObject)
-            .ok_or(Error::InvalidBlock(block_id))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn local_state_kernel_ref<K: 'static>(
         state: &LocalDomainState,
         local_id: usize,
         block_id: BlockId,
         kind: LocalBlockKind,
     ) -> Result<&K, Error> {
-        let block = Self::local_state_block(state, local_id, block_id)?;
+        let block = state.block(local_id, block_id)?;
         Self::local_kernel_ref(block, block_id, kind)
     }
 
@@ -1006,7 +956,7 @@ impl Flowgraph {
         block_id: BlockId,
         kind: LocalBlockKind,
     ) -> Result<&mut K, Error> {
-        let block = Self::local_state_block_mut(state, local_id, block_id)?;
+        let block = state.block_mut(local_id, block_id)?;
         Self::local_kernel_mut(block, block_id, kind)
     }
 
@@ -1018,25 +968,8 @@ impl Flowgraph {
     ) -> Result<(&mut KS, &mut KD), Error> {
         let (src_local, src_id, src_kind) = src;
         let (dst_local, dst_id, dst_kind) = dst;
-        if src_local == dst_local {
-            return Err(Error::LockError);
-        }
-        let invalid_block = if src_local >= state.blocks.len() {
-            src_id
-        } else {
-            dst_id
-        };
-        let [src_slot, dst_slot] = state
-            .blocks
-            .get_disjoint_mut([src_local, dst_local])
-            .map_err(|err| match err {
-                std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                    Error::InvalidBlock(invalid_block)
-                }
-                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-            })?;
-        let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-        let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+        let (src_block, dst_block) =
+            state.two_blocks_mut((src_local, src_id), (dst_local, dst_id))?;
         let src = Self::local_kernel_mut(src_block, src_id, src_kind)?;
         let dst = Self::local_kernel_mut(dst_block, dst_id, dst_kind)?;
         Ok((src, dst))
@@ -1302,7 +1235,7 @@ impl Flowgraph {
             .local_domains
             .get(src.domain_id)
             .ok_or(Error::InvalidBlock(src.block_id))?;
-        domain.controller.exec(move |state| {
+        domain.exec(move |state| {
             let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
                 state,
                 (src.local_id, src.block_id, src.kind),
@@ -1331,13 +1264,11 @@ impl Flowgraph {
             .local_domains
             .get(src.domain_id)
             .ok_or(Error::InvalidBlock(src.block_id))?
-            .controller
             .handle();
         let dst_handle = self
             .local_domains
             .get(dst.domain_id)
             .ok_or(Error::InvalidBlock(dst.block_id))?
-            .controller
             .handle();
 
         src_handle.exec(move |state| {
@@ -1396,10 +1327,9 @@ impl Flowgraph {
     {
         let mut normal = self.blocks[normal_id.0].block.take().ok_or(Error::LockError)?;
         let (result, restored) = self.local_domains[local.domain_id]
-            .controller
             .exec(move |state| {
                 let result = (|| {
-                    let local = Self::local_state_block_mut(state, local.local_id, local.block_id)?;
+                    let local = state.block_mut(local.local_id, local.block_id)?;
                     f(normal.as_mut(), local)
                 })();
                 Ok((result, normal))
@@ -1520,26 +1450,9 @@ impl Flowgraph {
             .local_domains
             .get(src.domain_id)
             .ok_or(Error::InvalidBlock(src.block_id))?;
-        domain.controller.exec(move |state| {
-            if src.local_id == dst.local_id {
-                return Err(Error::LockError);
-            }
-            let invalid_block = if src.local_id >= state.blocks.len() {
-                src.block_id
-            } else {
-                dst.block_id
-            };
-            let [src_slot, dst_slot] = state
-                .blocks
-                .get_disjoint_mut([src.local_id, dst.local_id])
-                .map_err(|err| match err {
-                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                        Error::InvalidBlock(invalid_block)
-                    }
-                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-                })?;
-            let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
-            let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
+        domain.exec(move |state| {
+            let (src_block, dst_block) = state
+                .two_blocks_mut((src.local_id, src.block_id), (dst.local_id, dst.block_id))?;
             Self::connect_stream_ports_dyn(
                 src.block_id,
                 &src_port_id,
@@ -2045,17 +1958,10 @@ impl Flowgraph {
             } => {
                 let src_port = src_port_id.clone();
                 let dst_port = dst_port_id.clone();
-                self.local_domains[domain_id]
-                    .controller
-                    .exec(move |state| {
-                        let src_block = state
-                            .blocks
-                            .get_mut(local_id)
-                            .and_then(Option::as_mut)
-                            .ok_or(Error::InvalidBlock(src_block_id))?
-                            .as_mut();
-                        src_block.connect(&src_port, dst_box, &dst_port)
-                    })?;
+                self.local_domains[domain_id].exec(move |state| {
+                    let src_block = state.block_mut(local_id, src_block_id)?;
+                    src_block.connect(&src_port, dst_box, &dst_port)
+                })?;
             }
         }
         self.message_edges
@@ -2135,13 +2041,8 @@ impl Flowgraph {
     ) -> Result<Vec<oneshot::Receiver<Result<(), Error>>>, Error> {
         let mut tasks = Vec::new();
         for domain in self.local_domains.iter_mut() {
-            if domain.blocks > 0 {
-                domain.running = true;
-                tasks.push(
-                    domain
-                        .controller
-                        .run(main_channel.clone(), default_local_executor_factory())?,
-                );
+            if let Some(task) = domain.run_if_needed(main_channel.clone())? {
+                tasks.push(task);
             }
         }
         Ok(tasks)
@@ -2202,7 +2103,7 @@ impl Flowgraph {
                 .map_err(|_| Error::RuntimeError("local domain task canceled".to_string()))??;
         }
         for domain in self.local_domains.iter_mut() {
-            domain.running = false;
+            domain.mark_stopped();
         }
         Ok(())
     }
