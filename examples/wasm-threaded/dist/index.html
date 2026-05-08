@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    
+<script type="module">
+import init, * as bindings from '/wasm-threaded.js';
+const wasm = await init({ module_or_path: '/wasm-threaded_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    
+    <title>FutureSDR :: threaded WASM ZigBee RX</title>
+  <link rel="modulepreload" href="/wasm-threaded.js" crossorigin="anonymous" integrity="sha384-0reSYgCkVolkUqWKxpus0dG2m3noTzl92ZE1ePxr4vvp/2CKPF+lsYLUshIcbsut"><link rel="preload" href="/wasm-threaded_bg.wasm" crossorigin="anonymous" integrity="sha384-WrCLI3MB32fO3RnJncnj0gY52PLv2SQuLzakMR9ks1GnETzE8DpfmSErmYPx+rVT" as="fetch" type="application/wasm"></head>
+  <body></body>
+</html>

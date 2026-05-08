@@ -342,13 +342,19 @@ fn spawn_run_flowgraph<S: Scheduler>(
 
 #[cfg(target_arch = "wasm32")]
 fn spawn_run_flowgraph<S: Scheduler>(
-    _scheduler: S,
+    scheduler: S,
     fg: Flowgraph,
     fg_inbox: Sender<FlowgraphMessage>,
     fg_inbox_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
 ) -> Task<Result<Flowgraph, Error>> {
-    Task::spawn_local(run_flowgraph(fg, fg_inbox, fg_inbox_rx, initialized))
+    Task::spawn_local(run_flowgraph(
+        fg,
+        scheduler,
+        fg_inbox,
+        fg_inbox_rx,
+        initialized,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -400,8 +406,9 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn run_flowgraph(
+pub(crate) async fn run_flowgraph<S: Scheduler>(
     mut fg: Flowgraph,
+    scheduler: S,
     main_channel: Sender<FlowgraphMessage>,
     main_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
@@ -411,7 +418,9 @@ pub(crate) async fn run_flowgraph(
     let (mut inboxes, ids) = fg.inboxes()?;
     let stream_edges_desc = fg.stream_edge_endpoints();
     let message_edges_desc = fg.message_edges.clone();
-    let block_tasks = fg.spawn_wasm_blocks(main_channel.clone())?;
+    let normal_blocks = fg.take_normal_blocks()?;
+    let block_tasks = scheduler.run_domain(normal_blocks, &main_channel);
+    let local_tasks = fg.spawn_wasm_local_blocks(main_channel.clone())?;
 
     let run_result = run_flowgraph_loop(
         &mut inboxes,
@@ -436,7 +445,13 @@ pub(crate) async fn run_flowgraph(
     for task in block_tasks {
         finished_blocks.push(task.await);
     }
-    fg.restore_blocks(finished_blocks)?;
+    fg.restore_normal_blocks(finished_blocks)?;
+
+    let mut finished_local_blocks = Vec::with_capacity(local_tasks.len());
+    for task in local_tasks {
+        finished_local_blocks.push(task.await);
+    }
+    fg.restore_local_blocks(finished_local_blocks)?;
 
     run_result?;
     Ok(fg)

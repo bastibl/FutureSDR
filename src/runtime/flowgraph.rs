@@ -17,7 +17,6 @@ use crate::runtime::Error;
 use crate::runtime::FlowgraphId;
 use crate::runtime::PortId;
 use crate::runtime::Result;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::block::Block;
 use crate::runtime::block::BlockObject;
 #[cfg(target_arch = "wasm32")]
@@ -25,7 +24,6 @@ use crate::runtime::block::LocalBlock;
 use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitWriter;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::buffer::SendBufferWriter;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
@@ -256,15 +254,36 @@ pub struct LocalDomain {
 }
 
 #[cfg(target_arch = "wasm32")]
-type WasmBlockTask = crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>;
+type WasmLocalBlockTask = crate::runtime::scheduler::Task<(BlockId, Box<dyn LocalBlock>)>;
 
-#[cfg(not(target_arch = "wasm32"))]
-type StoredBlock = dyn Block;
 #[cfg(target_arch = "wasm32")]
-type StoredBlock = dyn LocalBlock;
+enum StoredBlock {
+    Normal(Box<dyn Block>),
+    Local(Box<dyn LocalBlock>),
+}
+
+#[cfg(target_arch = "wasm32")]
+impl StoredBlock {
+    fn as_object(&self) -> &dyn BlockObject {
+        match self {
+            StoredBlock::Normal(block) => block.as_ref(),
+            StoredBlock::Local(block) => block.as_ref(),
+        }
+    }
+
+    fn as_object_mut(&mut self) -> &mut dyn BlockObject {
+        match self {
+            StoredBlock::Normal(block) => block.as_mut(),
+            StoredBlock::Local(block) => block.as_mut(),
+        }
+    }
+}
 
 pub(crate) struct BlockEntry {
-    block: Option<Box<StoredBlock>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    block: Option<Box<dyn Block>>,
+    #[cfg(target_arch = "wasm32")]
+    block: Option<StoredBlock>,
     placement: BlockPlacement,
     inbox: Option<BlockInbox>,
     message_inputs: Option<&'static [&'static str]>,
@@ -281,14 +300,45 @@ impl BlockEntry {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn with_block(
-        block: Box<StoredBlock>,
+        block: Box<dyn Block>,
         placement: BlockPlacement,
         inbox: BlockInbox,
         message_inputs: &'static [&'static str],
     ) -> Self {
         Self {
             block: Some(block),
+            placement,
+            inbox: Some(inbox),
+            message_inputs: Some(message_inputs),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn with_normal_block(
+        block: Box<dyn Block>,
+        placement: BlockPlacement,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> Self {
+        Self {
+            block: Some(StoredBlock::Normal(block)),
+            placement,
+            inbox: Some(inbox),
+            message_inputs: Some(message_inputs),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn with_local_block(
+        block: Box<dyn LocalBlock>,
+        placement: BlockPlacement,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> Self {
+        Self {
+            block: Some(StoredBlock::Local(block)),
             placement,
             inbox: Some(inbox),
             message_inputs: Some(message_inputs),
@@ -567,7 +617,7 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
+        self.add_local_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -582,7 +632,7 @@ impl Flowgraph {
         b.meta
             .set_instance_name(format!("{}-{}", block_name, block_id.0));
         let inbox = b.inbox();
-        self.add_normal_block(
+        self.add_local_block(
             Box::new(b),
             inbox,
             <K as LocalKernelInterface>::message_inputs(),
@@ -626,13 +676,31 @@ impl Flowgraph {
     #[cfg(target_arch = "wasm32")]
     fn add_normal_block<K>(
         &mut self,
+        block: Box<dyn Block>,
+        inbox: BlockInbox,
+        message_inputs: &'static [&'static str],
+    ) -> BlockRef<K> {
+        let block_id = BlockId(self.blocks.len());
+        let placement = BlockPlacement::Normal { domain_id: 0 };
+        self.blocks.push(BlockEntry::with_normal_block(
+            block,
+            placement,
+            inbox,
+            message_inputs,
+        ));
+        self.block_ref(block_id, placement)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn add_local_block<K>(
+        &mut self,
         block: Box<dyn LocalBlock>,
         inbox: BlockInbox,
         message_inputs: &'static [&'static str],
     ) -> BlockRef<K> {
         let block_id = BlockId(self.blocks.len());
         let placement = BlockPlacement::Normal { domain_id: 0 };
-        self.blocks.push(BlockEntry::with_block(
+        self.blocks.push(BlockEntry::with_local_block(
             block,
             placement,
             inbox,
@@ -871,6 +939,7 @@ impl Flowgraph {
         ))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn raw_block(&self, block_id: BlockId) -> Result<&dyn BlockObject, Error> {
         match self.placement(block_id)? {
             BlockPlacement::Normal { .. } => self
@@ -881,11 +950,22 @@ impl Flowgraph {
                 .as_ref()
                 .map(|block| block.as_ref() as &dyn BlockObject)
                 .ok_or(Error::LockError),
-            #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local { .. } => Err(Error::LockError),
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn raw_block(&self, block_id: BlockId) -> Result<&dyn BlockObject, Error> {
+        self.blocks
+            .get(block_id.0)
+            .ok_or(Error::InvalidBlock(block_id))?
+            .block
+            .as_ref()
+            .map(StoredBlock::as_object)
+            .ok_or(Error::LockError)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn raw_block_mut(&mut self, block_id: BlockId) -> Result<&mut dyn BlockObject, Error> {
         match self.placement(block_id)? {
             BlockPlacement::Normal { .. } => self
@@ -896,9 +976,19 @@ impl Flowgraph {
                 .as_mut()
                 .map(|block| block.as_mut() as &mut dyn BlockObject)
                 .ok_or(Error::LockError),
-            #[cfg(not(target_arch = "wasm32"))]
             BlockPlacement::Local { .. } => Err(Error::LockError),
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn raw_block_mut(&mut self, block_id: BlockId) -> Result<&mut dyn BlockObject, Error> {
+        self.blocks
+            .get_mut(block_id.0)
+            .ok_or(Error::InvalidBlock(block_id))?
+            .block
+            .as_mut()
+            .map(StoredBlock::as_object_mut)
+            .ok_or(Error::LockError)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1178,8 +1268,16 @@ impl Flowgraph {
                     std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
                 })?;
 
-        let src_block = src_slot.block.as_mut().ok_or(Error::LockError)?.as_mut();
-        let dst_block = dst_slot.block.as_mut().ok_or(Error::LockError)?.as_mut();
+        let src_block = src_slot
+            .block
+            .as_mut()
+            .map(StoredBlock::as_object_mut)
+            .ok_or(Error::LockError)?;
+        let dst_block = dst_slot
+            .block
+            .as_mut()
+            .map(StoredBlock::as_object_mut)
+            .ok_or(Error::LockError)?;
         let src = Self::wasm_kernel_mut(src_block, src_id)?;
         let dst = Self::wasm_kernel_mut(dst_block, dst_id)?;
 
@@ -1516,15 +1614,29 @@ impl Flowgraph {
                 }
                 std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
             })?;
+        #[cfg(not(target_arch = "wasm32"))]
         let src_block = src_slot
             .block
             .as_mut()
             .map(Box::as_mut)
             .ok_or(Error::LockError)?;
+        #[cfg(target_arch = "wasm32")]
+        let src_block = src_slot
+            .block
+            .as_mut()
+            .map(StoredBlock::as_object_mut)
+            .ok_or(Error::LockError)?;
+        #[cfg(not(target_arch = "wasm32"))]
         let dst_block = dst_slot
             .block
             .as_mut()
             .map(Box::as_mut)
+            .ok_or(Error::LockError)?;
+        #[cfg(target_arch = "wasm32")]
+        let dst_block = dst_slot
+            .block
+            .as_mut()
+            .map(StoredBlock::as_object_mut)
             .ok_or(Error::LockError)?;
         Self::connect_stream_ports_dyn(
             src_block_id,
@@ -1708,8 +1820,8 @@ impl Flowgraph {
 
     /// Connect stream ports through typed block handles owned by this flowgraph.
     ///
-    /// On WASM all blocks run on the browser executor, so this accepts the
-    /// primary local buffer traits directly.
+    /// On WASM, ordinary stream connections may cross from local-only blocks
+    /// to scheduler workers, so the buffer must be send-capable.
     #[cfg(target_arch = "wasm32")]
     pub fn stream<KS, KD, B, FS, FD>(
         &mut self,
@@ -1721,7 +1833,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: BufferWriter,
+        B: SendBufferWriter,
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
     {
@@ -1735,8 +1847,7 @@ impl Flowgraph {
 
     /// Connect local-only stream ports through typed block handles owned by this flowgraph.
     ///
-    /// On WASM this is an alias for [`Flowgraph::stream`], since the runtime is
-    /// single-threaded and has no native local domains.
+    /// On WASM this is an alias for [`Flowgraph::stream`].
     #[cfg(target_arch = "wasm32")]
     pub fn stream_local<KS, KD, B, FS, FD>(
         &mut self,
@@ -1748,7 +1859,7 @@ impl Flowgraph {
     where
         KS: 'static,
         KD: 'static,
-        B: BufferWriter,
+        B: SendBufferWriter,
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
     {
@@ -1914,8 +2025,7 @@ impl Flowgraph {
 
     /// Connect local-only stream ports without static port type checks.
     ///
-    /// On WASM this is an alias for [`Flowgraph::stream_dyn`], since the
-    /// runtime is single-threaded and has no native local domains.
+    /// On WASM this is an alias for [`Flowgraph::stream_dyn`].
     #[cfg(target_arch = "wasm32")]
     pub fn stream_local_dyn(
         &mut self,
@@ -1998,10 +2108,13 @@ impl Flowgraph {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn LocalBlock>>, Error> {
-        let mut blocks = Vec::with_capacity(self.blocks.len());
+    pub(crate) fn take_normal_blocks(&mut self) -> Result<Vec<Box<dyn Block>>, Error> {
+        let mut blocks = Vec::new();
         for entry in self.blocks.iter_mut() {
-            if let Some(block) = entry.block.take() {
+            if matches!(entry.block, Some(StoredBlock::Normal(_))) {
+                let Some(StoredBlock::Normal(block)) = entry.block.take() else {
+                    unreachable!("checked normal block variant");
+                };
                 blocks.push(block);
             }
         }
@@ -2009,11 +2122,25 @@ impl Flowgraph {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn spawn_wasm_blocks(
+    pub(crate) fn take_local_blocks(&mut self) -> Result<Vec<Box<dyn LocalBlock>>, Error> {
+        let mut blocks = Vec::new();
+        for entry in self.blocks.iter_mut() {
+            if matches!(entry.block, Some(StoredBlock::Local(_))) {
+                let Some(StoredBlock::Local(block)) = entry.block.take() else {
+                    unreachable!("checked local block variant");
+                };
+                blocks.push(block);
+            }
+        }
+        Ok(blocks)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn spawn_wasm_local_blocks(
         &mut self,
         main_channel: crate::runtime::channel::mpsc::Sender<crate::runtime::FlowgraphMessage>,
-    ) -> Result<Vec<WasmBlockTask>, Error> {
-        let blocks = self.take_blocks()?;
+    ) -> Result<Vec<WasmLocalBlockTask>, Error> {
+        let blocks = self.take_local_blocks()?;
         let mut tasks = Vec::with_capacity(blocks.len());
         for block in blocks {
             let main_channel = main_channel.clone();
@@ -2092,7 +2219,26 @@ impl Flowgraph {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn restore_blocks(
+    pub(crate) fn restore_normal_blocks(
+        &mut self,
+        blocks: Vec<(BlockId, Box<dyn Block>)>,
+    ) -> Result<(), Error> {
+        for (id, block) in blocks {
+            let entry = self.blocks.get_mut(id.0).ok_or(Error::InvalidBlock(id))?;
+            if entry.block.is_some() {
+                return Err(Error::RuntimeError(format!(
+                    "block slot {:?} was restored more than once",
+                    id
+                )));
+            }
+            entry.block = Some(StoredBlock::Normal(block));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn restore_local_blocks(
         &mut self,
         blocks: Vec<(BlockId, Box<dyn LocalBlock>)>,
     ) -> Result<(), Error> {
@@ -2104,7 +2250,7 @@ impl Flowgraph {
                     id
                 )));
             }
-            entry.block = Some(block);
+            entry.block = Some(StoredBlock::Local(block));
         }
 
         Ok(())

@@ -1,0 +1,29 @@
+[package]
+name = "wasm-threaded"
+version = "0.0.1"
+edition = "2024"
+default-run = "wasm-threaded"
+
+[workspace]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+any_spawner = { version = "0.3", features = ["wasm-bindgen"] }
+anyhow = "1"
+console_error_panic_hook = "0.1"
+futuresdr = { path = "../.." }
+leptos = { version = "0.8", features = ["csr", "nightly"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+zigbee = { path = "../zigbee", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Navigator",
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+    "Window",
+]
