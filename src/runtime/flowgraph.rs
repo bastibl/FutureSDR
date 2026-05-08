@@ -174,6 +174,27 @@ pub(crate) enum LocalBlockKind {
     LocalKernel,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct LocalEndpoint {
+    block_id: BlockId,
+    domain_id: usize,
+    local_id: usize,
+    kind: LocalBlockKind,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LocalEndpoint {
+    fn new(block_id: BlockId, domain_id: usize, local_id: usize, kind: LocalBlockKind) -> Self {
+        Self {
+            block_id,
+            domain_id,
+            local_id,
+            kind,
+        }
+    }
+}
+
 /// Type-erased stream edge between two stream ports.
 #[derive(Debug, Clone)]
 pub(crate) struct StreamEdge {
@@ -1260,9 +1281,9 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_local_local_stream<KS, KD, B, FS, FD>(
         &self,
-        src: (BlockId, usize, usize, LocalBlockKind),
+        src: LocalEndpoint,
         src_port: FS,
-        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst: LocalEndpoint,
         dst_port: FD,
     ) -> Result<StreamEdge, Error>
     where
@@ -1272,22 +1293,20 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        let (src_id, src_domain, src_local, src_kind) = src;
-        let (dst_id, dst_domain, dst_local, dst_kind) = dst;
-        if src_domain != dst_domain {
+        if src.domain_id != dst.domain_id {
             return Err(Error::ValidationError(
                 "stream connections between different local domains are not supported".to_string(),
             ));
         }
         let domain = self
             .local_domains
-            .get(src_domain)
-            .ok_or(Error::InvalidBlock(src_id))?;
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?;
         domain.controller.exec(move |state| {
             let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
                 state,
-                (src_local, src_id, src_kind),
-                (dst_local, dst_id, dst_kind),
+                (src.local_id, src.block_id, src.kind),
+                (dst.local_id, dst.block_id, dst.kind),
             )?;
             Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
         })
@@ -1296,9 +1315,9 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_cross_local_stream<KS, KD, B, FS, FD>(
         &self,
-        src: (BlockId, usize, usize, LocalBlockKind),
+        src: LocalEndpoint,
         src_port: FS,
-        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst: LocalEndpoint,
         dst_port: FD,
     ) -> Result<StreamEdge, Error>
     where
@@ -1308,30 +1327,37 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        let (src_id, src_domain, src_local, src_kind) = src;
-        let (dst_id, dst_domain, dst_local, dst_kind) = dst;
         let src_handle = self
             .local_domains
-            .get(src_domain)
-            .ok_or(Error::InvalidBlock(src_id))?
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?
             .controller
             .handle();
         let dst_handle = self
             .local_domains
-            .get(dst_domain)
-            .ok_or(Error::InvalidBlock(dst_id))?
+            .get(dst.domain_id)
+            .ok_or(Error::InvalidBlock(dst.block_id))?
             .controller
             .handle();
 
         src_handle.exec(move |state| {
-            let src = Self::local_state_kernel_mut::<KS>(state, src_local, src_id, src_kind)?;
+            let src = Self::local_state_kernel_mut::<KS>(
+                state,
+                src.local_id,
+                src.block_id,
+                src.kind,
+            )?;
             let src_port = src_port(src);
             let mut writer = std::mem::take(src_port);
 
             let (edge_result, writer) = dst_handle.exec(move |state| {
-                let edge_result =
-                    Self::local_state_kernel_mut::<KD>(state, dst_local, dst_id, dst_kind)
-                        .map(|dst| Self::connect_stream_ports(&mut writer, dst_port(dst)));
+                let edge_result = Self::local_state_kernel_mut::<KD>(
+                    state,
+                    dst.local_id,
+                    dst.block_id,
+                    dst.kind,
+                )
+                .map(|dst| Self::connect_stream_ports(&mut writer, dst_port(dst)));
                 Ok((edge_result, writer))
             })?;
 
@@ -1361,20 +1387,19 @@ impl Flowgraph {
     fn with_normal_local_blocks_mut<R, F>(
         &mut self,
         normal_id: BlockId,
-        local: (BlockId, usize, usize),
+        local: LocalEndpoint,
         f: F,
     ) -> Result<R, Error>
     where
         F: FnOnce(&mut dyn BlockObject, &mut dyn BlockObject) -> Result<R, Error> + Send + 'static,
         R: Send + 'static,
     {
-        let (local_id, domain_id, local_idx) = local;
         let mut normal = self.blocks[normal_id.0].block.take().ok_or(Error::LockError)?;
-        let (result, restored) = self.local_domains[domain_id]
+        let (result, restored) = self.local_domains[local.domain_id]
             .controller
             .exec(move |state| {
                 let result = (|| {
-                    let local = Self::local_state_block_mut(state, local_idx, local_id)?;
+                    let local = Self::local_state_block_mut(state, local.local_id, local.block_id)?;
                     f(normal.as_mut(), local)
                 })();
                 Ok((result, normal))
@@ -1386,7 +1411,7 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_local_normal_stream<KS, KD, B, FS, FD>(
         &mut self,
-        src: (BlockId, usize, usize, LocalBlockKind),
+        src: LocalEndpoint,
         src_port: FS,
         dst_id: BlockId,
         dst_port: FD,
@@ -1398,9 +1423,8 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        let (src_id, domain_id, local_id, kind) = src;
-        self.with_normal_local_blocks_mut(dst_id, (src_id, domain_id, local_id), move |dst, src| {
-            let src = Self::local_kernel_mut::<KS>(src, src_id, kind)?;
+        self.with_normal_local_blocks_mut(dst_id, src, move |dst, src_block| {
+            let src = Self::local_kernel_mut::<KS>(src_block, src.block_id, src.kind)?;
             let dst = Self::wrapped_kernel_mut::<KD>(dst, dst_id)?;
             Ok(Self::connect_stream_ports(
                 src_port(src),
@@ -1414,7 +1438,7 @@ impl Flowgraph {
         &mut self,
         src_id: BlockId,
         src_port: FS,
-        dst: (BlockId, usize, usize, LocalBlockKind),
+        dst: LocalEndpoint,
         dst_port: FD,
     ) -> Result<StreamEdge, Error>
     where
@@ -1424,10 +1448,9 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        let (dst_id, domain_id, local_id, kind) = dst;
-        self.with_normal_local_blocks_mut(src_id, (dst_id, domain_id, local_id), move |src, dst| {
+        self.with_normal_local_blocks_mut(src_id, dst, move |src, dst_block| {
             let src = Self::wrapped_kernel_mut::<KS>(src, src_id)?;
-            let dst = Self::local_kernel_mut::<KD>(dst, dst_id, kind)?;
+            let dst = Self::local_kernel_mut::<KD>(dst_block, dst.block_id, dst.kind)?;
             Ok(Self::connect_stream_ports(
                 src_port(&mut src.kernel),
                 dst_port(dst),
@@ -1483,34 +1506,32 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_local_local_stream_dyn(
         &self,
-        src: (BlockId, usize, usize),
+        src: LocalEndpoint,
         src_port_id: PortId,
-        dst: (BlockId, usize, usize),
+        dst: LocalEndpoint,
         dst_port_id: PortId,
     ) -> Result<StreamEdge, Error> {
-        let (src_id, src_domain, src_local) = src;
-        let (dst_id, dst_domain, dst_local) = dst;
-        if src_domain != dst_domain {
+        if src.domain_id != dst.domain_id {
             return Err(Error::ValidationError(
                 "stream connections between different local domains are not supported".to_string(),
             ));
         }
         let domain = self
             .local_domains
-            .get(src_domain)
-            .ok_or(Error::InvalidBlock(src_id))?;
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?;
         domain.controller.exec(move |state| {
-            if src_local == dst_local {
+            if src.local_id == dst.local_id {
                 return Err(Error::LockError);
             }
-            let invalid_block = if src_local >= state.blocks.len() {
-                src_id
+            let invalid_block = if src.local_id >= state.blocks.len() {
+                src.block_id
             } else {
-                dst_id
+                dst.block_id
             };
             let [src_slot, dst_slot] = state
                 .blocks
-                .get_disjoint_mut([src_local, dst_local])
+                .get_disjoint_mut([src.local_id, dst.local_id])
                 .map_err(|err| match err {
                     std::slice::GetDisjointMutError::IndexOutOfBounds => {
                         Error::InvalidBlock(invalid_block)
@@ -1520,10 +1541,10 @@ impl Flowgraph {
             let src_block = src_slot.as_mut().ok_or(Error::LockError)?.as_mut();
             let dst_block = dst_slot.as_mut().ok_or(Error::LockError)?.as_mut();
             Self::connect_stream_ports_dyn(
-                src_id,
+                src.block_id,
                 &src_port_id,
                 src_block,
-                dst_id,
+                dst.block_id,
                 &dst_port_id,
                 dst_block,
             )
@@ -1533,18 +1554,17 @@ impl Flowgraph {
     #[cfg(not(target_arch = "wasm32"))]
     fn connect_local_normal_stream_dyn(
         &mut self,
-        src: (BlockId, usize, usize),
+        src: LocalEndpoint,
         src_port_id: PortId,
         dst_id: BlockId,
         dst_port_id: PortId,
     ) -> Result<StreamEdge, Error> {
-        let (src_id, domain_id, local_id) = src;
         self.with_normal_local_blocks_mut(
             dst_id,
-            (src_id, domain_id, local_id),
+            src,
             move |dst_block, src_block| {
                 Self::connect_stream_ports_dyn(
-                    src_id,
+                    src.block_id,
                     &src_port_id,
                     src_block,
                     dst_id,
@@ -1560,19 +1580,18 @@ impl Flowgraph {
         &mut self,
         src_id: BlockId,
         src_port_id: PortId,
-        dst: (BlockId, usize, usize),
+        dst: LocalEndpoint,
         dst_port_id: PortId,
     ) -> Result<StreamEdge, Error> {
-        let (dst_id, domain_id, local_id) = dst;
         self.with_normal_local_blocks_mut(
             src_id,
-            (dst_id, domain_id, local_id),
+            dst,
             move |src_block, dst_block| {
                 Self::connect_stream_ports_dyn(
                     src_id,
                     &src_port_id,
                     src_block,
-                    dst_id,
+                    dst.block_id,
                     &dst_port_id,
                     dst_block,
                 )
@@ -1628,16 +1647,16 @@ impl Flowgraph {
             ) => {
                 if src_domain == dst_domain {
                     self.connect_local_local_stream::<KS, KD, B, FS, FD>(
-                        (src_id, src_domain, src_local, src_kind),
+                        LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
                         src_port,
-                        (dst_id, dst_domain, dst_local, dst_kind),
+                        LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
                         dst_port,
                     )?
                 } else {
                     self.connect_cross_local_stream::<KS, KD, B, FS, FD>(
-                        (src_id, src_domain, src_local, src_kind),
+                        LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
                         src_port,
-                        (dst_id, dst_domain, dst_local, dst_kind),
+                        LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
                         dst_port,
                     )?
                 }
@@ -1651,7 +1670,7 @@ impl Flowgraph {
                 },
                 BlockPlacement::Normal { .. },
             ) => self.connect_local_normal_stream::<KS, KD, B, FS, FD>(
-                (src_id, domain_id, local_id, kind),
+                LocalEndpoint::new(src_id, domain_id, local_id, kind),
                 src_port,
                 dst_id,
                 dst_port,
@@ -1667,7 +1686,7 @@ impl Flowgraph {
             ) => self.connect_normal_local_stream::<KS, KD, B, FS, FD>(
                 src_id,
                 src_port,
-                (dst_id, domain_id, local_id, kind),
+                LocalEndpoint::new(dst_id, domain_id, local_id, kind),
                 dst_port,
             )?,
         };
@@ -1714,9 +1733,9 @@ impl Flowgraph {
                     ..
                 },
             ) => self.connect_local_local_stream::<KS, KD, B, FS, FD>(
-                (src_id, src_domain, src_local, src_kind),
+                LocalEndpoint::new(src_id, src_domain, src_local, src_kind),
                 src_port,
-                (dst_id, dst_domain, dst_local, dst_kind),
+                LocalEndpoint::new(dst_id, dst_domain, dst_local, dst_kind),
                 dst_port,
             )?,
             _ => {
@@ -1886,11 +1905,11 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
-                    ..
+                    kind,
                 },
                 BlockPlacement::Normal { .. },
             ) => self.connect_local_normal_stream_dyn(
-                (src_block_id, domain_id, local_id),
+                LocalEndpoint::new(src_block_id, domain_id, local_id, kind),
                 src_port_id,
                 dst_block_id,
                 dst_port_id,
@@ -1901,12 +1920,12 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
-                    ..
+                    kind,
                 },
             ) => self.connect_normal_local_stream_dyn(
                 src_block_id,
                 src_port_id,
-                (dst_block_id, domain_id, local_id),
+                LocalEndpoint::new(dst_block_id, domain_id, local_id, kind),
                 dst_port_id,
             )?,
         };
@@ -1938,17 +1957,17 @@ impl Flowgraph {
                 BlockPlacement::Local {
                     domain_id: src_domain,
                     local_id: src_local,
-                    ..
+                    kind: src_kind,
                 },
                 BlockPlacement::Local {
                     domain_id: dst_domain,
                     local_id: dst_local,
-                    ..
+                    kind: dst_kind,
                 },
             ) => self.connect_local_local_stream_dyn(
-                (src_block_id, src_domain, src_local),
+                LocalEndpoint::new(src_block_id, src_domain, src_local, src_kind),
                 src_port_id,
-                (dst_block_id, dst_domain, dst_local),
+                LocalEndpoint::new(dst_block_id, dst_domain, dst_local, dst_kind),
                 dst_port_id,
             )?,
             _ => {
