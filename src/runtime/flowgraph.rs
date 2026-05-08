@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -269,6 +271,7 @@ pub(crate) struct BlockEntry {
 }
 
 impl BlockEntry {
+    #[cfg(not(target_arch = "wasm32"))]
     fn empty(placement: BlockPlacement) -> Self {
         Self {
             block: None,
@@ -1686,6 +1689,12 @@ impl Flowgraph {
             StreamPlan::LocalLocalSame { src, dst } => {
                 self.connect_local_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
             }
+            StreamPlan::LocalLocalCross { .. } => {
+                return Err(Error::ValidationError(
+                    "stream connections between different local domains are not supported"
+                        .to_string(),
+                ));
+            }
             _ => {
                 return Err(Error::ValidationError(
                     "local stream connections require source and destination blocks in the same local domain"
@@ -1833,6 +1842,7 @@ impl Flowgraph {
         let dst_block_id = dst_block_id.into();
         let dst_port_id = dst_port_id.into();
 
+        #[cfg(not(target_arch = "wasm32"))]
         let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
             StreamPlan::NormalNormal { src, dst } => {
                 self.connect_normal_normal_stream_dyn(src, &src_port_id, dst, &dst_port_id)?
@@ -1850,6 +1860,13 @@ impl Flowgraph {
                 self.connect_normal_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
             }
         };
+        #[cfg(target_arch = "wasm32")]
+        let edge = self.connect_normal_normal_stream_dyn(
+            src_block_id,
+            &src_port_id,
+            dst_block_id,
+            &dst_port_id,
+        )?;
 
         self.stream_edges.push(edge);
         Ok(())
@@ -1876,6 +1893,12 @@ impl Flowgraph {
         let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
             StreamPlan::LocalLocalSame { src, dst } => {
                 self.connect_local_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
+            }
+            StreamPlan::LocalLocalCross { .. } => {
+                return Err(Error::ValidationError(
+                    "stream connections between different local domains are not supported"
+                        .to_string(),
+                ));
             }
             _ => {
                 return Err(Error::ValidationError(
