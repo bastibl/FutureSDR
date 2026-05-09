@@ -1,3 +1,4 @@
+use crate::runtime;
 use crate::runtime::channel::mpsc::Sender;
 use futures::channel::oneshot;
 use std::cmp::PartialEq;
@@ -79,7 +80,7 @@ impl FlowgraphHandle {
             })
             .await
             .or(Err(Error::InvalidBlock(block_id)))?;
-        rx.await?
+        runtime::await_oneshot(rx).await?
     }
 
     /// Call a handler and return its result.
@@ -103,7 +104,7 @@ impl FlowgraphHandle {
             })
             .await
             .map_err(|_| Error::InvalidBlock(block_id))?;
-        rx.await?
+        runtime::await_oneshot(rx).await?
     }
 
     /// Describe the running flowgraph.
@@ -117,7 +118,9 @@ impl FlowgraphHandle {
             .send(FlowgraphMessage::FlowgraphDescription { tx })
             .await
             .or(Err(Error::FlowgraphTerminated))?;
-        let d = rx.await.or(Err(Error::FlowgraphTerminated))?;
+        let d = runtime::await_oneshot(rx)
+            .await
+            .or(Err(Error::FlowgraphTerminated))?;
         Ok(d)
     }
 
@@ -132,7 +135,9 @@ impl FlowgraphHandle {
             .send(FlowgraphMessage::BlockDescription { block_id, tx })
             .await
             .map_err(|_| Error::InvalidBlock(block_id))?;
-        let d = rx.await.map_err(|_| Error::InvalidBlock(block_id))??;
+        let d = runtime::await_oneshot(rx)
+            .await
+            .map_err(|_| Error::InvalidBlock(block_id))??;
         Ok(d)
     }
 

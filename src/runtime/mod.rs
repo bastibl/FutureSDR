@@ -47,6 +47,10 @@ mod flowgraph_handle;
 mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
+#[cfg(not(target_arch = "wasm32"))]
+mod local_domain;
+#[cfg(target_arch = "wasm32")]
+#[path = "local_domain_wasm.rs"]
 mod local_domain;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
@@ -106,6 +110,59 @@ pub mod __private {
 /// application-level fallible operations, since user block implementations often
 /// need to return errors from arbitrary libraries.
 pub type Result<T, E = anyhow::Error> = anyhow::Result<T, E>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn await_oneshot<T>(
+    rx: futures::channel::oneshot::Receiver<T>,
+) -> std::result::Result<T, futures::channel::oneshot::Canceled> {
+    rx.await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn await_oneshot<T>(
+    rx: futures::channel::oneshot::Receiver<T>,
+) -> std::result::Result<T, futures::channel::oneshot::Canceled> {
+    use futures::FutureExt;
+
+    let mut rx = Box::pin(rx);
+    loop {
+        if let Some(result) = rx.as_mut().now_or_never() {
+            return result;
+        }
+        yield_now().await;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn yield_now() {
+    wasm_yield_now().await;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_yield_now() -> WasmYieldNow {
+    WasmYieldNow(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WasmYieldNow(bool);
+
+#[cfg(target_arch = "wasm32")]
+impl std::future::Future for WasmYieldNow {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if !self.0 {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    }
+}
 
 /// Initialize global runtime services.
 ///

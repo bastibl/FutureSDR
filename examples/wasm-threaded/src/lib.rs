@@ -8,21 +8,64 @@ pub fn start_app() {
 mod app {
     use any_spawner::Executor;
     use futuresdr::blocks::Apply;
-    use futuresdr::blocks::MessagePipe;
     use futuresdr::blocks::NullSink;
     use futuresdr::blocks::wasm::HackRf;
     use futuresdr::prelude::*;
+    use futuresdr::runtime::dev::BlockMeta;
+    use futuresdr::runtime::dev::MessageOutputs;
+    use futuresdr::runtime::dev::WorkIo;
+    use futuresdr::runtime::macros::Block;
     use futuresdr::runtime::scheduler::WasmScheduler;
     use gloo_timers::future::TimeoutFuture;
     use leptos::prelude::*;
     use leptos::task::spawn_local;
     use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::Mutex;
     use wasm_bindgen_futures::JsFuture;
     use zigbee::ClockRecoveryMm;
     use zigbee::Decoder;
     use zigbee::Mac;
 
     const WORKER_SCRIPT: &str = "./futuresdr-wasm-scheduler-worker.js";
+    const FRAME_QUEUE_LIMIT: usize = 100;
+
+    type FrameQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
+
+    #[derive(Block)]
+    #[message_inputs(r#in)]
+    #[null_kernel]
+    struct FramePipe {
+        queue: FrameQueue,
+    }
+
+    impl FramePipe {
+        fn new(queue: FrameQueue) -> Self {
+            Self { queue }
+        }
+
+        async fn r#in(
+            &mut self,
+            _io: &mut WorkIo,
+            _mo: &mut MessageOutputs,
+            _meta: &mut BlockMeta,
+            p: Pmt,
+        ) -> Result<Pmt> {
+            if let Pmt::Blob(data) = p {
+                let mut queue = self
+                    .queue
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("frame queue lock poisoned"))?;
+                queue.push_back(data);
+                while queue.len() > FRAME_QUEUE_LIMIT {
+                    queue.pop_front();
+                }
+                Ok(Pmt::Ok)
+            } else {
+                Ok(Pmt::InvalidValue)
+            }
+        }
+    }
 
     pub fn main() {
         console_error_panic_hook::set_once();
@@ -55,7 +98,7 @@ mod app {
             <main style="font-family: sans-serif; max-width: 900px; margin: 2rem auto;">
                 <h1>"FutureSDR threaded WASM ZigBee RX"</h1>
                 <p>"HackRF runs in a local-domain worker; DSP/MAC blocks are scheduled on two web workers."</p>
-                <button on:click=start disabled=move || running()>
+                <button on:click=start disabled=running>
                     {move || if running() { "running" } else { "start" }}
                 </button>
                 <p><b>"status: "</b>{move || status()}</p>
@@ -74,71 +117,82 @@ mod app {
         request_hackrf().await?;
         set_status.set("starting flowgraph".to_string());
 
-        let mut fg = Flowgraph::new();
+        let frame_queue = FrameQueue::default();
+        let frame_queue_writer = frame_queue.clone();
+        let rt = Runtime::with_scheduler(WasmScheduler::with_worker_script(2, WORKER_SCRIPT));
+        let handle = rt.handle();
 
+        // Create the local-domain worker from the browser thread. The remaining
+        // flowgraph construction runs on a scheduler worker, where synchronous
+        // local-domain port wiring can use Atomics.wait without freezing the UI.
+        let mut fg = Flowgraph::new();
         let local = fg.local_domain();
         let src = fg.add_local(local, HackRf::new);
-        let source = src.id();
 
-        let mut last = Complex32::new(0.0, 0.0);
-        let mut iir = 0.0f32;
-        let alpha = 0.00016;
-        let avg = Apply::new(move |i: &Complex32| -> f32 {
-            let phase = (last.conj() * i).arg();
-            last = *i;
-            iir = (1.0 - alpha) * iir + alpha * phase;
-            phase - iir
+        let start = rt.spawn(async move {
+            let result = async move {
+                let mut last = Complex32::new(0.0, 0.0);
+                let mut iir = 0.0f32;
+                let alpha = 0.00016;
+                let avg = Apply::new(move |i: &Complex32| -> f32 {
+                    let phase = (last.conj() * i).arg();
+                    last = *i;
+                    iir = (1.0 - alpha) * iir + alpha * phase;
+                    phase - iir
+                });
+
+                let mm: ClockRecoveryMm = ClockRecoveryMm::new(2.0, 0.000225, 0.5, 0.03, 0.0002);
+                let decoder: Decoder = Decoder::new(6);
+                let mac: Mac = Mac::new();
+                let snk = NullSink::<u8>::new();
+                let frame_pipe = FramePipe::new(frame_queue_writer);
+
+                connect!(fg,
+                    src > avg > mm > decoder;
+                    mac > snk;
+                    decoder | rx.mac;
+                    mac.rxed | frame_pipe
+                );
+
+                let running = handle.start(fg).await?;
+                let (task, _flowgraph) = running.split();
+                task.await?;
+                Ok::<_, futuresdr::runtime::Error>(())
+            }
+            .await;
+
+            if let Err(e) = result {
+                futuresdr::tracing::error!("wasm-threaded flowgraph failed: {:?}", e);
+            }
         });
-
-        let mm: ClockRecoveryMm = ClockRecoveryMm::new(2.0, 0.000225, 0.5, 0.03, 0.0002);
-        let decoder: Decoder = Decoder::new(6);
-        let mac: Mac = Mac::new();
-        let snk = NullSink::<u8>::new();
-
-        let (tx_frame, rx_frame) = mpsc::channel::<Pmt>(100);
-        let message_pipe = MessagePipe::new(tx_frame);
-
-        connect!(fg,
-            src > avg > mm > decoder;
-            mac > snk;
-            decoder | rx.mac;
-            mac.rxed | message_pipe
-        );
-
-        let rt = Runtime::with_scheduler(WasmScheduler::with_worker_script(2, WORKER_SCRIPT));
-        let running = rt.start_async(fg).await?;
-        let (task, flowgraph) = running.split();
-
-        flowgraph
-            .post(source, "freq", Pmt::U64(2_480_000_000))
-            .await?;
+        start.detach();
         set_status.set("running".to_string());
 
-        spawn_local(async move {
-            if let Err(e) = task.await {
-                futuresdr::tracing::info!("flowgraph terminated with error: {:?}", e);
-            }
-        });
-
         loop {
-            match rx_frame.try_recv() {
-                Ok(Pmt::Blob(data)) => {
-                    set_frames.update(|frames| {
-                        frames.push_front(Frame::new(data));
-                        if frames.len() > 20 {
-                            frames.pop_back();
-                        }
-                    });
+            let mut pending = Vec::new();
+            {
+                let mut queue = frame_queue
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("frame queue lock poisoned"))?;
+                while let Some(data) = queue.pop_front() {
+                    pending.push(data);
                 }
-                Ok(other) => {
-                    futuresdr::tracing::info!("unexpected frame message: {:?}", other);
-                }
-                Err(mpsc::TryRecvError::Empty) => TimeoutFuture::new(1).await,
-                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+
+            if pending.is_empty() {
+                TimeoutFuture::new(10).await;
+                continue;
+            }
+
+            for data in pending {
+                set_frames.update(|frames| {
+                    frames.push_front(Frame::new(data));
+                    if frames.len() > 20 {
+                        frames.pop_back();
+                    }
+                });
             }
         }
-
-        Ok(())
     }
 
     async fn request_hackrf() -> anyhow::Result<()> {

@@ -84,6 +84,7 @@ impl WasmWorker {
 /// [`WasmScheduler::with_worker_script`].
 #[wasm_bindgen]
 pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: usize) {
+    crate::runtime::init();
     let executor = WASM_EXECUTORS.lock().unwrap().get(executor_id).cloned();
     if let Some(executor) = executor {
         wasm_bindgen_futures::spawn_local(async move {
@@ -155,7 +156,7 @@ impl WasmScheduler {
     pub fn with_worker_script(n_threads: usize, worker_script: &str) -> WasmScheduler {
         let n_threads = n_threads.max(1);
 
-        info!("WASM scheduler starting {n_threads} web workers with script {worker_script}");
+        debug!("WASM scheduler starting {n_threads} web workers with script {worker_script}");
         reset_wasm_thread_metadata();
 
         let executor = Arc::new(WasmExecutor::new(n_threads));
@@ -177,7 +178,7 @@ impl WasmScheduler {
             return WasmScheduler::single_threaded();
         }
 
-        info!("WASM scheduler started {} web workers", workers.len());
+        debug!("WASM scheduler started {} web workers", workers.len());
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
                 executor_id: Some(executor_id),

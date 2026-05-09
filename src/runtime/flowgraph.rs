@@ -474,22 +474,16 @@ impl Flowgraph {
     where
         K: SendKernel + SendKernelInterface + 'static,
     {
-        let block_id = BlockId(self.blocks.len());
-        let mut b = WrappedKernel::new(block, block_id);
-        let block_name = <K as KernelInterface>::type_name();
-        b.meta
-            .set_instance_name(format!("{}-{}", block_name, block_id.0));
         if <K as KernelInterface>::is_blocking() {
             let domain_id = self.local_domains.len();
             self.local_domains.push(LocalDomainRuntime::new());
-            self.add_local_block_builder(
-                domain_id,
-                LocalBlockKind::Kernel,
-                <K as KernelInterface>::message_inputs(),
-                move |_| Box::new(move || Box::new(b)),
-                "failed to insert blocking block into local domain",
-            )
+            self.add_kernel_to_domain(domain_id, move || block)
         } else {
+            let block_id = BlockId(self.blocks.len());
+            let mut b = WrappedKernel::new(block, block_id);
+            let block_name = <K as KernelInterface>::type_name();
+            b.meta
+                .set_instance_name(format!("{}-{}", block_name, block_id.0));
             let inbox = b.inbox();
             self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
         }
@@ -611,8 +605,8 @@ impl Flowgraph {
             LocalBlockKind::Kernel,
             <K as KernelInterface>::message_inputs(),
             move |block_id| {
-                Box::new(move || {
-                    let mut b = WrappedKernel::new(block(), block_id);
+                Box::new(move |inbox, inbox_rx| {
+                    let mut b = WrappedKernel::new_with_inbox(block(), block_id, inbox, inbox_rx);
                     let block_name = <K as KernelInterface>::type_name();
                     b.meta
                         .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -636,8 +630,9 @@ impl Flowgraph {
             LocalBlockKind::LocalKernel,
             <K as LocalKernelInterface>::message_inputs(),
             move |block_id| {
-                Box::new(move || {
-                    let mut b = WrappedLocalKernel::new(block(), block_id);
+                Box::new(move |inbox, inbox_rx| {
+                    let mut b =
+                        WrappedLocalKernel::new_with_inbox(block(), block_id, inbox, inbox_rx);
                     let block_name = <K as LocalKernelInterface>::type_name();
                     b.meta
                         .set_instance_name(format!("{}-{}", block_name, block_id.0));

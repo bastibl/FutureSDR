@@ -276,11 +276,25 @@ impl<S: Scheduler> RuntimeHandle<S> {
     }
 
     /// Add a [`FlowgraphHandle`] to make it available to web handlers.
+    #[cfg(not(target_arch = "wasm32"))]
     async fn add_flowgraph(&self, handle: FlowgraphHandle) -> FlowgraphId {
         let mut v = self.flowgraphs.lock().await;
         let l = v.len();
         v.push(handle);
         FlowgraphId(l)
+    }
+
+    /// Add a [`FlowgraphHandle`] to make it available to web handlers.
+    #[cfg(target_arch = "wasm32")]
+    async fn add_flowgraph(&self, handle: FlowgraphHandle) -> FlowgraphId {
+        loop {
+            if let Some(mut v) = self.flowgraphs.try_lock() {
+                let l = v.len();
+                v.push(handle);
+                return FlowgraphId(l);
+            }
+            runtime::yield_now().await;
+        }
     }
 
     /// Get the control handle for a flowgraph by runtime registry id.
@@ -314,7 +328,8 @@ async fn start_flowgraph<S: Scheduler>(
     let (tx, rx) = oneshot::channel::<Result<(), Error>>();
     let task = spawn_run_flowgraph(scheduler, fg, fg_inbox.clone(), fg_inbox_rx, tx);
 
-    rx.await
+    runtime::await_oneshot(rx)
+        .await
         .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
 
     let handle = FlowgraphHandle::new(fg_inbox);
@@ -508,7 +523,7 @@ async fn run_flowgraph_loop(
                         .await
                         .is_ok()
                     {
-                        match block_rx.await? {
+                        match runtime::await_oneshot(block_rx).await? {
                             Ok(p) => tx.send(Ok(p)).ok(),
                             Err(e) => tx.send(Err(Error::HandlerError(e.to_string()))).ok(),
                         };
@@ -534,7 +549,7 @@ async fn run_flowgraph_loop(
                         .await
                         .is_ok()
                     {
-                        if let Ok(b) = rx.await {
+                        if let Ok(b) = runtime::await_oneshot(rx).await {
                             let _ = tx.send(Ok(b));
                         } else {
                             let _ = tx.send(Err(Error::RuntimeError(format!(
@@ -558,7 +573,7 @@ async fn run_flowgraph_loop(
                             .await
                             .is_ok()
                     {
-                        blocks.push(rx.await?);
+                        blocks.push(runtime::await_oneshot(rx).await?);
                     }
                 }
 

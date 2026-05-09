@@ -1,3 +1,4 @@
+use futures::FutureExt;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::WorkerGlobalScope;
@@ -5,6 +6,21 @@ use web_sys::WorkerGlobalScope;
 use crate::runtime::dev::prelude::*;
 
 const TRANSFER_SIZE: usize = 262144;
+const USB_INIT_TIMEOUT_MS: u32 = 10_000;
+
+async fn wait_usb<T>(future: JsFuture<T>, operation: &str) -> Result<T, Error> {
+    let future = future.fuse();
+    let timeout = gloo_timers::future::TimeoutFuture::new(USB_INIT_TIMEOUT_MS).fuse();
+    futures::pin_mut!(future);
+    futures::pin_mut!(timeout);
+
+    match futures::future::select(future, timeout).await {
+        futures::future::Either::Left((result, _)) => result.map_err(Error::from),
+        futures::future::Either::Right((_, _)) => Err(Error::BrowserError(format!(
+            "{operation} timed out after {USB_INIT_TIMEOUT_MS} ms"
+        ))),
+    }
+}
 
 #[allow(dead_code)]
 #[repr(u8)]
@@ -260,10 +276,8 @@ impl HackRf {
             .unwrap()
             .control_transfer_in(&parameter, N as u16);
 
-        let data = JsFuture::from(transfer)
+        let data = wait_usb(JsFuture::from(transfer), "USB control transfer in")
             .await?
-            .dyn_into::<web_sys::UsbInTransferResult>()
-            .unwrap()
             .data()
             .unwrap()
             .dyn_into::<js_sys::DataView>()
@@ -304,10 +318,7 @@ impl HackRf {
             .control_transfer_out_with_u8_array(&parameter, &data)
             .unwrap();
 
-        let _ = JsFuture::from(transfer)
-            .await?
-            .dyn_into::<web_sys::UsbOutTransferResult>()
-            .unwrap();
+        let _ = wait_usb(JsFuture::from(transfer), "USB control transfer out").await?;
 
         Ok(())
     }
@@ -511,27 +522,38 @@ impl LocalKernel for HackRf {
         let filters = [filter];
         let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
 
-        let devices: js_sys::Array<web_sys::UsbDevice> = JsFuture::from(usb.get_devices())
-            .await
-            .map_err(Error::from)?;
-        // Open radio if one is already paired and plugged
-        // Otherwise ask the user to pair a new radio
+        let devices: js_sys::Array<web_sys::UsbDevice> =
+            wait_usb(JsFuture::from(usb.get_devices()), "USB get devices").await?;
+        // Open radio if one is already paired and plugged. Only the browser
+        // thread can reliably show a device chooser, so worker-side blocks rely
+        // on the application requesting permission before the flowgraph starts.
         let device: web_sys::UsbDevice = if devices.length() > 0 {
             devices.get_unchecked(0)
+        } else if web_sys::window().is_some() {
+            wait_usb(
+                JsFuture::from(usb.request_device(&filter)),
+                "USB request device",
+            )
+            .await?
         } else {
-            JsFuture::from(usb.request_device(&filter))
-                .await
-                .map_err(Error::from)?
+            return Err(Error::BrowserError(
+                "no paired HackRF found in worker; request USB permission on the browser thread first"
+                    .to_string(),
+            )
+            .into());
         };
 
-        JsFuture::from(device.open()).await.map_err(Error::from)?;
-        JsFuture::from(device.select_configuration(1))
-            .await
-            .map_err(Error::from)?;
-
-        JsFuture::from(device.claim_interface(0))
-            .await
-            .map_err(Error::from)?;
+        wait_usb(JsFuture::from(device.open()), "USB open device").await?;
+        wait_usb(
+            JsFuture::from(device.select_configuration(1)),
+            "USB select configuration",
+        )
+        .await?;
+        wait_usb(
+            JsFuture::from(device.claim_interface(0)),
+            "USB claim interface",
+        )
+        .await?;
 
         self.device = Some(device);
         self.set_sample_rate(8_000_000, 2).await.unwrap();
