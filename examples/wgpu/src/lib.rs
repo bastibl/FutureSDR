@@ -58,7 +58,9 @@ fn build_flowgraph(
     instance: wgpu::Instance,
 ) -> Result<BlockRef<VectorSink<f32, D2HReader<f32>>>> {
     let local = fg.local_domain();
-    let src = fg.add_local(local, move || VectorSource::<f32, H2DWriter<f32>>::new(orig));
+    let src = fg.add_local(local, move || {
+        VectorSource::<f32, H2DWriter<f32>>::new(orig)
+    });
     let mul = fg.add_local(local, move || Wgpu::new(instance, 4096, 4, 4));
     let snk = fg.add_local(local, || VectorSink::<f32, D2HReader<f32>>::new(1024));
 
