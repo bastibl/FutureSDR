@@ -47,7 +47,6 @@ mod flowgraph_handle;
 mod flowgraph_task;
 mod kernel;
 mod kernel_interface;
-#[cfg(not(target_arch = "wasm32"))]
 mod local_domain;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
@@ -72,7 +71,6 @@ pub mod macros {
 
 pub use flowgraph::BlockRef;
 pub use flowgraph::Flowgraph;
-#[cfg(not(target_arch = "wasm32"))]
 pub use flowgraph::LocalDomain;
 pub use flowgraph_handle::FlowgraphBlockHandle;
 pub use flowgraph_handle::FlowgraphHandle;

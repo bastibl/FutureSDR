@@ -120,9 +120,9 @@ pub trait Kernel {
 ///
 /// `LocalKernel` mirrors [`Kernel`] but receives [`LocalWorkIo`], allowing a
 /// block to wait on non-`Send` futures. Such blocks are accepted only by local
-/// flowgraph entry points. On native targets they run inside a
-/// [`LocalDomain`](crate::runtime::LocalDomain); on WASM all blocks are local to
-/// the browser executor.
+/// flowgraph entry points. They run inside a
+/// [`LocalDomain`](crate::runtime::LocalDomain), which is backed by a dedicated
+/// thread on native targets and by a web worker on WASM.
 pub trait LocalKernel {
     /// Process stream data and emit messages.
     fn work(

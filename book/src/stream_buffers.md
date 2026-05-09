@@ -2,7 +2,7 @@
 
 Stream buffers move samples between connected stream ports. A source block writes into the writer side of a buffer, and the downstream block reads from the reader side.
 
-FutureSDR can be extended with arbitrary buffer implementations. At the lowest level, every buffer provides a writer and reader pair implementing `BufferWriter` and `BufferReader`. On native targets, the `SendBufferWriter` and `SendBufferReader` marker traits are implemented automatically when the buffer type and its notification futures are send-capable.
+FutureSDR can be extended with arbitrary buffer implementations. At the lowest level, every buffer provides a writer and reader pair implementing `BufferWriter` and `BufferReader`. The `SendBufferWriter` and `SendBufferReader` marker traits are implemented automatically when the buffer type and its notification futures are send-capable.
 
 Buffer implementations can expose their own higher-level API. A CPU buffer exposes slices. A GPU buffer can expose GPU resources. A DMA buffer can expose hardware-owned memory. FutureSDR therefore provides specialized traits for the common buffer families instead of forcing every buffer into one sample-slice API.
 

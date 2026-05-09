@@ -146,7 +146,7 @@ impl LocalKernel for UiBoundBlock {
 }
 ```
 
-On native targets, add local blocks to a `LocalDomain` with `Flowgraph::add_local()`. On WASM, all execution is local to the browser executor.
+Add local blocks to a `LocalDomain` with `Flowgraph::add_local()`. On native targets a local domain is backed by a dedicated thread; on WASM it is backed by a dedicated web worker.
 
 ## Testing
 

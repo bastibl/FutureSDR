@@ -448,11 +448,12 @@ async fn run(
 ) -> Result<()> {
     let mut fg = Flowgraph::new();
 
-    let src = fg.add_local(HackRf::new());
+    let local = fg.local_domain();
+    let src = fg.add_local(local, HackRf::new);
     let fft = Fft::with_options(FFT_SIZE, FftDirection::Forward, true, None);
     let mag_sqr = Apply::new(|x: &Complex32| x.norm_sqr());
     let keep = MovingAvg::<FFT_SIZE>::new(0.1, 3);
-    let snk = fg.add_local(Sink::new(set_time_data, set_waterfall_data));
+    let snk = fg.add_local(local, move || Sink::new(set_time_data, set_waterfall_data));
 
     connect!(fg, src > fft > mag_sqr > keep > snk);
 

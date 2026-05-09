@@ -1316,15 +1316,6 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
         impl #add_local_impl_generics ::futuresdr::runtime::__private::AddLocal for #struct_name #unconstraint_generics
             #add_local_where_clause
         {
-            #[cfg(target_arch = "wasm32")]
-            fn add_local(
-                self,
-                fg: &mut ::futuresdr::runtime::Flowgraph,
-            ) -> ::futuresdr::runtime::BlockRef<Self> {
-                fg.#add_local_method(self)
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
             fn add_local(
                 block: impl FnOnce() -> Self + Send + 'static,
                 fg: &mut ::futuresdr::runtime::Flowgraph,

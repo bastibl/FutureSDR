@@ -54,7 +54,7 @@ mod app {
         view! {
             <main style="font-family: sans-serif; max-width: 900px; margin: 2rem auto;">
                 <h1>"FutureSDR threaded WASM ZigBee RX"</h1>
-                <p>"HackRF runs locally; DSP/MAC blocks are scheduled on two web workers."</p>
+                <p>"HackRF runs in a local-domain worker; DSP/MAC blocks are scheduled on two web workers."</p>
                 <button on:click=start disabled=move || running()>
                     {move || if running() { "running" } else { "start" }}
                 </button>
@@ -76,7 +76,8 @@ mod app {
 
         let mut fg = Flowgraph::new();
 
-        let src = fg.add_local(HackRf::new());
+        let local = fg.local_domain();
+        let src = fg.add_local(local, HackRf::new);
         let source = src.id();
 
         let mut last = Complex32::new(0.0, 0.0);

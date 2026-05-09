@@ -3,8 +3,6 @@ use async_lock::Mutex;
 use axum::Router;
 use futures::channel::oneshot;
 use futures::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use gloo_timers::future::TimeoutFuture;
 use std::fmt;
 use std::sync::Arc;
 
@@ -99,8 +97,7 @@ impl<S> Drop for Runtime<S> {
 impl Runtime<DefaultScheduler> {
     /// Construct a runtime using the WASM scheduler.
     ///
-    /// WASM runtimes run on the browser executor and do not start a native
-    /// control-port server.
+    /// WASM runtimes do not start a native control-port server.
     pub fn new() -> Self {
         Self::with_scheduler(DefaultScheduler::default())
     }
@@ -324,7 +321,6 @@ async fn start_flowgraph<S: Scheduler>(
     Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn spawn_run_flowgraph<S: Scheduler>(
     scheduler: S,
     fg: Flowgraph,
@@ -342,24 +338,6 @@ fn spawn_run_flowgraph<S: Scheduler>(
     ))
 }
 
-#[cfg(target_arch = "wasm32")]
-fn spawn_run_flowgraph<S: Scheduler>(
-    scheduler: S,
-    fg: Flowgraph,
-    fg_inbox: Sender<FlowgraphMessage>,
-    fg_inbox_rx: Receiver<FlowgraphMessage>,
-    initialized: oneshot::Sender<Result<(), Error>>,
-) -> Task<Result<Flowgraph, Error>> {
-    Task::spawn_local(run_flowgraph(
-        fg,
-        scheduler,
-        fg_inbox,
-        fg_inbox_rx,
-        initialized,
-    ))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn run_flowgraph<S: Scheduler>(
     mut fg: Flowgraph,
     scheduler: S,
@@ -407,76 +385,8 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     Ok(fg)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) async fn run_flowgraph<S: Scheduler>(
-    mut fg: Flowgraph,
-    scheduler: S,
-    main_channel: Sender<FlowgraphMessage>,
-    main_rx: Receiver<FlowgraphMessage>,
-    initialized: oneshot::Sender<Result<(), Error>>,
-) -> Result<Flowgraph, Error> {
-    debug!("in run_flowgraph");
-
-    let (mut inboxes, ids) = fg.inboxes()?;
-    let stream_edges_desc = fg.stream_edge_endpoints();
-    let message_edges_desc = fg.message_edges.clone();
-    let normal_blocks = fg.take_normal_blocks()?;
-    let block_tasks = scheduler.run_domain(normal_blocks, &main_channel);
-    let local_tasks = fg.spawn_wasm_local_blocks(main_channel.clone())?;
-
-    let run_result = run_flowgraph_loop(
-        &mut inboxes,
-        &ids,
-        stream_edges_desc,
-        message_edges_desc,
-        main_channel,
-        main_rx,
-        initialized,
-    )
-    .await;
-
-    if run_result.is_err() {
-        for inbox in inboxes.iter_mut().flatten() {
-            if inbox.send(BlockMessage::Terminate).await.is_err() {
-                debug!("runtime tried to terminate block during shutdown cleanup");
-            }
-        }
-    }
-
-    let mut finished_blocks = Vec::with_capacity(block_tasks.len());
-    for task in block_tasks {
-        finished_blocks.push(task.await);
-    }
-    fg.restore_normal_blocks(finished_blocks)?;
-
-    let mut finished_local_blocks = Vec::with_capacity(local_tasks.len());
-    for task in local_tasks {
-        finished_local_blocks.push(task.await);
-    }
-    fg.restore_local_blocks(finished_local_blocks)?;
-
-    run_result?;
-    Ok(fg)
-}
-
 async fn recv_flowgraph_message(rx: &Receiver<FlowgraphMessage>) -> Option<FlowgraphMessage> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        rx.recv().await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => return Some(msg),
-                Err(crate::runtime::channel::mpsc::TryRecvError::Empty) => {
-                    TimeoutFuture::new(1).await;
-                }
-                Err(crate::runtime::channel::mpsc::TryRecvError::Disconnected) => return None,
-            }
-        }
-    }
+    rx.recv().await
 }
 
 async fn run_flowgraph_loop(

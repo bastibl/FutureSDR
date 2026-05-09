@@ -32,12 +32,19 @@ use crate::runtime::scheduler::Scheduler;
 
 static WASM_EXECUTORS: once_cell::sync::Lazy<Mutex<Slab<Arc<WasmExecutor>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(Slab::new()));
+static WASM_THREAD_METADATA_RESET: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" {
     static __heap_base: u8;
 }
 
-fn reset_wasm_thread_metadata() {
+pub(crate) const DEFAULT_WORKER_SCRIPT: &str = "./futuresdr-wasm-scheduler-worker.js";
+
+pub(crate) fn reset_wasm_thread_metadata() {
+    if WASM_THREAD_METADATA_RESET.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
     let base = core::ptr::addr_of!(__heap_base) as usize;
     if base < 4 {
         return;
@@ -92,10 +99,9 @@ pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: u
 
 /// WASM scheduler.
 ///
-/// The default scheduler remains single-threaded and uses the browser-local
-/// executor. Use [`WasmScheduler::new`] with a thread count greater than one to
-/// start a small pool of worker threads. On wasm these threads are backed by
-/// web workers when the application is built with wasm thread support.
+/// The default scheduler starts one web worker. Use [`WasmScheduler::new`] with
+/// a larger thread count to start a worker pool. On wasm these threads are
+/// backed by web workers when the application is built with wasm thread support.
 #[derive(Clone, Debug)]
 pub struct WasmScheduler {
     inner: Arc<WasmSchedulerInner>,
@@ -134,15 +140,11 @@ impl Drop for WasmSchedulerInner {
 impl WasmScheduler {
     /// Create a scheduler with `n_threads` worker threads.
     ///
-    /// `n_threads <= 1` preserves the old single-threaded behaviour and runs
-    /// tasks with `wasm_bindgen_futures::spawn_local`. Larger values start a
-    /// web-worker pool and route send-capable tasks to it.
-    ///
-    /// Multi-threaded mode expects an application-provided worker script at
-    /// `./futuresdr-wasm-scheduler-worker.js`. Use
+    /// A thread count of zero is treated as one. The scheduler expects an
+    /// application-provided worker script at `./futuresdr-wasm-scheduler-worker.js`. Use
     /// [`WasmScheduler::with_worker_script`] to override the path.
     pub fn new(n_threads: usize) -> WasmScheduler {
-        Self::with_worker_script(n_threads, "./futuresdr-wasm-scheduler-worker.js")
+        Self::with_worker_script(n_threads, DEFAULT_WORKER_SCRIPT)
     }
 
     /// Create a scheduler with `n_threads` web workers using `worker_script`.
@@ -151,9 +153,7 @@ impl WasmScheduler {
     /// [`futuresdr_wasm_scheduler_worker_entry`] with the `executor_id` and
     /// `worker_index` values from the init message.
     pub fn with_worker_script(n_threads: usize, worker_script: &str) -> WasmScheduler {
-        if n_threads <= 1 {
-            return WasmScheduler::single_threaded();
-        }
+        let n_threads = n_threads.max(1);
 
         info!("WASM scheduler starting {n_threads} web workers with script {worker_script}");
         reset_wasm_thread_metadata();
@@ -188,6 +188,9 @@ impl WasmScheduler {
     }
 
     /// Create a single-threaded scheduler that runs tasks on the local browser executor.
+    ///
+    /// This is mainly a fallback/testing mode. `WasmScheduler::new(1)`
+    /// creates one web worker.
     pub fn single_threaded() -> WasmScheduler {
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
@@ -246,7 +249,7 @@ impl Scheduler for WasmScheduler {
 
 impl Default for WasmScheduler {
     fn default() -> Self {
-        Self::single_threaded()
+        Self::new(1)
     }
 }
 

@@ -104,7 +104,7 @@ Use `connect!` for normal application code. The explicit form is useful when blo
 
 ## Local Domains
 
-On native targets, normal blocks and buffers must be send-capable because the scheduler may move block tasks between worker threads. A local domain gives you a single-thread execution island for blocks or buffers that are not `Send`, or for integrations that must stay on one thread.
+Normal blocks and buffers must be send-capable because the scheduler may move block tasks between workers. A local domain gives you a single-thread execution island for blocks or buffers that are not `Send`, or for integrations that must stay on one thread. On WASM, local domains are backed by web workers.
 
 Create a local domain, add blocks with `add_local()`, and connect local-only stream buffers with `~>` in `connect!` or `stream_local()` manually:
 

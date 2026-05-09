@@ -98,9 +98,9 @@ Benchmark before switching to the Flow Scheduler. Its deterministic mapping can 
 
 ## WebAssembly
 
-`WasmScheduler` is the only scheduler on WebAssembly targets. It uses the browser's async runtime through `wasm_bindgen_futures` and is selected by `Runtime::new()` automatically when compiling for `wasm32`.
+`WasmScheduler` is the only scheduler on WebAssembly targets. It is selected by `Runtime::new()` automatically when compiling for `wasm32` and starts one web worker by default. Use `WasmScheduler::new(n)` or `WasmScheduler::with_worker_script(n, path)` to run normal blocks on a worker pool.
 
-Currently, all WASM tasks run on the browser's main thread, so FutureSDR execution is single-threaded in the browser. This restriction might be lifted in the future.
+Local domains are available on WASM as well. A local domain creates a dedicated web worker and receives the closure that instantiates each local block, mirroring the native local-domain model. The worker script used with threaded WASM should dispatch both `futuresdr-wasm-scheduler-init` and `futuresdr-wasm-local-domain-init` messages.
 
 ```rust
 use futuresdr::prelude::*;

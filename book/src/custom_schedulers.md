@@ -24,9 +24,9 @@ pub trait Scheduler: Clone + Send + 'static {
 
 `spawn()` runs general async tasks on the scheduler. `Runtime::spawn()`, `Runtime::spawn_background()`, and control-plane internals use this method.
 
-## Native vs Local Work
+## Normal vs Local Work
 
-Native schedulers handle only the normal scheduling domain. The runtime manages local domains separately for:
+Schedulers handle only the normal scheduling domain. The runtime manages local domains separately for:
 
 - blocks derived with `LocalBlock`,
 - blocks added through `Flowgraph::add_local()`,
