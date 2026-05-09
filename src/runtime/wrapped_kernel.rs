@@ -1,5 +1,11 @@
 use futures::future::Either;
 use std::any::Any;
+#[cfg(target_arch = "wasm32")]
+use std::pin::Pin;
+#[cfg(target_arch = "wasm32")]
+use std::task::Context;
+#[cfg(target_arch = "wasm32")]
+use std::task::Poll;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
@@ -63,6 +69,29 @@ pub(crate) struct WrappedLocalKernel<K> {
     pub inbox_tx: BlockInbox,
 }
 
+#[cfg(target_arch = "wasm32")]
+fn wasm_yield_now() -> WasmYieldNow {
+    WasmYieldNow(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WasmYieldNow(bool);
+
+#[cfg(target_arch = "wasm32")]
+impl std::future::Future for WasmYieldNow {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.0 {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<K: KernelInterface + 'static> WrappedKernel<K> {
     /// Create typed block wrapper.
@@ -123,6 +152,7 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
                             return Err(Error::RuntimeError(e.to_string()));
                         }
                         _ => {
+                            info!("{} initialized", instance_name);
                             main_inbox
                                 .send(FlowgraphMessage::Initialized)
                                 .await
@@ -245,18 +275,43 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
             }
 
             if !work_io.call_again {
-                match work_io.block_on.take() {
-                    Some(f) => {
-                        if let Either::Right((_, f)) =
-                            futures::future::select(f, inbox.notified()).await
-                        {
-                            work_io.block_on = Some(f);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    match work_io.block_on.take() {
+                        Some(f) => {
+                            if let Either::Right((_, f)) =
+                                futures::future::select(f, inbox.notified()).await
+                            {
+                                work_io.block_on = Some(f);
+                            }
+                        }
+                        _ => {
+                            inbox.notified().await;
                         }
                     }
-                    _ => {
-                        inbox.notified().await;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    match work_io.block_on.take() {
+                        Some(mut f) => loop {
+                            if inbox.take_pending() {
+                                work_io.block_on = Some(f);
+                                break;
+                            }
+                            match futures::future::select(f, wasm_yield_now()).await {
+                                Either::Left((_done, _yield)) => break,
+                                Either::Right((_yield, pending)) => f = pending,
+                            }
+                        },
+                        _ => {
+                            while !inbox.take_pending() {
+                                wasm_yield_now().await;
+                            }
+                        }
                     }
                 }
+
                 work_io.call_again = true;
                 continue;
             }
@@ -331,6 +386,7 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
                             return Err(Error::RuntimeError(e.to_string()));
                         }
                         _ => {
+                            info!("{} initialized", instance_name);
                             main_inbox
                                 .send(FlowgraphMessage::Initialized)
                                 .await
@@ -453,18 +509,43 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
             }
 
             if !work_io.call_again {
-                match work_io.block_on.take() {
-                    Some(f) => {
-                        if let Either::Right((_, f)) =
-                            futures::future::select(f, inbox.notified()).await
-                        {
-                            work_io.block_on = Some(f);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    match work_io.block_on.take() {
+                        Some(f) => {
+                            if let Either::Right((_, f)) =
+                                futures::future::select(f, inbox.notified()).await
+                            {
+                                work_io.block_on = Some(f);
+                            }
+                        }
+                        _ => {
+                            inbox.notified().await;
                         }
                     }
-                    _ => {
-                        inbox.notified().await;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    match work_io.block_on.take() {
+                        Some(mut f) => loop {
+                            if inbox.take_pending() {
+                                work_io.block_on = Some(f);
+                                break;
+                            }
+                            match futures::future::select(f, wasm_yield_now()).await {
+                                Either::Left((_done, _yield)) => break,
+                                Either::Right((_yield, pending)) => f = pending,
+                            }
+                        },
+                        _ => {
+                            while !inbox.take_pending() {
+                                wasm_yield_now().await;
+                            }
+                        }
                     }
                 }
+
                 work_io.call_again = true;
                 continue;
             }

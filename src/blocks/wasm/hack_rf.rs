@@ -114,7 +114,7 @@ impl From<JsValue> for Error {
 pub struct HackRf {
     #[output]
     output: slab::Writer<Complex32>,
-    buffer: [i8; TRANSFER_SIZE],
+    buffer: Box<[i8]>,
     offset: usize,
     device: Option<web_sys::UsbDevice>,
     pending_transfer: Option<js_sys::Promise<web_sys::UsbInTransferResult>>,
@@ -131,7 +131,7 @@ impl HackRf {
     pub fn new() -> Self {
         Self {
             output: slab::Writer::default(),
-            buffer: [0; TRANSFER_SIZE],
+            buffer: vec![0; TRANSFER_SIZE].into_boxed_slice(),
             offset: TRANSFER_SIZE,
             device: None,
             pending_transfer: None,
@@ -281,7 +281,7 @@ impl HackRf {
         request: Request,
         value: u16,
         index: u16,
-        buf: &mut [u8],
+        buf: &[u8],
     ) -> Result<(), Error> {
         let parameter = web_sys::UsbControlTransferParameters::new(
             index,
@@ -291,11 +291,17 @@ impl HackRf {
             value,
         );
 
+        // In threaded WASM builds, Rust slices live in a SharedArrayBuffer-backed
+        // WebAssembly memory. WebUSB rejects shared ArrayBufferViews for OUT
+        // transfers, so copy control payloads into a regular JS Uint8Array.
+        let data = js_sys::Uint8Array::new_with_length(buf.len() as u32);
+        data.copy_from(buf);
+
         let transfer = self
             .device
             .as_ref()
             .unwrap()
-            .control_transfer_out_with_u8_slice(&parameter, buf)
+            .control_transfer_out_with_u8_array(&parameter, &data)
             .unwrap();
 
         let _ = JsFuture::from(transfer)
@@ -328,17 +334,17 @@ impl HackRf {
     }
 
     async fn set_freq(&mut self, hz: u64) -> Result<(), Error> {
-        let mut buf: [u8; 8] = Self::freq_params(hz);
-        self.write_control(Request::SetFreq, 0, 0, &mut buf).await
+        let buf: [u8; 8] = Self::freq_params(hz);
+        self.write_control(Request::SetFreq, 0, 0, &buf).await
     }
 
     async fn set_hw_sync_mode(&mut self, value: u8) -> Result<(), Error> {
-        self.write_control(Request::SetHwSyncMode, value.into(), 0, &mut [])
+        self.write_control(Request::SetHwSyncMode, value.into(), 0, &[])
             .await
     }
 
     async fn set_amp_enable(&mut self, en: bool) -> Result<(), Error> {
-        self.write_control(Request::AmpEnable, en.into(), 0, &mut [])
+        self.write_control(Request::AmpEnable, en.into(), 0, &[])
             .await
     }
 
@@ -347,7 +353,7 @@ impl HackRf {
             Request::BasebandFilterBandwidthSet,
             (hz & 0xFFFF) as u16,
             (hz >> 16) as u16,
-            &mut [],
+            &[],
         )
         .await
     }
@@ -390,7 +396,7 @@ impl HackRf {
     async fn set_sample_rate(&mut self, hz: u32, div: u32) -> Result<(), Error> {
         let hz: u32 = hz.to_le();
         let div: u32 = div.to_le();
-        let mut buf: [u8; 8] = [
+        let buf: [u8; 8] = [
             (hz & 0xFF) as u8,
             ((hz >> 8) & 0xFF) as u8,
             ((hz >> 16) & 0xFF) as u8,
@@ -400,14 +406,14 @@ impl HackRf {
             ((div >> 16) & 0xFF) as u8,
             ((div >> 24) & 0xFF) as u8,
         ];
-        self.write_control(Request::SampleRateSet, 0, 0, &mut buf)
+        self.write_control(Request::SampleRateSet, 0, 0, &buf)
             .await?;
         self.set_baseband_filter_bandwidth((0.75 * (hz as f32) / (div as f32)) as u32)
             .await
     }
 
     async fn set_transceiver_mode(&mut self, mode: TransceiverMode) -> Result<(), Error> {
-        self.write_control(Request::SetTransceiverMode, mode.into(), 0, &mut [])
+        self.write_control(Request::SetTransceiverMode, mode.into(), 0, &[])
             .await
     }
 

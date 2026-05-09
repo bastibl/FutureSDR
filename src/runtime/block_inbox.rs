@@ -177,6 +177,7 @@ impl BlockInboxReader {
     }
 
     /// Future that resolves when the block is woken.
+    #[allow(dead_code)]
     pub fn notified(&self) -> Notified {
         self.notifier.notified()
     }

@@ -154,6 +154,8 @@ features = [
     'Worker',
     'WorkerGlobalScope',
     'WorkerNavigator',
+    'WorkerOptions',
+    'WorkerType',
 ]
 
 [build-dependencies]

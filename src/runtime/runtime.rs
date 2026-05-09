@@ -3,6 +3,8 @@ use async_lock::Mutex;
 use axum::Router;
 use futures::channel::oneshot;
 use futures::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use gloo_timers::future::TimeoutFuture;
 use std::fmt;
 use std::sync::Arc;
 
@@ -457,6 +459,26 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     Ok(fg)
 }
 
+async fn recv_flowgraph_message(rx: &Receiver<FlowgraphMessage>) -> Option<FlowgraphMessage> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rx.recv().await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => return Some(msg),
+                Err(crate::runtime::channel::mpsc::TryRecvError::Empty) => {
+                    TimeoutFuture::new(1).await;
+                }
+                Err(crate::runtime::channel::mpsc::TryRecvError::Disconnected) => return None,
+            }
+        }
+    }
+}
+
 async fn run_flowgraph_loop(
     inboxes: &mut [Option<crate::runtime::dev::BlockInbox>],
     ids: &[BlockId],
@@ -484,16 +506,20 @@ async fn run_flowgraph_loop(
             break;
         }
 
-        let m = main_rx.recv().await.ok_or_else(|| {
+        let m = recv_flowgraph_message(&main_rx).await.ok_or_else(|| {
             Error::RuntimeError("no reply from blocks during init phase".to_string())
         })?;
 
         match m {
-            FlowgraphMessage::Initialized => i -= 1,
-            FlowgraphMessage::BlockError { .. } => {
+            FlowgraphMessage::Initialized => {
+                i -= 1;
+                info!("flowgraph init: block initialized ({}/{})", active_blocks - i, active_blocks);
+            }
+            FlowgraphMessage::BlockError { block_id } => {
                 i -= 1;
                 active_blocks -= 1;
                 block_error = true;
+                error!("flowgraph init: block {:?} reported an error", block_id);
             }
             x => {
                 debug!(
@@ -505,7 +531,7 @@ async fn run_flowgraph_loop(
         }
     }
 
-    debug!("running blocks");
+    info!("flowgraph init complete; running blocks");
     for inbox in inboxes.iter_mut().flatten() {
         inbox.notify();
         if inbox.is_closed() {
@@ -533,7 +559,7 @@ async fn run_flowgraph_loop(
             break;
         }
 
-        let m = main_rx.recv().await.ok_or_else(|| {
+        let m = recv_flowgraph_message(&main_rx).await.ok_or_else(|| {
             Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
         })?;
 

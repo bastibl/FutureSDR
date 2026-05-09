@@ -6,7 +6,80 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
+#[cfg(target_arch = "wasm32")]
+use wasm_spin::Mutex;
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_spin {
+    use std::cell::UnsafeCell;
+    use std::fmt;
+    use std::hint::spin_loop;
+    use std::ops::Deref;
+    use std::ops::DerefMut;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    pub(super) struct Mutex<T> {
+        locked: AtomicBool,
+        value: UnsafeCell<T>,
+    }
+
+    unsafe impl<T: Send> Send for Mutex<T> {}
+    unsafe impl<T: Send> Sync for Mutex<T> {}
+
+    impl<T> Mutex<T> {
+        pub(super) fn new(value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                value: UnsafeCell::new(value),
+            }
+        }
+
+        pub(super) fn lock(&self) -> MutexGuard<'_, T> {
+            while self
+                .locked
+                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                spin_loop();
+            }
+
+            MutexGuard { mutex: self }
+        }
+    }
+
+    impl<T> fmt::Debug for Mutex<T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Mutex").finish_non_exhaustive()
+        }
+    }
+
+    pub(super) struct MutexGuard<'a, T> {
+        mutex: &'a Mutex<T>,
+    }
+
+    impl<T> Deref for MutexGuard<'_, T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            unsafe { &*self.mutex.value.get() }
+        }
+    }
+
+    impl<T> DerefMut for MutexGuard<'_, T> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            unsafe { &mut *self.mutex.value.get() }
+        }
+    }
+
+    impl<T> Drop for MutexGuard<'_, T> {
+        fn drop(&mut self) {
+            self.mutex.locked.store(false, Ordering::Release);
+        }
+    }
+}
 
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
@@ -99,12 +172,24 @@ impl<D: CpuSample> SharedState<D> for SendState<D> {
         Self(Arc::new(Mutex::new(state)))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn with<R>(&self, f: impl FnOnce(&State<D>) -> R) -> R {
         f(&self.0.lock().unwrap())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn with<R>(&self, f: impl FnOnce(&State<D>) -> R) -> R {
+        f(&self.0.lock())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn with_mut<R>(&self, f: impl FnOnce(&mut State<D>) -> R) -> R {
         f(&mut self.0.lock().unwrap())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn with_mut<R>(&self, f: impl FnOnce(&mut State<D>) -> R) -> R {
+        f(&mut self.0.lock())
     }
 }
 

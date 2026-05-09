@@ -2,9 +2,15 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <link data-trunk rel="rust" data-bin="wasm-threaded" data-weak-refs data-reference-types />
+    <link data-trunk rel="rust" data-target-name="wasm_threaded" data-weak-refs data-reference-types />
     <link data-trunk rel="copy-file" href="assets/futuresdr-wasm-scheduler-worker.js" />
     <title>FutureSDR :: threaded WASM ZigBee RX</title>
   </head>
-  <body></body>
+  <body>
+    <script>
+      window.addEventListener("TrunkApplicationStarted", () => {
+        window.wasmBindings.start_app();
+      });
+    </script>
+  </body>
 </html>

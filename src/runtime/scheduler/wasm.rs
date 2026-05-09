@@ -3,12 +3,9 @@
 use async_task::Runnable;
 use concurrent_queue::ConcurrentQueue;
 use futures::channel::oneshot;
-use futures::future;
-use futures::future::Either;
 use futures::future::Future;
-use futures::future::select;
+use gloo_timers::future::TimeoutFuture;
 use slab::Slab;
-use std::cell::Cell;
 use std::fmt;
 use std::panic::RefUnwindSafe;
 use std::panic::UnwindSafe;
@@ -16,14 +13,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::AtomicU32;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
 use web_sys::Worker;
+use web_sys::WorkerOptions;
+use web_sys::WorkerType;
 
 use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
@@ -34,8 +33,32 @@ use crate::runtime::scheduler::Scheduler;
 static WASM_EXECUTORS: once_cell::sync::Lazy<Mutex<Slab<Arc<WasmExecutor>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(Slab::new()));
 
-thread_local! {
-    static WASM_WORKER_INDEX: Cell<usize> = const { Cell::new(usize::MAX) };
+unsafe extern "C" {
+    static __heap_base: u8;
+}
+
+fn wasm_thread_metadata_base() -> usize {
+    core::ptr::addr_of!(__heap_base) as usize
+}
+
+fn reset_wasm_thread_metadata() {
+    let base = wasm_thread_metadata_base();
+    if base < 4 {
+        return;
+    }
+
+    unsafe {
+        // wasm-bindgen's thread transform stores its data-init guard at
+        // __heap_base - 4, the thread count at __heap_base, and a malloc lock
+        // at __heap_base + 4. With current rust/wasm-bindgen output, the main
+        // thread's TLS allocation can overwrite these words. Restore them
+        // before starting scheduler workers.
+        AtomicU32::from_ptr((base - 4) as *mut u32).store(2, Ordering::Release);
+        AtomicU32::from_ptr(base as *mut u32).store(1, Ordering::Release);
+        AtomicU32::from_ptr((base + 4) as *mut u32).store(0, Ordering::Release);
+    }
+
+    info!("reset wasm thread metadata at __heap_base={base:#x}");
 }
 
 /// Web-worker handle used by the WASM scheduler.
@@ -60,15 +83,12 @@ impl WasmWorker {
 /// [`WasmScheduler::with_worker_script`].
 #[wasm_bindgen]
 pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: usize) {
-    WASM_WORKER_INDEX.with(|index| index.set(worker_index));
+    info!("WASM scheduler worker {worker_index} entered executor {executor_id}");
     let executor = WASM_EXECUTORS.lock().unwrap().get(executor_id).cloned();
     if let Some(executor) = executor {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            futures::executor::block_on(executor.run_until_shutdown(worker_index));
-        }));
-        if result.is_err() {
-            error!("WASM scheduler worker panicked: {:?}", result);
-        }
+        wasm_bindgen_futures::spawn_local(async move {
+            executor.run_until_shutdown(worker_index).await;
+        });
     } else {
         error!(
             "WASM scheduler worker got invalid executor id {}",
@@ -139,8 +159,14 @@ impl WasmScheduler {
     /// `worker_index` values from the init message.
     pub fn with_worker_script(n_threads: usize, worker_script: &str) -> WasmScheduler {
         if n_threads <= 1 {
+            info!("WASM scheduler using single-threaded mode");
             return WasmScheduler::single_threaded();
         }
+
+        info!(
+            "WASM scheduler starting {n_threads} web workers with script {worker_script}"
+        );
+        reset_wasm_thread_metadata();
 
         let executor = Arc::new(WasmExecutor::new(n_threads));
         let executor_id = WASM_EXECUTORS.lock().unwrap().insert(executor.clone());
@@ -161,6 +187,7 @@ impl WasmScheduler {
             return WasmScheduler::single_threaded();
         }
 
+        info!("WASM scheduler started {} web workers", workers.len());
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
                 executor_id: Some(executor_id),
@@ -215,12 +242,18 @@ impl Scheduler for WasmScheduler {
                 !block.is_blocking(),
                 "blocking blocks must remain on the local runtime path"
             );
+            let block_id = block.id();
+            let block_type = block.type_name().to_string();
             let main_channel = main_channel.clone();
             let executor = if n_threads > 0 {
-                Some(WasmScheduler::map_block(block.id().0, n_blocks, n_threads))
+                Some(WasmScheduler::map_block(block_id.0, n_blocks, n_threads))
             } else {
                 None
             };
+            info!(
+                "WASM scheduler spawning block {:?} ({}) on {:?}",
+                block_id, block_type, executor
+            );
             tasks.push(spawn_wasm_block(
                 self.inner.executor.as_deref(),
                 block,
@@ -255,7 +288,10 @@ fn spawn_worker(
     executor_id: usize,
     worker_index: usize,
 ) -> Result<WasmWorker, JsValue> {
-    let worker = Worker::new(worker_script)?;
+    let options = WorkerOptions::new();
+    options.set_type(WorkerType::Module);
+    info!("spawning WASM scheduler worker {worker_index}");
+    let worker = Worker::new_with_options(worker_script, &options)?;
     let init = js_sys::Object::new();
 
     js_sys::Reflect::set(
@@ -274,6 +310,11 @@ fn spawn_worker(
         &init,
         &JsValue::from_str("worker_index"),
         &JsValue::from_f64(worker_index as f64),
+    )?;
+    js_sys::Reflect::set(
+        &init,
+        &JsValue::from_str("thread_metadata_base"),
+        &JsValue::from_f64(wasm_thread_metadata_base() as f64),
     )?;
 
     if let Err(e) = worker.post_message(&init) {
@@ -424,58 +465,37 @@ impl WasmExecutor {
         task
     }
 
-    async fn run_on<T>(&self, worker_index: usize, future: impl Future<Output = T>) -> T {
-        let mut runner = Runner::new(self.state(), worker_index);
-
-        let run_forever = async {
-            loop {
-                for _ in 0..200 {
-                    let runnable = runner.runnable().await;
-                    runnable.run();
-                }
-                yield_now().await;
-            }
-        };
-
-        futures::pin_mut!(future);
-        futures::pin_mut!(run_forever);
-
-        match select(future, run_forever).await {
-            Either::Left((v, _other)) => v,
-            Either::Right((v, _other)) => v,
-        }
-    }
-
     async fn run_until_shutdown(&self, worker_index: usize) {
+        info!("WASM scheduler worker {worker_index} run loop started");
         let state = self.state().clone();
-        self.run_on(
-            worker_index,
-            future::poll_fn(move |cx| {
-                if state.shutdown.load(Ordering::Acquire) {
-                    return Poll::Ready(());
-                }
+        let mut runner = Runner::new(self.state(), worker_index);
+        let mut first_runnable = true;
 
-                if let Some(signal) = state.worker_signals.get(worker_index) {
-                    signal.waker.register(cx.waker());
+        while !state.shutdown.load(Ordering::Acquire) {
+            let mut ran = false;
+            for _ in 0..200 {
+                let Some(runnable) = runner.try_runnable() else {
+                    break;
+                };
+                if first_runnable {
+                    info!("WASM scheduler worker {worker_index} running first task");
+                    first_runnable = false;
                 }
+                runnable.run();
+                ran = true;
+            }
 
-                if state.shutdown.load(Ordering::Acquire) {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            }),
-        )
-        .await;
+            if ran {
+                yield_now().await;
+            } else {
+                TimeoutFuture::new(1).await;
+            }
+        }
+        info!("WASM scheduler worker {worker_index} run loop stopped");
     }
 
     fn shutdown(&self) {
-        let state = self.state();
-        state.shutdown.store(true, Ordering::Release);
-        for signal in &state.worker_signals {
-            signal.sleeping.store(false, Ordering::Release);
-            signal.waker.wake();
-        }
+        self.state().shutdown.store(true, Ordering::Release);
     }
 
     fn schedule(&self) -> impl Fn(Runnable) + Send + Sync + 'static {
@@ -483,24 +503,20 @@ impl WasmExecutor {
 
         move |runnable| {
             state.queue.push(runnable).unwrap();
-            state.notify();
         }
     }
 
     fn schedule_executor(
         &self,
         local: Arc<ConcurrentQueue<Runnable>>,
-        executor: usize,
+        _executor: usize,
     ) -> impl Fn(Runnable) + Send + Sync + 'static {
         let state = self.state().clone();
 
         move |runnable| {
             if let Err(err) = local.push(runnable) {
                 state.queue.push(err.into_inner()).unwrap();
-                state.notify();
-                return;
             }
-            let _ = state.wake_worker(executor);
         }
     }
 
@@ -535,8 +551,6 @@ struct State {
     queue: ConcurrentQueue<Runnable>,
     shutdown: AtomicBool,
     local_queues: Vec<Arc<ConcurrentQueue<Runnable>>>,
-    worker_signals: Vec<Arc<WorkerSignal>>,
-    next_wake: AtomicUsize,
     active: Mutex<Slab<Waker>>,
 }
 
@@ -545,101 +559,18 @@ impl State {
         let local_queues: Vec<_> = (0..worker_count)
             .map(|_| Arc::new(ConcurrentQueue::bounded(LOCAL_QUEUE_CAPACITY)))
             .collect();
-        let worker_signals: Vec<_> = (0..worker_count)
-            .map(|_| Arc::new(WorkerSignal::default()))
-            .collect();
 
         State {
             queue: ConcurrentQueue::unbounded(),
             shutdown: AtomicBool::new(false),
             local_queues,
-            worker_signals,
-            next_wake: AtomicUsize::new(0),
             active: Mutex::new(Slab::new()),
         }
-    }
-
-    #[inline]
-    fn notify(&self) {
-        let n = self.worker_signals.len();
-        if n == 0 {
-            return;
-        }
-        let start = self.next_wake.fetch_add(1, Ordering::Relaxed) % n;
-        for off in 0..n {
-            let idx = (start + off) % n;
-            if self.wake_worker(idx) {
-                break;
-            }
-        }
-    }
-
-    #[inline]
-    fn wake_worker(&self, queue_index: usize) -> bool {
-        if queue_index >= self.worker_signals.len() {
-            return false;
-        }
-        let signal = &self.worker_signals[queue_index];
-        if signal.sleeping.swap(false, Ordering::AcqRel) {
-            signal.waker.wake();
-            true
-        } else {
-            false
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct WorkerSignal {
-    sleeping: AtomicBool,
-    waker: futures::task::AtomicWaker,
-}
-
-struct Ticker<'a> {
-    signal: &'a WorkerSignal,
-}
-
-impl Ticker<'_> {
-    fn new(signal: &WorkerSignal) -> Ticker<'_> {
-        Ticker { signal }
-    }
-
-    async fn runnable_with(&mut self, mut search: impl FnMut() -> Option<Runnable>) -> Runnable {
-        future::poll_fn(|cx| {
-            loop {
-                if let Some(r) = search() {
-                    self.signal.sleeping.store(false, Ordering::Release);
-                    return Poll::Ready(r);
-                }
-
-                self.signal.sleeping.store(true, Ordering::Release);
-                self.signal.waker.register(cx.waker());
-
-                if !self.signal.sleeping.load(Ordering::Acquire) {
-                    continue;
-                }
-
-                if let Some(r) = search() {
-                    self.signal.sleeping.store(false, Ordering::Release);
-                    return Poll::Ready(r);
-                }
-
-                return Poll::Pending;
-            }
-        })
-        .await
-    }
-}
-
-impl Drop for Ticker<'_> {
-    fn drop(&mut self) {
-        self.signal.sleeping.store(false, Ordering::Release);
     }
 }
 
 struct Runner<'a> {
     state: &'a State,
-    ticker: Ticker<'a>,
     local: Arc<ConcurrentQueue<Runnable>>,
 }
 
@@ -650,32 +581,20 @@ impl Runner<'_> {
             .get(worker_index)
             .cloned()
             .expect("worker local queue not initialized");
-        let signal = state
-            .worker_signals
-            .get(worker_index)
-            .expect("worker signal not initialized");
 
-        Runner {
-            state,
-            ticker: Ticker::new(signal),
-            local,
-        }
+        Runner { state, local }
     }
 
-    async fn runnable(&mut self) -> Runnable {
-        self.ticker
-            .runnable_with(|| {
-                if let Ok(r) = self.local.pop() {
-                    return Some(r);
-                }
+    fn try_runnable(&mut self) -> Option<Runnable> {
+        if let Ok(r) = self.local.pop() {
+            return Some(r);
+        }
 
-                if let Ok(r) = self.state.queue.pop() {
-                    return Some(r);
-                }
+        if let Ok(r) = self.state.queue.pop() {
+            return Some(r);
+        }
 
-                None
-            })
-            .await
+        None
     }
 }
 
