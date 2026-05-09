@@ -1,13 +1,13 @@
 use futures::future::Either;
 use std::any::Any;
-#[cfg(target_arch = "wasm32")]
+use std::future::Future;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::pin::Pin;
 #[cfg(target_arch = "wasm32")]
 use std::task::Context;
 #[cfg(target_arch = "wasm32")]
 use std::task::Poll;
-use std::ops::Deref;
-use std::ops::DerefMut;
 
 use crate::runtime::BlockDescription;
 use crate::runtime::BlockId;
@@ -92,6 +92,48 @@ impl std::future::Future for WasmYieldNow {
     }
 }
 
+async fn wait_for_work<F>(block_on: &mut Option<Pin<Box<F>>>, inbox: &BlockInboxReader)
+where
+    F: Future<Output = ()> + ?Sized,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match block_on.take() {
+            Some(f) => {
+                if let Either::Right((_, f)) = futures::future::select(f, inbox.notified()).await {
+                    *block_on = Some(f);
+                }
+            }
+            _ => {
+                inbox.notified().await;
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // A local WASM block can be woken from another web worker. Polling here
+        // avoids relying on a browser-local JS waker from the wrong worker.
+        match block_on.take() {
+            Some(mut f) => loop {
+                if inbox.take_pending() {
+                    *block_on = Some(f);
+                    break;
+                }
+                match futures::future::select(f, wasm_yield_now()).await {
+                    Either::Left((_done, _yield)) => break,
+                    Either::Right((_yield, pending)) => f = pending,
+                }
+            },
+            _ => {
+                while !inbox.take_pending() {
+                    wasm_yield_now().await;
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<K: KernelInterface + 'static> WrappedKernel<K> {
     /// Create typed block wrapper.
@@ -152,7 +194,6 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
                             return Err(Error::RuntimeError(e.to_string()));
                         }
                         _ => {
-                            info!("{} initialized", instance_name);
                             main_inbox
                                 .send(FlowgraphMessage::Initialized)
                                 .await
@@ -275,43 +316,7 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
             }
 
             if !work_io.call_again {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    match work_io.block_on.take() {
-                        Some(f) => {
-                            if let Either::Right((_, f)) =
-                                futures::future::select(f, inbox.notified()).await
-                            {
-                                work_io.block_on = Some(f);
-                            }
-                        }
-                        _ => {
-                            inbox.notified().await;
-                        }
-                    }
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    match work_io.block_on.take() {
-                        Some(mut f) => loop {
-                            if inbox.take_pending() {
-                                work_io.block_on = Some(f);
-                                break;
-                            }
-                            match futures::future::select(f, wasm_yield_now()).await {
-                                Either::Left((_done, _yield)) => break,
-                                Either::Right((_yield, pending)) => f = pending,
-                            }
-                        },
-                        _ => {
-                            while !inbox.take_pending() {
-                                wasm_yield_now().await;
-                            }
-                        }
-                    }
-                }
-
+                wait_for_work(&mut work_io.block_on, inbox).await;
                 work_io.call_again = true;
                 continue;
             }
@@ -386,7 +391,6 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
                             return Err(Error::RuntimeError(e.to_string()));
                         }
                         _ => {
-                            info!("{} initialized", instance_name);
                             main_inbox
                                 .send(FlowgraphMessage::Initialized)
                                 .await
@@ -509,43 +513,7 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
             }
 
             if !work_io.call_again {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    match work_io.block_on.take() {
-                        Some(f) => {
-                            if let Either::Right((_, f)) =
-                                futures::future::select(f, inbox.notified()).await
-                            {
-                                work_io.block_on = Some(f);
-                            }
-                        }
-                        _ => {
-                            inbox.notified().await;
-                        }
-                    }
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    match work_io.block_on.take() {
-                        Some(mut f) => loop {
-                            if inbox.take_pending() {
-                                work_io.block_on = Some(f);
-                                break;
-                            }
-                            match futures::future::select(f, wasm_yield_now()).await {
-                                Either::Left((_done, _yield)) => break,
-                                Either::Right((_yield, pending)) => f = pending,
-                            }
-                        },
-                        _ => {
-                            while !inbox.take_pending() {
-                                wasm_yield_now().await;
-                            }
-                        }
-                    }
-                }
-
+                wait_for_work(&mut work_io.block_on, inbox).await;
                 work_io.call_again = true;
                 continue;
             }

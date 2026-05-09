@@ -511,10 +511,7 @@ async fn run_flowgraph_loop(
         })?;
 
         match m {
-            FlowgraphMessage::Initialized => {
-                i -= 1;
-                info!("flowgraph init: block initialized ({}/{})", active_blocks - i, active_blocks);
-            }
+            FlowgraphMessage::Initialized => i -= 1,
             FlowgraphMessage::BlockError { block_id } => {
                 i -= 1;
                 active_blocks -= 1;
@@ -531,7 +528,7 @@ async fn run_flowgraph_loop(
         }
     }
 
-    info!("flowgraph init complete; running blocks");
+    debug!("running blocks");
     for inbox in inboxes.iter_mut().flatten() {
         inbox.notify();
         if inbox.is_closed() {

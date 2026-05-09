@@ -13,8 +13,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
@@ -37,12 +37,8 @@ unsafe extern "C" {
     static __heap_base: u8;
 }
 
-fn wasm_thread_metadata_base() -> usize {
-    core::ptr::addr_of!(__heap_base) as usize
-}
-
 fn reset_wasm_thread_metadata() {
-    let base = wasm_thread_metadata_base();
+    let base = core::ptr::addr_of!(__heap_base) as usize;
     if base < 4 {
         return;
     }
@@ -57,8 +53,6 @@ fn reset_wasm_thread_metadata() {
         AtomicU32::from_ptr(base as *mut u32).store(1, Ordering::Release);
         AtomicU32::from_ptr((base + 4) as *mut u32).store(0, Ordering::Release);
     }
-
-    info!("reset wasm thread metadata at __heap_base={base:#x}");
 }
 
 /// Web-worker handle used by the WASM scheduler.
@@ -83,7 +77,6 @@ impl WasmWorker {
 /// [`WasmScheduler::with_worker_script`].
 #[wasm_bindgen]
 pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: usize) {
-    info!("WASM scheduler worker {worker_index} entered executor {executor_id}");
     let executor = WASM_EXECUTORS.lock().unwrap().get(executor_id).cloned();
     if let Some(executor) = executor {
         wasm_bindgen_futures::spawn_local(async move {
@@ -159,13 +152,10 @@ impl WasmScheduler {
     /// `worker_index` values from the init message.
     pub fn with_worker_script(n_threads: usize, worker_script: &str) -> WasmScheduler {
         if n_threads <= 1 {
-            info!("WASM scheduler using single-threaded mode");
             return WasmScheduler::single_threaded();
         }
 
-        info!(
-            "WASM scheduler starting {n_threads} web workers with script {worker_script}"
-        );
+        info!("WASM scheduler starting {n_threads} web workers with script {worker_script}");
         reset_wasm_thread_metadata();
 
         let executor = Arc::new(WasmExecutor::new(n_threads));
@@ -212,19 +202,6 @@ impl WasmScheduler {
     pub fn n_threads(&self) -> usize {
         self.inner.workers.len().max(1)
     }
-
-    fn map_block(block: usize, n_blocks: usize, n_threads: usize) -> usize {
-        let n = n_blocks / n_threads;
-        let r = n_blocks % n_threads;
-
-        for x in 1..n_threads {
-            if block < (x * n) + std::cmp::min(x, r) {
-                return x - 1;
-            }
-        }
-
-        n_threads - 1
-    }
 }
 
 impl Scheduler for WasmScheduler {
@@ -237,28 +214,18 @@ impl Scheduler for WasmScheduler {
         let n_threads = self.inner.workers.len();
         let mut tasks = Vec::with_capacity(n_blocks);
 
-        for block in blocks {
+        for (block_index, block) in blocks.into_iter().enumerate() {
             debug_assert!(
                 !block.is_blocking(),
                 "blocking blocks must remain on the local runtime path"
             );
-            let block_id = block.id();
-            let block_type = block.type_name().to_string();
             let main_channel = main_channel.clone();
-            let executor = if n_threads > 0 {
-                Some(WasmScheduler::map_block(block_id.0, n_blocks, n_threads))
-            } else {
-                None
-            };
-            info!(
-                "WASM scheduler spawning block {:?} ({}) on {:?}",
-                block_id, block_type, executor
-            );
+            let worker_index = (n_threads > 0).then(|| block_index * n_threads / n_blocks);
             tasks.push(spawn_wasm_block(
                 self.inner.executor.as_deref(),
                 block,
                 main_channel,
-                executor,
+                worker_index,
             ));
         }
 
@@ -290,7 +257,6 @@ fn spawn_worker(
 ) -> Result<WasmWorker, JsValue> {
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
-    info!("spawning WASM scheduler worker {worker_index}");
     let worker = Worker::new_with_options(worker_script, &options)?;
     let init = js_sys::Object::new();
 
@@ -311,12 +277,6 @@ fn spawn_worker(
         &JsValue::from_str("worker_index"),
         &JsValue::from_f64(worker_index as f64),
     )?;
-    js_sys::Reflect::set(
-        &init,
-        &JsValue::from_str("thread_metadata_base"),
-        &JsValue::from_f64(wasm_thread_metadata_base() as f64),
-    )?;
-
     if let Err(e) = worker.post_message(&init) {
         worker.terminate();
         return Err(e);
@@ -458,7 +418,7 @@ impl WasmExecutor {
             .expect("executor queue not initialized");
 
         let (runnable, task) =
-            unsafe { async_task::spawn_unchecked(future, self.schedule_executor(local, executor)) };
+            unsafe { async_task::spawn_unchecked(future, self.schedule_executor(local)) };
         entry.insert(runnable.waker());
 
         runnable.schedule();
@@ -466,10 +426,8 @@ impl WasmExecutor {
     }
 
     async fn run_until_shutdown(&self, worker_index: usize) {
-        info!("WASM scheduler worker {worker_index} run loop started");
         let state = self.state().clone();
         let mut runner = Runner::new(self.state(), worker_index);
-        let mut first_runnable = true;
 
         while !state.shutdown.load(Ordering::Acquire) {
             let mut ran = false;
@@ -477,10 +435,6 @@ impl WasmExecutor {
                 let Some(runnable) = runner.try_runnable() else {
                     break;
                 };
-                if first_runnable {
-                    info!("WASM scheduler worker {worker_index} running first task");
-                    first_runnable = false;
-                }
                 runnable.run();
                 ran = true;
             }
@@ -491,7 +445,6 @@ impl WasmExecutor {
                 TimeoutFuture::new(1).await;
             }
         }
-        info!("WASM scheduler worker {worker_index} run loop stopped");
     }
 
     fn shutdown(&self) {
@@ -509,7 +462,6 @@ impl WasmExecutor {
     fn schedule_executor(
         &self,
         local: Arc<ConcurrentQueue<Runnable>>,
-        _executor: usize,
     ) -> impl Fn(Runnable) + Send + Sync + 'static {
         let state = self.state().clone();
 
