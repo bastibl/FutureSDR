@@ -445,21 +445,13 @@ impl HackRf {
     fn freq_params(hz: u64) -> [u8; 8] {
         const MHZ: u64 = 1_000_000;
 
-        let l_freq_mhz: u32 = u32::try_from(hz / MHZ).unwrap_or(u32::MAX).to_le();
-        let l_freq_hz: u32 = u32::try_from(hz - u64::from(l_freq_mhz) * MHZ)
-            .unwrap_or(u32::MAX)
-            .to_le();
-
-        [
-            (l_freq_mhz & 0xFF) as u8,
-            ((l_freq_mhz >> 8) & 0xFF) as u8,
-            ((l_freq_mhz >> 16) & 0xFF) as u8,
-            ((l_freq_mhz >> 24) & 0xFF) as u8,
-            (l_freq_hz & 0xFF) as u8,
-            ((l_freq_hz >> 8) & 0xFF) as u8,
-            ((l_freq_hz >> 16) & 0xFF) as u8,
-            ((l_freq_hz >> 24) & 0xFF) as u8,
-        ]
+        let freq_mhz = u32::try_from(hz / MHZ).unwrap_or(u32::MAX);
+        let freq_hz =
+            u32::try_from(hz.saturating_sub(u64::from(freq_mhz) * MHZ)).unwrap_or(u32::MAX);
+        let mut params = [0; 8];
+        params[..4].copy_from_slice(&freq_mhz.to_le_bytes());
+        params[4..].copy_from_slice(&freq_hz.to_le_bytes());
+        params
     }
 
     async fn set_freq(&mut self, hz: u64) -> Result<(), Error> {
@@ -523,18 +515,9 @@ impl HackRf {
     }
 
     async fn set_sample_rate(&mut self, hz: u32, div: u32) -> Result<(), Error> {
-        let hz: u32 = hz.to_le();
-        let div: u32 = div.to_le();
-        let buf: [u8; 8] = [
-            (hz & 0xFF) as u8,
-            ((hz >> 8) & 0xFF) as u8,
-            ((hz >> 16) & 0xFF) as u8,
-            ((hz >> 24) & 0xFF) as u8,
-            (div & 0xFF) as u8,
-            ((div >> 8) & 0xFF) as u8,
-            ((div >> 16) & 0xFF) as u8,
-            ((div >> 24) & 0xFF) as u8,
-        ];
+        let mut buf = [0; 8];
+        buf[..4].copy_from_slice(&hz.to_le_bytes());
+        buf[4..].copy_from_slice(&div.to_le_bytes());
         self.write_control(Request::SampleRateSet, 0, 0, &buf)
             .await?;
         self.set_baseband_filter_bandwidth((0.75 * (hz as f32) / (div as f32)) as u32)

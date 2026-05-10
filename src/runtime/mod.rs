@@ -135,12 +135,7 @@ pub(crate) async fn await_oneshot<T>(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn yield_now() {
-    wasm_yield_now().await;
-}
-
-#[cfg(target_arch = "wasm32")]
-fn wasm_yield_now() -> WasmYieldNow {
+pub(crate) fn yield_now() -> impl std::future::Future<Output = ()> + Unpin {
     WasmYieldNow(false)
 }
 

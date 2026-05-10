@@ -151,9 +151,7 @@ pub struct BlockRef<K> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum BlockPlacement {
-    Normal {
-        domain_id: usize,
-    },
+    Normal,
     Local {
         domain_id: usize,
         local_id: usize,
@@ -210,6 +208,14 @@ enum StreamPlan {
     },
 }
 
+pub(crate) type TopologyEdge = (BlockId, PortId, BlockId, PortId);
+pub(crate) type StartupSnapshot = (
+    Vec<Option<BlockInbox>>,
+    Vec<BlockId>,
+    Vec<TopologyEdge>,
+    Vec<TopologyEdge>,
+);
+
 /// Type-erased stream edge between two stream ports.
 #[derive(Debug, Clone)]
 pub(crate) struct StreamEdge {
@@ -220,7 +226,7 @@ pub(crate) struct StreamEdge {
 }
 
 impl StreamEdge {
-    pub(crate) fn endpoints(&self) -> (BlockId, PortId, BlockId, PortId) {
+    pub(crate) fn endpoints(&self) -> TopologyEdge {
         (
             self.src_block,
             self.src_port.clone(),
@@ -297,11 +303,16 @@ impl<'a> LocalDomainContext<'a> {
         crate::runtime::__private::AddLocal::add_domain(block, self)
     }
 
-    #[doc(hidden)]
-    pub fn __add_from_kernel<K>(&self, block: K) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
+    fn add_wrapped<K>(
+        &self,
+        kind: LocalBlockKind,
+        message_inputs: &'static [&'static str],
+        build: impl FnOnce(
+            BlockId,
+            BlockInbox,
+            crate::runtime::block_inbox::BlockInboxReader,
+        ) -> Box<dyn crate::runtime::block::LocalBlock>,
+    ) -> BlockRef<K> {
         let mut inner = self.inner.borrow_mut();
         let block_id = BlockId(inner.next_block_id);
         inner.next_block_id += 1;
@@ -310,23 +321,20 @@ impl<'a> LocalDomainContext<'a> {
         let placement = BlockPlacement::Local {
             domain_id: inner.domain_id,
             local_id,
-            kind: LocalBlockKind::Kernel,
+            kind,
         };
 
         let (inbox, inbox_rx) =
             crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
-        let mut b = WrappedKernel::new_with_inbox(block, block_id, inbox.clone(), inbox_rx);
-        let block_name = <K as KernelInterface>::type_name();
-        b.meta
-            .set_instance_name(format!("{}-{}", block_name, block_id.0));
+        let block = build(block_id, inbox.clone(), inbox_rx);
         inner
             .state
-            .insert_block(local_id, Box::new(b))
+            .insert_block(local_id, block)
             .expect("failed to insert local-domain block");
         inner.entries.push(LocalDomainContextEntry {
             placement,
             inbox,
-            message_inputs: <K as KernelInterface>::message_inputs(),
+            message_inputs,
         });
         BlockRef {
             id: block_id,
@@ -337,42 +345,39 @@ impl<'a> LocalDomainContext<'a> {
     }
 
     #[doc(hidden)]
+    pub fn __add_from_kernel<K>(&self, block: K) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
+        self.add_wrapped(
+            LocalBlockKind::Kernel,
+            <K as KernelInterface>::message_inputs(),
+            move |block_id, inbox, inbox_rx| {
+                let mut b = WrappedKernel::new_with_inbox(block, block_id, inbox, inbox_rx);
+                let block_name = <K as KernelInterface>::type_name();
+                b.meta
+                    .set_instance_name(format!("{}-{}", block_name, block_id.0));
+                Box::new(b)
+            },
+        )
+    }
+
+    #[doc(hidden)]
     pub fn __add_from_local_kernel<K>(&self, block: K) -> BlockRef<K>
     where
         K: LocalKernel + LocalKernelInterface + 'static,
     {
-        let mut inner = self.inner.borrow_mut();
-        let block_id = BlockId(inner.next_block_id);
-        inner.next_block_id += 1;
-        let local_id = inner.next_local_id;
-        inner.next_local_id += 1;
-        let placement = BlockPlacement::Local {
-            domain_id: inner.domain_id,
-            local_id,
-            kind: LocalBlockKind::LocalKernel,
-        };
-
-        let (inbox, inbox_rx) =
-            crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
-        let mut b = WrappedLocalKernel::new_with_inbox(block, block_id, inbox.clone(), inbox_rx);
-        let block_name = <K as LocalKernelInterface>::type_name();
-        b.meta
-            .set_instance_name(format!("{}-{}", block_name, block_id.0));
-        inner
-            .state
-            .insert_block(local_id, Box::new(b))
-            .expect("failed to insert local-domain block");
-        inner.entries.push(LocalDomainContextEntry {
-            placement,
-            inbox,
-            message_inputs: <K as LocalKernelInterface>::message_inputs(),
-        });
-        BlockRef {
-            id: block_id,
-            flowgraph_id: inner.flowgraph_id,
-            placement,
-            _marker: PhantomData,
-        }
+        self.add_wrapped(
+            LocalBlockKind::LocalKernel,
+            <K as LocalKernelInterface>::message_inputs(),
+            move |block_id, inbox, inbox_rx| {
+                let mut b = WrappedLocalKernel::new_with_inbox(block, block_id, inbox, inbox_rx);
+                let block_name = <K as LocalKernelInterface>::type_name();
+                b.meta
+                    .set_instance_name(format!("{}-{}", block_name, block_id.0));
+                Box::new(b)
+            },
+        )
     }
 
     /// Connect local-only stream ports between blocks in this domain context.
@@ -581,7 +586,7 @@ impl<K: 'static> BlockRef<K> {
     {
         fg.validate_block_ref(self)?;
         match self.placement {
-            BlockPlacement::Normal { .. } => {
+            BlockPlacement::Normal => {
                 let block = fg.block(self)?;
                 Ok(f(&block))
             }
@@ -623,7 +628,7 @@ impl<K: 'static> BlockRef<K> {
     {
         fg.validate_block_ref(self)?;
         match self.placement {
-            BlockPlacement::Normal { .. } => {
+            BlockPlacement::Normal => {
                 let mut block = fg.block_mut(self)?;
                 Ok(f(&mut block))
             }
@@ -713,7 +718,7 @@ pub struct Flowgraph {
     pub(crate) blocks: Vec<BlockEntry>,
     pub(crate) local_domains: Vec<LocalDomainRuntime>,
     pub(crate) stream_edges: Vec<StreamEdge>,
-    pub(crate) message_edges: Vec<(BlockId, PortId, BlockId, PortId)>,
+    pub(crate) message_edges: Vec<TopologyEdge>,
 }
 
 impl Flowgraph {
@@ -766,6 +771,21 @@ impl Flowgraph {
             .ok_or(Error::InvalidBlock(block_id))
     }
 
+    fn commit_local_context_entries(
+        &mut self,
+        domain_id: usize,
+        entries: Vec<LocalDomainContextEntry>,
+    ) {
+        self.local_domains[domain_id].reserve_blocks(entries.len());
+        self.blocks
+            .extend(entries.into_iter().map(|entry| BlockEntry {
+                block: None,
+                placement: entry.placement,
+                inbox: Some(entry.inbox),
+                message_inputs: Some(entry.message_inputs),
+            }));
+    }
+
     /// Run a builder closure inside a local domain.
     ///
     /// Blocks added through the [`LocalDomainContext`] are constructed inside the
@@ -798,15 +818,7 @@ impl Flowgraph {
             Ok((ret, ctx.take_entries()))
         })?;
 
-        self.local_domains[domain_id].reserve_blocks(entries.len());
-        for entry in entries {
-            self.blocks.push(BlockEntry {
-                block: None,
-                placement: entry.placement,
-                inbox: Some(entry.inbox),
-                message_inputs: Some(entry.message_inputs),
-            });
-        }
+        self.commit_local_context_entries(domain_id, entries);
 
         Ok(ret)
     }
@@ -852,15 +864,7 @@ impl Flowgraph {
             })
             .await?;
 
-        self.local_domains[domain_id].reserve_blocks(entries.len());
-        for entry in entries {
-            self.blocks.push(BlockEntry {
-                block: None,
-                placement: entry.placement,
-                inbox: Some(entry.inbox),
-                message_inputs: Some(entry.message_inputs),
-            });
-        }
+        self.commit_local_context_entries(domain_id, entries);
 
         Ok(ret)
     }
@@ -912,7 +916,7 @@ impl Flowgraph {
         message_inputs: &'static [&'static str],
     ) -> BlockRef<K> {
         let block_id = BlockId(self.blocks.len());
-        let placement = BlockPlacement::Normal { domain_id: 0 };
+        let placement = BlockPlacement::Normal;
         self.blocks.push(BlockEntry::with_block(
             block,
             placement,
@@ -1084,12 +1088,10 @@ impl Flowgraph {
         dst: BlockPlacement,
     ) -> StreamPlan {
         match (src, dst) {
-            (BlockPlacement::Normal { .. }, BlockPlacement::Normal { .. }) => {
-                StreamPlan::NormalNormal {
-                    src: src_id,
-                    dst: dst_id,
-                }
-            }
+            (BlockPlacement::Normal, BlockPlacement::Normal) => StreamPlan::NormalNormal {
+                src: src_id,
+                dst: dst_id,
+            },
             (
                 BlockPlacement::Local {
                     domain_id: src_domain,
@@ -1116,13 +1118,13 @@ impl Flowgraph {
                     local_id,
                     kind,
                 },
-                BlockPlacement::Normal { .. },
+                BlockPlacement::Normal,
             ) => StreamPlan::LocalToNormal {
                 src: LocalEndpoint::new(src_id, domain_id, local_id, kind),
                 dst: dst_id,
             },
             (
-                BlockPlacement::Normal { .. },
+                BlockPlacement::Normal,
                 BlockPlacement::Local {
                     domain_id,
                     local_id,
@@ -1146,7 +1148,7 @@ impl Flowgraph {
 
     fn raw_block(&self, block_id: BlockId) -> Result<&dyn BlockObject, Error> {
         match self.placement(block_id)? {
-            BlockPlacement::Normal { .. } => self
+            BlockPlacement::Normal => self
                 .blocks
                 .get(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
@@ -1160,7 +1162,7 @@ impl Flowgraph {
 
     fn raw_block_mut(&mut self, block_id: BlockId) -> Result<&mut dyn BlockObject, Error> {
         match self.placement(block_id)? {
-            BlockPlacement::Normal { .. } => self
+            BlockPlacement::Normal => self
                 .blocks
                 .get_mut(block_id.0)
                 .ok_or(Error::InvalidBlock(block_id))?
@@ -2005,7 +2007,7 @@ impl Flowgraph {
             .cloned()
             .ok_or(Error::InvalidBlock(dst_block_id))?;
         match self.placement(src_block_id)? {
-            BlockPlacement::Normal { .. } => {
+            BlockPlacement::Normal => {
                 let src_block = self.raw_block_mut(src_block_id)?;
                 src_block.connect(&src_port_id, dst_box, &dst_port_id)?;
             }
@@ -2060,17 +2062,7 @@ impl Flowgraph {
         Ok((inboxes, ids))
     }
 
-    pub(crate) fn startup_snapshot(
-        &self,
-    ) -> Result<
-        (
-            Vec<Option<crate::runtime::dev::BlockInbox>>,
-            Vec<BlockId>,
-            Vec<(BlockId, PortId, BlockId, PortId)>,
-            Vec<(BlockId, PortId, BlockId, PortId)>,
-        ),
-        Error,
-    > {
+    pub(crate) fn startup_snapshot(&self) -> Result<StartupSnapshot, Error> {
         let (inboxes, ids) = self.inboxes()?;
         let mut stream_edges = self.stream_edge_endpoints();
         let mut message_edges = self.message_edges.clone();
@@ -2097,7 +2089,7 @@ impl Flowgraph {
         Ok(tasks)
     }
 
-    pub(crate) fn stream_edge_endpoints(&self) -> Vec<(BlockId, PortId, BlockId, PortId)> {
+    pub(crate) fn stream_edge_endpoints(&self) -> Vec<TopologyEdge> {
         self.stream_edges
             .iter()
             .map(StreamEdge::endpoints)

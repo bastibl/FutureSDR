@@ -155,29 +155,6 @@ pub(crate) struct BlockInboxReader {
     notifier: BlockNotifier,
 }
 
-#[cfg(target_arch = "wasm32")]
-fn wasm_yield_now() -> WasmYieldNow {
-    WasmYieldNow(false)
-}
-
-#[cfg(target_arch = "wasm32")]
-struct WasmYieldNow(bool);
-
-#[cfg(target_arch = "wasm32")]
-impl Future for WasmYieldNow {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.0 {
-            self.0 = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
-    }
-}
-
 impl BlockInboxReader {
     /// Create a receiver-side block inbox from an mpsc receiver and notifier.
     pub fn new(control: mpsc::Receiver<BlockMessage>, notifier: BlockNotifier) -> Self {
@@ -200,7 +177,7 @@ impl BlockInboxReader {
         loop {
             match self.control.try_recv() {
                 Ok(msg) => return Some(msg),
-                Err(mpsc::TryRecvError::Empty) => wasm_yield_now().await,
+                Err(mpsc::TryRecvError::Empty) => crate::runtime::yield_now().await,
                 Err(mpsc::TryRecvError::Disconnected) => return None,
             }
         }

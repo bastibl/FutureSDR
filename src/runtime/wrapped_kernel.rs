@@ -4,10 +4,6 @@ use std::future::Future;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::pin::Pin;
-#[cfg(target_arch = "wasm32")]
-use std::task::Context;
-#[cfg(target_arch = "wasm32")]
-use std::task::Poll;
 
 use crate::runtime::BlockDescription;
 use crate::runtime::BlockId;
@@ -22,6 +18,7 @@ use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
 use crate::runtime::block_inbox::BlockInboxReader;
 use crate::runtime::buffer::BufferReader;
+use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
@@ -34,7 +31,6 @@ use crate::runtime::dev::WorkIo;
 use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::LocalKernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
-use futuresdr::runtime::channel::mpsc::Sender;
 
 /// Typed block wrapper around a concrete kernel instance.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -69,29 +65,6 @@ pub(crate) struct WrappedLocalKernel<K> {
     pub inbox_tx: BlockInbox,
 }
 
-#[cfg(target_arch = "wasm32")]
-fn wasm_yield_now() -> WasmYieldNow {
-    WasmYieldNow(false)
-}
-
-#[cfg(target_arch = "wasm32")]
-struct WasmYieldNow(bool);
-
-#[cfg(target_arch = "wasm32")]
-impl std::future::Future for WasmYieldNow {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.0 {
-            self.0 = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
-    }
-}
-
 async fn wait_for_work<F>(block_on: &mut Option<Pin<Box<F>>>, inbox: &BlockInboxReader)
 where
     F: Future<Output = ()> + ?Sized,
@@ -120,14 +93,14 @@ where
                     *block_on = Some(f);
                     break;
                 }
-                match futures::future::select(f, wasm_yield_now()).await {
+                match futures::future::select(f, crate::runtime::yield_now()).await {
                     Either::Left((_done, _yield)) => break,
                     Either::Right((_yield, pending)) => f = pending,
                 }
             },
             _ => {
                 while !inbox.take_pending() {
-                    wasm_yield_now().await;
+                    crate::runtime::yield_now().await;
                 }
             }
         }

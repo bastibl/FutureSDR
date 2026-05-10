@@ -10,6 +10,7 @@ use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
+use crate::runtime::PortId;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
 use crate::runtime::block_inbox::BlockInboxReader;
@@ -28,20 +29,12 @@ type LocalDomainAsyncExec = Box<
 
 pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static> + Send + 'static>;
 
+type TopologyEdge = (BlockId, PortId, BlockId, PortId);
+
 pub(crate) struct LocalDomainState {
     blocks: Vec<Option<Box<dyn LocalBlock>>>,
-    stream_edges: Vec<(
-        BlockId,
-        crate::runtime::PortId,
-        BlockId,
-        crate::runtime::PortId,
-    )>,
-    message_edges: Vec<(
-        BlockId,
-        crate::runtime::PortId,
-        BlockId,
-        crate::runtime::PortId,
-    )>,
+    stream_edges: Vec<TopologyEdge>,
+    message_edges: Vec<TopologyEdge>,
 }
 
 impl LocalDomainState {
@@ -53,46 +46,15 @@ impl LocalDomainState {
         }
     }
 
-    pub(crate) fn add_stream_edge(
-        &mut self,
-        edge: (
-            BlockId,
-            crate::runtime::PortId,
-            BlockId,
-            crate::runtime::PortId,
-        ),
-    ) {
+    pub(crate) fn add_stream_edge(&mut self, edge: TopologyEdge) {
         self.stream_edges.push(edge);
     }
 
-    pub(crate) fn add_message_edge(
-        &mut self,
-        edge: (
-            BlockId,
-            crate::runtime::PortId,
-            BlockId,
-            crate::runtime::PortId,
-        ),
-    ) {
+    pub(crate) fn add_message_edge(&mut self, edge: TopologyEdge) {
         self.message_edges.push(edge);
     }
 
-    pub(crate) fn topology(
-        &self,
-    ) -> (
-        Vec<(
-            BlockId,
-            crate::runtime::PortId,
-            BlockId,
-            crate::runtime::PortId,
-        )>,
-        Vec<(
-            BlockId,
-            crate::runtime::PortId,
-            BlockId,
-            crate::runtime::PortId,
-        )>,
-    ) {
+    pub(crate) fn topology(&self) -> (Vec<TopologyEdge>, Vec<TopologyEdge>) {
         (self.stream_edges.clone(), self.message_edges.clone())
     }
 
@@ -257,25 +219,7 @@ impl LocalDomainRuntime {
         self.controller.exec_async(f).await
     }
 
-    pub(crate) fn topology(
-        &self,
-    ) -> Result<
-        (
-            Vec<(
-                BlockId,
-                crate::runtime::PortId,
-                BlockId,
-                crate::runtime::PortId,
-            )>,
-            Vec<(
-                BlockId,
-                crate::runtime::PortId,
-                BlockId,
-                crate::runtime::PortId,
-            )>,
-        ),
-        Error,
-    > {
+    pub(crate) fn topology(&self) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
         self.exec(|state| Ok(state.topology()))
     }
 
@@ -642,7 +586,7 @@ mod tests {
 
     #[test]
     fn controller_drop_terminates_running_local_blocks() -> Result<(), Error> {
-        let controller = LocalDomainController::new();
+        let controller = LocalDomainController::try_new()?;
         controller.build(
             0,
             Box::new(|inbox, inbox_rx| {

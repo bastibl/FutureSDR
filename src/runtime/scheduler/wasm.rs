@@ -452,7 +452,7 @@ impl WasmExecutor {
             }
 
             if ran {
-                yield_now().await;
+                crate::runtime::yield_now().await;
             } else {
                 TimeoutFuture::new(1).await;
             }
@@ -567,27 +567,5 @@ struct CallOnDrop<F: Fn()>(F);
 impl<F: Fn()> Drop for CallOnDrop<F> {
     fn drop(&mut self) {
         (self.0)();
-    }
-}
-
-fn yield_now() -> YieldNow {
-    YieldNow(false)
-}
-
-#[derive(Debug)]
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-struct YieldNow(bool);
-
-impl Future for YieldNow {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.0 {
-            self.0 = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
     }
 }

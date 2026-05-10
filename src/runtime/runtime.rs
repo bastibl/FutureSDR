@@ -20,12 +20,12 @@ use crate::runtime::FlowgraphId;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::FlowgraphTask;
 use crate::runtime::Pmt;
-use crate::runtime::PortId;
 use crate::runtime::RunningFlowgraph;
 use crate::runtime::channel::mpsc::Receiver;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::mpsc::channel;
 use crate::runtime::config;
+use crate::runtime::flowgraph::TopologyEdge;
 use crate::runtime::scheduler::Scheduler;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::scheduler::SmolScheduler;
@@ -405,8 +405,8 @@ async fn recv_flowgraph_message(rx: &Receiver<FlowgraphMessage>) -> Option<Flowg
 async fn run_flowgraph_loop(
     inboxes: &mut [Option<crate::runtime::dev::BlockInbox>],
     ids: &[BlockId],
-    stream_edges_desc: Vec<(BlockId, PortId, BlockId, PortId)>,
-    message_edges_desc: Vec<(BlockId, PortId, BlockId, PortId)>,
+    stream_edges_desc: Vec<TopologyEdge>,
+    message_edges_desc: Vec<TopologyEdge>,
     main_channel: Sender<FlowgraphMessage>,
     main_rx: Receiver<FlowgraphMessage>,
     initialized: oneshot::Sender<Result<(), Error>>,
