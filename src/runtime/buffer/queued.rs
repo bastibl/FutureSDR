@@ -271,7 +271,11 @@ where
         let mut min_items = if buffer_size_configured {
             let min_self = self.core.min_buffer_size_in_items().unwrap_or(0);
             let min_reader = dest.core.min_buffer_size_in_items().unwrap_or(0);
-            std::cmp::max(min_self, min_reader)
+            // `reserved_items` are look-ahead items kept before the readable
+            // slice so readers with `set_min_items` can span chunk boundaries.
+            // Configured buffer sizes describe usable items, so allocate the
+            // requested usable size in addition to the reserved prefix.
+            reserved_items + std::cmp::max(min_self, min_reader)
         } else {
             config::config().buffer_size / size_of::<D>()
         };

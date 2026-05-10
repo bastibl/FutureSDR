@@ -6,6 +6,9 @@ use futuresdr::blocks::Fft;
 use futuresdr::blocks::StreamDuplicator;
 use futuresdr::blocks::wasm::HackRf;
 use futuresdr::prelude::*;
+use futuresdr::runtime::BlockMessage;
+use futuresdr::runtime::channel::mpsc;
+use futuresdr::runtime::dev::BlockInbox;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::CpuBufferReader;
 use futuresdr::runtime::dev::DefaultCpuReader;
@@ -31,8 +34,8 @@ use crate::MovingAverage;
 use crate::SyncLong;
 use crate::SyncShort;
 
-const DEFAULT_CHANNEL: &str = "1";
-const DEFAULT_FREQUENCY: f64 = 2_412_000_000.0;
+const DEFAULT_CHANNEL: &str = "11";
+const DEFAULT_FREQUENCY: f64 = 2_462_000_000.0;
 const DEFAULT_SAMPLE_RATE: f64 = 20_000_000.0;
 const DC_OFFSET_CORRECTION: bool = true;
 const DC_OFFSET_WARMUP_SAMPLES: usize = 1_000_000;
@@ -109,20 +112,17 @@ const WLAN_CHANNELS: &[(&str, f64)] = &[
     ("184", 5920e6),
 ];
 
-type FrameQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
+type FrameSender = mpsc::Sender<Vec<u8>>;
+type FrameReceiver = mpsc::Receiver<Vec<u8>>;
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
 #[derive(Clone)]
 struct RunControl {
-    flowgraph: FlowgraphHandle,
-    source: BlockId,
+    source: BlockInbox,
 }
 
 struct Receiver {
     _runtime: Runtime,
-    control: RunControl,
-    frames: FrameQueue,
-    failure: Shared<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -139,11 +139,11 @@ struct ReceiverConfig {
 #[message_inputs(r#in)]
 #[null_kernel]
 struct FramePipe {
-    frames: FrameQueue,
+    frames: FrameSender,
 }
 
 impl FramePipe {
-    fn new(frames: FrameQueue) -> Self {
+    fn new(frames: FrameSender) -> Self {
         Self { frames }
     }
 
@@ -155,16 +155,25 @@ impl FramePipe {
         p: Pmt,
     ) -> Result<Pmt> {
         if let Pmt::Blob(data) = p {
-            futuresdr::tracing::info!("WLAN decoder output frame: {} bytes", data.len());
-            let mut frames = self
-                .frames
-                .lock()
-                .map_err(|_| anyhow::anyhow!("frame queue lock poisoned"))?;
-            frames.push_back(data);
-            while frames.len() > FRAME_QUEUE_LIMIT {
-                frames.pop_front();
+            let len = data.len();
+            match self.frames.try_send(data) {
+                Ok(()) => {
+                    futuresdr::tracing::info!("WLAN decoder queued frame for GUI: {len} bytes");
+                    Ok(Pmt::Ok)
+                }
+                Err(mpsc::TrySendError::Full(_)) => {
+                    futuresdr::tracing::warn!(
+                        "WLAN GUI frame queue overrun; dropping {len}-byte frame"
+                    );
+                    Ok(Pmt::InvalidValue)
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    futuresdr::tracing::warn!(
+                        "failed to queue WLAN frame for GUI: receiver disconnected"
+                    );
+                    Ok(Pmt::InvalidValue)
+                }
             }
-            Ok(Pmt::Ok)
         } else {
             Ok(Pmt::InvalidValue)
         }
@@ -287,6 +296,7 @@ pub fn Gui() -> impl IntoView {
     let (lna_gain, set_lna_gain) = signal(32u16);
     let (vga_gain, set_vga_gain) = signal(24u16);
     let (amp, set_amp) = signal(true);
+    let receiver_store = Shared::<Receiver>::default();
 
     let start = move |_| {
         if running.get_untracked() {
@@ -305,15 +315,22 @@ pub fn Gui() -> impl IntoView {
         set_running.set(true);
         set_status.set("requesting HackRF permission".to_string());
         set_frames.set(VecDeque::new());
+        let receiver_store = receiver_store.clone();
 
         spawn_local(async move {
-            match start_receiver(config, set_status).await {
+            match start_receiver(config, set_status, set_frames, set_control).await {
                 Ok(receiver) => {
-                    set_control.set(Some(receiver.control.clone()));
                     set_status.set("running".to_string());
-                    poll_frames(receiver, set_frames, set_status).await;
+                    if let Ok(mut stored) = receiver_store.lock() {
+                        *stored = Some(receiver);
+                        futuresdr::tracing::debug!("WLAN receiver handle stored");
+                    } else {
+                        futuresdr::tracing::warn!("failed to store receiver handle");
+                        set_status.set("failed: receiver handle lock poisoned".to_string());
+                    }
                 }
                 Err(e) => {
+                    set_control.set(None);
                     set_running.set(false);
                     set_status.set(format!("failed: {e:?}"));
                 }
@@ -326,7 +343,7 @@ pub fn Gui() -> impl IntoView {
             <header class="bg-slate-800 border-b border-slate-700 shadow-lg">
                 <div class="flex items-center gap-3 px-4 py-3">
                     <div class="text-white font-semibold tracking-tight text-base">"FutureSDR WLAN RX"</div>
-                    <div class="text-xs text-slate-400">"HackRF local domain + 3 WASM scheduler workers, 20 MHz, DC correction"</div>
+                    <div class="text-xs text-slate-400">"HackRF local domain + 5 WASM scheduler workers, 20 MHz, DC correction"</div>
                 </div>
             </header>
 
@@ -346,6 +363,7 @@ pub fn Gui() -> impl IntoView {
                                     let input: HtmlSelectElement = ev.target().unwrap().dyn_into().unwrap();
                                     let chan = input.value();
                                     if let Some((_, freq)) = WLAN_CHANNELS.iter().find(|(c, _)| *c == chan) {
+                                        futuresdr::tracing::info!("GUI channel changed to {chan} ({freq} Hz)");
                                         set_frequency.set(*freq);
                                         post_source(control, "freq", Pmt::F64(*freq));
                                     }
@@ -376,6 +394,7 @@ pub fn Gui() -> impl IntoView {
                                 on:input=move |ev| {
                                     let input: HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
                                     let gain = input.value().parse::<u16>().unwrap_or(32);
+                                    futuresdr::tracing::info!("GUI LNA gain changed to {gain} dB");
                                     set_lna_gain.set(gain);
                                     post_source(control, "lna", Pmt::U32(gain.into()));
                                 }
@@ -394,6 +413,7 @@ pub fn Gui() -> impl IntoView {
                                 on:input=move |ev| {
                                     let input: HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
                                     let gain = input.value().parse::<u16>().unwrap_or(24);
+                                    futuresdr::tracing::info!("GUI VGA gain changed to {gain} dB");
                                     set_vga_gain.set(gain);
                                     post_source(control, "vga", Pmt::U32(gain.into()));
                                 }
@@ -408,6 +428,7 @@ pub fn Gui() -> impl IntoView {
                                 on:change=move |ev| {
                                     let input: HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
                                     let enabled = input.checked();
+                                    futuresdr::tracing::info!("GUI RF amp changed to {enabled}");
                                     set_amp.set(enabled);
                                     post_source(control, "amp", Pmt::Bool(enabled));
                                 }
@@ -458,17 +479,55 @@ pub fn Gui() -> impl IntoView {
 
 fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p: Pmt) {
     let value = format!("{p:?}");
-    if let Some(control) = control.get_untracked() {
+    if let Some(run_control) = control.get_untracked() {
         spawn_local(async move {
-            futuresdr::tracing::info!("posting HackRF setting {handler} = {value}");
-            match control.flowgraph.post(control.source, handler, p).await {
-                Ok(reply) => futuresdr::tracing::info!("HackRF setting {handler} reply: {reply:?}"),
-                Err(e) => futuresdr::tracing::warn!("failed to post {handler}: {e:?}"),
+            futuresdr::tracing::info!("calling HackRF setting {handler} = {value}");
+            let (tx, rx) = futuresdr::futures::channel::oneshot::channel();
+            let send = Box::pin(run_control.source.send(BlockMessage::Callback {
+                port_id: handler.into(),
+                data: p,
+                tx,
+            }));
+            let timeout = Box::pin(TimeoutFuture::new(2_000));
+
+            match futuresdr::prelude::future::select(send, timeout).await {
+                futuresdr::prelude::future::Either::Left((Ok(()), _)) => {
+                    let reply = Box::pin(rx);
+                    let timeout = Box::pin(TimeoutFuture::new(2_000));
+                    match futuresdr::prelude::future::select(reply, timeout).await {
+                        futuresdr::prelude::future::Either::Left((Ok(Ok(reply)), _)) => {
+                            futuresdr::tracing::info!(
+                                "HackRF setting {handler} reply: {reply:?}"
+                            );
+                        }
+                        futuresdr::prelude::future::Either::Left((Ok(Err(e)), _)) => {
+                            futuresdr::tracing::warn!("failed to call {handler}: {e:?}");
+                        }
+                        futuresdr::prelude::future::Either::Left((Err(e), _)) => {
+                            futuresdr::tracing::warn!(
+                                "HackRF setting {handler} reply channel canceled: {e:?}"
+                            );
+                        }
+                        futuresdr::prelude::future::Either::Right((_, _)) => {
+                            futuresdr::tracing::warn!(
+                                "timed out waiting for HackRF setting {handler} = {value} reply"
+                            );
+                        }
+                    }
+                }
+                futuresdr::prelude::future::Either::Left((Err(e), _)) => {
+                    futuresdr::tracing::warn!("failed to send HackRF setting {handler}: {e:?}");
+                }
+                futuresdr::prelude::future::Either::Right((_, _)) => {
+                    futuresdr::tracing::warn!(
+                        "timed out sending HackRF setting {handler} = {value}"
+                    );
+                }
             }
         });
     } else {
         futuresdr::tracing::debug!(
-            "ignoring HackRF setting {handler} = {value}; receiver not running"
+            "ignoring HackRF setting {handler} = {value}; receiver control not installed yet"
         );
     }
 }
@@ -476,6 +535,8 @@ fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p
 async fn start_receiver(
     config: ReceiverConfig,
     set_status: WriteSignal<String>,
+    set_frames: WriteSignal<VecDeque<Frame>>,
+    set_control: WriteSignal<Option<RunControl>>,
 ) -> anyhow::Result<Receiver> {
     request_hackrf().await?;
     futuresdr::tracing::info!(
@@ -489,14 +550,17 @@ async fn start_receiver(
     );
     set_status.set("starting flowgraph".to_string());
 
-    let rt = Runtime::with_scheduler(WasmScheduler::new(3));
+    let rt = Runtime::with_scheduler(WasmScheduler::new(10));
     let rt_handle = rt.handle();
-    let frames = FrameQueue::default();
-    let frames_for_pipe = frames.clone();
-    let started = Shared::<FlowgraphHandle>::default();
-    let started_for_task = started.clone();
+    let (frame_tx, frames) = mpsc::channel::<Vec<u8>>(FRAME_QUEUE_LIMIT);
+    let frames_for_pipe = frame_tx.clone();
     let failure = Shared::<String>::default();
-    let failure_for_task = failure.clone();
+    spawn_local(poll_frames(
+        frames,
+        failure.clone(),
+        set_frames,
+        set_status,
+    ));
 
     let mut fg = Flowgraph::new();
     let local = fg.local_domain();
@@ -504,53 +568,46 @@ async fn start_receiver(
         HackRf::new()
             .frequency(config.frequency as u64)
             .initial_sample_rate(config.sample_rate)
+            .initial_bandwidth(config.sample_rate)
             .lna_gain(config.lna_gain)
             .vga_gain(config.vga_gain)
             .amp_enable(config.amp)
     });
     let source = src.id();
+    let source_inbox = fg.block_inbox(source)?;
+    let control = RunControl {
+        source: source_inbox,
+    };
+    set_control.set(Some(control.clone()));
+    futuresdr::tracing::debug!("WLAN receiver control inbox installed");
 
+    let failure_for_task = failure.clone();
     let start = rt.spawn(async move {
         let result = async move {
             build_rx_flowgraph(&mut fg, src, frames_for_pipe, config.dc_offset)?;
+            futuresdr::tracing::debug!("starting WLAN WASM flowgraph");
             let running = rt_handle.start(fg).await?;
-            let (task, flowgraph) = running.split();
-            *started_for_task
-                .lock()
-                .map_err(|_| anyhow::anyhow!("started lock poisoned"))? = Some(flowgraph);
-            task.await?;
+            futuresdr::tracing::debug!("WLAN WASM flowgraph started; detaching runtime task");
+            drop(running);
             Ok::<(), anyhow::Error>(())
         }
         .await;
 
-        if let Err(e) = result {
-            if let Ok(mut failure) = failure_for_task.lock() {
-                *failure = Some(format!("{e:?}"));
-            }
+        if let Err(e) = result
+            && let Ok(mut failure) = failure_for_task.lock()
+        {
+            *failure = Some(format!("{e:?}"));
         }
     });
     start.detach();
 
-    loop {
-        if let Some(flowgraph) = started.lock().ok().and_then(|mut h| h.take()) {
-            return Ok(Receiver {
-                _runtime: rt,
-                control: RunControl { flowgraph, source },
-                frames,
-                failure,
-            });
-        }
-        if let Some(error) = failure.lock().ok().and_then(|e| e.clone()) {
-            anyhow::bail!(error);
-        }
-        TimeoutFuture::new(10).await;
-    }
+    Ok(Receiver { _runtime: rt })
 }
 
 fn build_rx_flowgraph(
     fg: &mut Flowgraph,
     src: BlockRef<HackRf>,
-    frames: FrameQueue,
+    frames: FrameSender,
     dc_offset: bool,
 ) -> Result<()> {
     let (prev, output): (BlockId, &'static str) = if dc_offset {
@@ -637,21 +694,28 @@ fn build_rx_flowgraph(
 }
 
 async fn poll_frames(
-    receiver: Receiver,
+    frames_rx: FrameReceiver,
+    failure: Shared<String>,
     set_frames: WriteSignal<VecDeque<Frame>>,
     set_status: WriteSignal<String>,
 ) {
     let mut total_frames = 0usize;
+    let mut displayed_frames = VecDeque::<Frame>::new();
     loop {
-        if let Some(error) = receiver.failure.lock().ok().and_then(|e| e.clone()) {
+        if let Some(error) = failure.lock().ok().and_then(|e| e.clone()) {
             set_status.set(format!("flowgraph stopped: {error}"));
             return;
         }
 
         let mut pending = Vec::new();
-        if let Ok(mut queue) = receiver.frames.lock() {
-            while let Some(data) = queue.pop_front() {
-                pending.push(data);
+        loop {
+            match frames_rx.try_recv() {
+                Ok(data) => pending.push(data),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    set_status.set("flowgraph stopped: frame channel disconnected".to_string());
+                    return;
+                }
             }
         }
 
@@ -661,16 +725,21 @@ async fn poll_frames(
         }
 
         total_frames += pending.len();
+        futuresdr::tracing::info!(
+            "GUI received {} queued WLAN frames (total {})",
+            pending.len(),
+            total_frames
+        );
         set_status.set(format!("running ({total_frames} decoded frames)"));
 
-        set_frames.update(|frames| {
-            for data in pending {
-                frames.push_front(Frame::new(data));
-                while frames.len() > DISPLAY_FRAME_LIMIT {
-                    frames.pop_back();
-                }
+        for data in pending {
+            displayed_frames.push_front(Frame::new(data));
+            while displayed_frames.len() > DISPLAY_FRAME_LIMIT {
+                displayed_frames.pop_back();
             }
-        });
+        }
+        futuresdr::tracing::info!("updating GUI frame list with {} entries", displayed_frames.len());
+        set_frames.set(displayed_frames.clone());
     }
 }
 
@@ -700,25 +769,342 @@ async fn request_hackrf() -> anyhow::Result<()> {
 
 #[derive(Clone, Debug)]
 struct Frame {
-    len: usize,
+    summary: String,
     payload: String,
 }
 
 impl Frame {
     fn new(data: Vec<u8>) -> Self {
-        let len = data.len();
+        let summary = parse_wlan_frame(&data);
         let payload = data
             .iter()
             .take(32)
             .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
             .join(" ");
-        Self { len, payload }
+        Self { summary, payload }
     }
 
     fn render(&self) -> String {
-        format!("received frame ({} bytes): {}", self.len, self.payload)
+        format!("{} | {}", self.summary, self.payload)
     }
+}
+
+fn parse_wlan_frame(data: &[u8]) -> String {
+    let Ok(frame) = ieee80211::GenericFrame::new(data, false) else {
+        return format!("short/invalid WLAN frame ({} bytes)", data.len());
+    };
+
+    let fcf = frame.frame_control_field();
+    let flags = fcf.flags();
+    let frame_type = fcf.frame_type();
+    let mut parts = vec![format!(
+        "{} ({} bytes)",
+        wlan_frame_name(frame_type),
+        data.len()
+    )];
+    if flags.retry() {
+        parts.push("retry".to_string());
+    }
+    if flags.protected() {
+        parts.push("protected".to_string());
+    }
+
+    match frame_type {
+        ieee80211::common::FrameType::Management(subtype) => {
+            parse_management_frame(data, frame, subtype, &mut parts)
+        }
+        ieee80211::common::FrameType::Control(_) => parse_control_frame(frame, &mut parts),
+        ieee80211::common::FrameType::Data(_) => parse_data_frame(data, flags.protected(), &mut parts),
+        ieee80211::common::FrameType::Unknown(_) => {}
+    }
+
+    parts.join(" ")
+}
+
+fn parse_management_frame(
+    data: &[u8],
+    frame: ieee80211::GenericFrame<'_>,
+    subtype: ieee80211::common::ManagementFrameSubtype,
+    parts: &mut Vec<String>,
+) {
+    let dst = frame.address_1();
+    let src = frame
+        .address_2()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "??".to_string());
+    let bssid = frame
+        .address_3()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "??".to_string());
+
+    if let Some(seq_ctrl) = frame.sequence_control() {
+        parts.push(format!(
+            "dst={dst} src={src} bssid={bssid} seq={}",
+            seq_ctrl.sequence_number()
+        ));
+    } else {
+        parts.push(format!("dst={dst} src={src} bssid={bssid}"));
+    }
+
+    if let Some(details) = management_details(data, subtype) {
+        parts.push(details);
+    }
+}
+
+fn parse_control_frame(frame: ieee80211::GenericFrame<'_>, parts: &mut Vec<String>) {
+    parts.push(format!("ra={}", frame.address_1()));
+    if let Some(transmitter) = frame.address_2() {
+        parts.push(format!("ta={transmitter}"));
+    }
+}
+
+fn parse_data_frame(data: &[u8], protected: bool, parts: &mut Vec<String>) {
+    use ieee80211::scroll::Pread;
+
+    let Ok(data_frame) = data.pread_with::<ieee80211::data_frame::DataFrame>(0, false) else {
+        parts.push("short-header".to_string());
+        return;
+    };
+    let header = data_frame.header;
+
+    let dst = header
+        .destination_address()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "??".to_string());
+    let src = header
+        .source_address()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "??".to_string());
+    let bssid = header
+        .bssid()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "??".to_string());
+
+    parts.push(format!(
+        "dst={dst} src={src} bssid={bssid} seq={}",
+        header.sequence_control.sequence_number()
+    ));
+
+    if let Some(qos) = header.qos {
+        parts.push(format!("tid={}", qos[0] & 0xf));
+    }
+
+    if !protected
+        && let Some(payload) = data_frame.payload
+        && let Some(details) = llc_details(payload, 0)
+    {
+        parts.push(details);
+    }
+}
+
+fn wlan_frame_name(frame_type: ieee80211::common::FrameType) -> &'static str {
+    use ieee80211::common::ControlFrameSubtype as Control;
+    use ieee80211::common::DataFrameSubtype as Data;
+    use ieee80211::common::FrameType;
+    use ieee80211::common::ManagementFrameSubtype as Management;
+
+    match frame_type {
+        FrameType::Management(Management::AssociationRequest) => "assoc-req",
+        FrameType::Management(Management::AssociationResponse) => "assoc-resp",
+        FrameType::Management(Management::ProbeRequest) => "probe-req",
+        FrameType::Management(Management::ProbeResponse) => "probe-resp",
+        FrameType::Management(Management::Beacon) => "beacon",
+        FrameType::Management(Management::ATIM) => "atim",
+        FrameType::Management(Management::Disassociation) => "disassoc",
+        FrameType::Management(Management::Authentication) => "auth",
+        FrameType::Management(Management::Deauthentication) => "deauth",
+        FrameType::Management(Management::Action) => "action",
+        FrameType::Management(Management::ActionNoACK) => "action-no-ack",
+        FrameType::Management(Management::Unknown(2)) => "reassoc-req",
+        FrameType::Management(Management::Unknown(3)) => "reassoc-resp",
+        FrameType::Management(Management::Unknown(_)) => "management-other",
+        FrameType::Control(Control::BlockAckRequest) => "block-ack-req",
+        FrameType::Control(Control::BlockAck) => "block-ack",
+        FrameType::Control(Control::PSPoll) => "ps-poll",
+        FrameType::Control(Control::RTS) => "rts",
+        FrameType::Control(Control::CTS) => "cts",
+        FrameType::Control(Control::Ack) => "ack",
+        FrameType::Control(Control::CFEnd) => "cf-end",
+        FrameType::Control(Control::CFEndAck) => "cf-end-ack",
+        FrameType::Control(_) => "control-other",
+        FrameType::Data(Data::Data) => "data",
+        FrameType::Data(Data::Null) => "null-data",
+        FrameType::Data(Data::QoSData) => "qos-data",
+        FrameType::Data(Data::QoSNull) => "qos-null",
+        FrameType::Data(_) => "data-other",
+        FrameType::Unknown(_) => "unknown",
+    }
+}
+
+fn management_details(
+    data: &[u8],
+    subtype: ieee80211::common::ManagementFrameSubtype,
+) -> Option<String> {
+    use ieee80211::common::ManagementFrameSubtype as Management;
+
+    let ie_offset = match subtype {
+        Management::AssociationRequest => 28, // capabilities + listen interval
+        Management::AssociationResponse | Management::Unknown(3) => 30, // capabilities + status + AID
+        Management::Unknown(2) => 34, // reassociation request fields + current AP
+        Management::ProbeRequest => 24, // tagged parameters only
+        Management::ProbeResponse | Management::Beacon => 36, // timestamp + interval + capabilities
+        Management::Disassociation | Management::Deauthentication => 26, // reason code, optional elements
+        Management::Authentication => 30, // auth algorithm + sequence + status, optional elements
+        _ => return None,
+    };
+
+    let elements = data.get(ie_offset..)?;
+    let mut ssid = None;
+    let mut channel = None;
+    let mut i = 0;
+    while i + 2 <= elements.len() {
+        let id = elements[i];
+        let len = elements[i + 1] as usize;
+        i += 2;
+        if i + len > elements.len() {
+            break;
+        }
+        let value = &elements[i..i + len];
+        match id {
+            0 => ssid = Some(printable(value)),
+            3 if len == 1 => channel = Some(value[0]),
+            _ => {}
+        }
+        i += len;
+    }
+
+    let mut details = Vec::new();
+    if let Some(ssid) = ssid {
+        if ssid.is_empty() {
+            details.push("ssid=<hidden>".to_string());
+        } else {
+            details.push(format!("ssid=\"{ssid}\""));
+        }
+    }
+    if let Some(channel) = channel {
+        details.push(format!("ch={channel}"));
+    }
+
+    (!details.is_empty()).then(|| details.join(" "))
+}
+
+fn llc_details(data: &[u8], offset: usize) -> Option<String> {
+    let llc = data.get(offset..)?;
+    if llc.len() < 8 || llc[0..3] != [0xaa, 0xaa, 0x03] {
+        return None;
+    }
+
+    let ethertype = be_u16_at(llc, 6)?;
+    let mut detail = format!("eth={}", ethertype_name(ethertype));
+    match ethertype {
+        0x0800 => {
+            if let Some(ip) = ipv4_details(llc, 8) {
+                detail.push(' ');
+                detail.push_str(&ip);
+            }
+        }
+        0x0806 => {
+            if let Some(arp) = arp_details(llc, 8) {
+                detail.push(' ');
+                detail.push_str(&arp);
+            }
+        }
+        0x86dd => {
+            if let Some(ip) = ipv6_details(llc, 8) {
+                detail.push(' ');
+                detail.push_str(&ip);
+            }
+        }
+        _ => {}
+    }
+    Some(detail)
+}
+
+fn ethertype_name(ethertype: u16) -> String {
+    match ethertype {
+        0x0800 => "IPv4".to_string(),
+        0x0806 => "ARP".to_string(),
+        0x86dd => "IPv6".to_string(),
+        0x888e => "EAPOL".to_string(),
+        _ => format!("0x{ethertype:04x}"),
+    }
+}
+
+fn ipv4_details(data: &[u8], offset: usize) -> Option<String> {
+    let ip = data.get(offset..)?;
+    if ip.len() < 20 || ip[0] >> 4 != 4 {
+        return None;
+    }
+    let ihl = usize::from(ip[0] & 0x0f) * 4;
+    if ihl < 20 || ip.len() < ihl {
+        return None;
+    }
+    let proto = match ip[9] {
+        1 => "ICMP",
+        6 => "TCP",
+        17 => "UDP",
+        _ => "IP",
+    };
+    Some(format!(
+        "{} {} -> {}",
+        proto,
+        ipv4_addr(&ip[12..16]),
+        ipv4_addr(&ip[16..20])
+    ))
+}
+
+fn arp_details(data: &[u8], offset: usize) -> Option<String> {
+    let arp = data.get(offset..offset + 28)?;
+    let op = be_u16_at(arp, 6)?;
+    Some(format!(
+        "op={} {} -> {}",
+        op,
+        ipv4_addr(&arp[14..18]),
+        ipv4_addr(&arp[24..28])
+    ))
+}
+
+fn ipv6_details(data: &[u8], offset: usize) -> Option<String> {
+    let ip = data.get(offset..)?;
+    if ip.len() < 40 || ip[0] >> 4 != 6 {
+        return None;
+    }
+    let proto = match ip[6] {
+        6 => "TCP",
+        17 => "UDP",
+        58 => "ICMPv6",
+        _ => "IPv6",
+    };
+    Some(format!(
+        "{} {} -> {}",
+        proto,
+        ipv6_addr(&ip[8..24]),
+        ipv6_addr(&ip[24..40])
+    ))
+}
+
+fn ipv4_addr(b: &[u8]) -> String {
+    format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3])
+}
+
+fn ipv6_addr(b: &[u8]) -> String {
+    b.chunks_exact(2)
+        .map(|chunk| format!("{:x}", u16::from_be_bytes([chunk[0], chunk[1]])))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn printable(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .map(|c| if c.is_control() { '·' } else { c })
+        .collect()
+}
+
+fn be_u16_at(data: &[u8], offset: usize) -> Option<u16> {
+    let b = data.get(offset..offset + 2)?;
+    Some(u16::from_be_bytes([b[0], b[1]]))
 }
 
 pub fn frontend() {

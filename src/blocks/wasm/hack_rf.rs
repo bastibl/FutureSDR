@@ -1,4 +1,5 @@
 use futures::FutureExt;
+use std::collections::VecDeque;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::WorkerGlobalScope;
@@ -6,6 +7,7 @@ use web_sys::WorkerGlobalScope;
 use crate::runtime::dev::prelude::*;
 
 const TRANSFER_SIZE: usize = 262144;
+const N_PENDING_TRANSFERS: usize = 8;
 const USB_INIT_TIMEOUT_MS: u32 = 10_000;
 
 async fn wait_usb<T>(future: JsFuture<T>, operation: &str) -> Result<T, Error> {
@@ -117,7 +119,7 @@ impl From<JsValue> for Error {
 ///
 /// # Message Inputs
 ///
-/// `freq`, `vga`, `lna`, `amp`, `sample_rate`: Device settings.
+/// `freq`, `vga`, `lna`, `amp`, `sample_rate`, `bandwidth`: Device settings.
 ///
 /// # Usage
 /// ```ignore
@@ -126,16 +128,17 @@ impl From<JsValue> for Error {
 /// let source = HackRf::new();
 /// ```
 #[derive(LocalBlock)]
-#[message_inputs(freq, vga, lna, amp, sample_rate)]
+#[message_inputs(freq, vga, lna, amp, sample_rate, bandwidth)]
 pub struct HackRf {
     #[output]
     output: slab::Writer<Complex32>,
     buffer: Box<[i8]>,
     offset: usize,
     device: Option<web_sys::UsbDevice>,
-    pending_transfer: Option<js_sys::Promise<web_sys::UsbInTransferResult>>,
+    pending_transfers: VecDeque<js_sys::Promise<web_sys::UsbInTransferResult>>,
     frequency: u64,
     sample_rate: Option<f64>,
+    bandwidth: Option<f64>,
     vga_gain: u16,
     lna_gain: u16,
     amp: bool,
@@ -144,8 +147,10 @@ pub struct HackRf {
     samples_since_log: usize,
     samples_produced_total: u64,
     production_logs_remaining: u8,
+    low_rate_intervals: u32,
     last_log_ms: f64,
     last_backpressure_log_ms: f64,
+    last_overrun_log_ms: f64,
 }
 
 impl Default for HackRf {
@@ -162,9 +167,10 @@ impl HackRf {
             buffer: vec![0; TRANSFER_SIZE].into_boxed_slice(),
             offset: TRANSFER_SIZE,
             device: None,
-            pending_transfer: None,
+            pending_transfers: VecDeque::new(),
             frequency: 2_480_000_000,
             sample_rate: None,
+            bandwidth: None,
             vga_gain: 2,
             lna_gain: 32,
             amp: true,
@@ -173,8 +179,10 @@ impl HackRf {
             samples_since_log: 0,
             samples_produced_total: 0,
             production_logs_remaining: 5,
+            low_rate_intervals: 0,
             last_log_ms: js_sys::Date::now(),
             last_backpressure_log_ms: js_sys::Date::now(),
+            last_overrun_log_ms: js_sys::Date::now(),
         }
     }
 
@@ -187,6 +195,12 @@ impl HackRf {
     /// Set the initial sample rate in Hz.
     pub fn initial_sample_rate(mut self, sample_rate: f64) -> Self {
         self.sample_rate = Some(sample_rate);
+        self
+    }
+
+    /// Set the initial baseband filter bandwidth in Hz.
+    pub fn initial_bandwidth(mut self, bandwidth: f64) -> Self {
+        self.bandwidth = Some(bandwidth);
         self
     }
 
@@ -215,16 +229,20 @@ impl HackRf {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::F32(v) => self.set_freq(*v as u64).await,
-            Pmt::F64(v) => self.set_freq(*v as u64).await,
-            Pmt::U32(v) => self.set_freq(*v as u64).await,
-            Pmt::U64(v) => self.set_freq(*v).await,
+        let (hz, res) = match &p {
+            Pmt::F32(v) => (*v as u64, self.set_freq(*v as u64).await),
+            Pmt::F64(v) => (*v as u64, self.set_freq(*v as u64).await),
+            Pmt::U32(v) => (*v as u64, self.set_freq(*v as u64).await),
+            Pmt::U64(v) => (*v, self.set_freq(*v).await),
             _ => return Ok(Pmt::InvalidValue),
         };
         if res.is_ok() {
+            self.frequency = hz;
+            self.flush_rx_queue("frequency change");
+            info!("HackRF WebUSB frequency set to {hz} Hz");
             Ok(Pmt::Ok)
         } else {
+            warn!("HackRF WebUSB failed to set frequency to {hz} Hz: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
@@ -236,16 +254,20 @@ impl HackRf {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::F32(v) => self.set_lna_gain(*v as u16).await,
-            Pmt::F64(v) => self.set_lna_gain(*v as u16).await,
-            Pmt::U32(v) => self.set_lna_gain(*v as u16).await,
-            Pmt::U64(v) => self.set_lna_gain(*v as u16).await,
+        let (gain, res) = match &p {
+            Pmt::F32(v) => (*v as u16, self.set_lna_gain(*v as u16).await),
+            Pmt::F64(v) => (*v as u16, self.set_lna_gain(*v as u16).await),
+            Pmt::U32(v) => (*v as u16, self.set_lna_gain(*v as u16).await),
+            Pmt::U64(v) => (*v as u16, self.set_lna_gain(*v as u16).await),
             _ => return Ok(Pmt::InvalidValue),
         };
         if res.is_ok() {
+            self.lna_gain = gain;
+            self.flush_rx_queue("LNA gain change");
+            info!("HackRF WebUSB LNA gain set to {gain} dB");
             Ok(Pmt::Ok)
         } else {
+            warn!("HackRF WebUSB failed to set LNA gain to {gain} dB: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
@@ -257,16 +279,20 @@ impl HackRf {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::F32(v) => self.set_vga_gain(*v as u16).await,
-            Pmt::F64(v) => self.set_vga_gain(*v as u16).await,
-            Pmt::U32(v) => self.set_vga_gain(*v as u16).await,
-            Pmt::U64(v) => self.set_vga_gain(*v as u16).await,
+        let (gain, res) = match &p {
+            Pmt::F32(v) => (*v as u16, self.set_vga_gain(*v as u16).await),
+            Pmt::F64(v) => (*v as u16, self.set_vga_gain(*v as u16).await),
+            Pmt::U32(v) => (*v as u16, self.set_vga_gain(*v as u16).await),
+            Pmt::U64(v) => (*v as u16, self.set_vga_gain(*v as u16).await),
             _ => return Ok(Pmt::InvalidValue),
         };
         if res.is_ok() {
+            self.vga_gain = gain;
+            self.flush_rx_queue("VGA gain change");
+            info!("HackRF WebUSB VGA gain set to {gain} dB");
             Ok(Pmt::Ok)
         } else {
+            warn!("HackRF WebUSB failed to set VGA gain to {gain} dB: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
@@ -278,13 +304,17 @@ impl HackRf {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::Bool(b) => self.set_amp_enable(*b).await,
+        let (enabled, res) = match &p {
+            Pmt::Bool(b) => (*b, self.set_amp_enable(*b).await),
             _ => return Ok(Pmt::InvalidValue),
         };
         if res.is_ok() {
+            self.amp = enabled;
+            self.flush_rx_queue("amp change");
+            info!("HackRF WebUSB amp set to {enabled}");
             Ok(Pmt::Ok)
         } else {
+            warn!("HackRF WebUSB failed to set amp to {enabled}: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
@@ -296,19 +326,53 @@ impl HackRf {
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::F32(v) => self.set_sample_rate_auto(*v as f64).await,
-            Pmt::F64(v) => self.set_sample_rate_auto(*v).await,
-            Pmt::U32(v) => self.set_sample_rate_auto(*v as f64).await,
-            Pmt::U64(v) => self.set_sample_rate_auto(*v as f64).await,
+        let (rate, res) = match &p {
+            Pmt::F32(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
+            Pmt::F64(v) => (*v, self.set_sample_rate_auto(*v).await),
+            Pmt::U32(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
+            Pmt::U64(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
             _ => return Ok(Pmt::InvalidValue),
         };
         if res.is_ok() {
+            self.sample_rate = Some(rate);
+            self.low_rate_intervals = 0;
+            self.flush_rx_queue("sample-rate change");
             Ok(Pmt::Ok)
         } else {
             Ok(Pmt::InvalidValue)
         }
     }
+
+    async fn bandwidth(
+        &mut self,
+        _io: &mut LocalWorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+        p: Pmt,
+    ) -> Result<Pmt> {
+        let res = match &p {
+            Pmt::F32(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
+            Pmt::F64(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
+            Pmt::U32(v) => self.set_baseband_filter_bandwidth(*v).await,
+            Pmt::U64(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
+            _ => return Ok(Pmt::InvalidValue),
+        };
+        if res.is_ok() {
+            self.flush_rx_queue("bandwidth change");
+            Ok(Pmt::Ok)
+        } else {
+            Ok(Pmt::InvalidValue)
+        }
+    }
+
+    fn flush_rx_queue(&mut self, reason: &str) {
+        let queued = self.pending_transfers.len();
+        self.pending_transfers.clear();
+        self.offset = TRANSFER_SIZE;
+        self.buffer.fill(0);
+        debug!("HackRF WebUSB flushed RX queue after {reason} ({queued} queued transfers dropped)");
+    }
+
     async fn read_control<const N: usize>(
         &self,
         request: Request,
@@ -513,36 +577,50 @@ impl HackRf {
     }
 
     fn start_transfer(&mut self) {
-        if self.pending_transfer.is_some() {
-            return;
-        }
-
         let transfer = self
             .device
             .as_ref()
             .unwrap()
             .transfer_in(1, TRANSFER_SIZE as u32);
-        self.pending_transfer = Some(transfer);
+        self.pending_transfers.push_back(transfer);
+    }
+
+    fn fill_transfer_queue(&mut self) {
+        while self.pending_transfers.len() < N_PENDING_TRANSFERS {
+            self.start_transfer();
+        }
     }
 
     async fn fill_buffer(&mut self) -> Result<(), Error> {
-        self.start_transfer();
+        self.fill_transfer_queue();
         if self.transfers_total == 0 {
             info!(
-                "HackRF WebUSB waiting for first bulk transfer: endpoint 1, {} bytes",
-                TRANSFER_SIZE
+                "HackRF WebUSB waiting for first bulk transfer: endpoint 1, {} bytes, {} queued transfers",
+                TRANSFER_SIZE,
+                self.pending_transfers.len()
             );
         }
-        let transfer = self.pending_transfer.take().unwrap();
+        let transfer = self.pending_transfers.pop_front().unwrap();
 
-        let data = wait_usb(JsFuture::from(transfer), "USB bulk transfer in")
+        let transfer = wait_usb(JsFuture::from(transfer), "USB bulk transfer in")
             .await?
             .dyn_into::<web_sys::UsbInTransferResult>()
-            .unwrap()
+            .unwrap();
+        let status = transfer.status();
+        if status != web_sys::UsbTransferStatus::Ok {
+            warn!("HackRF WebUSB bulk transfer status {status:?}; samples may have been lost");
+        }
+        let data = transfer
             .data()
-            .unwrap()
+            .ok_or_else(|| {
+                Error::BrowserError(format!(
+                    "USB bulk transfer returned {status:?} without data"
+                ))
+            })?
             .dyn_into::<js_sys::DataView>()
             .unwrap();
+        self.fill_transfer_queue();
+
         let byte_length = data.byte_length();
         if self.transfers_total == 0 {
             info!("HackRF WebUSB received first bulk transfer: {byte_length} bytes");
@@ -554,10 +632,12 @@ impl HackRf {
             )));
         }
 
-        self.start_transfer();
-        for i in 0..TRANSFER_SIZE {
-            self.buffer[i] = data.get_int8(i);
-        }
+        let samples = js_sys::Int8Array::new_with_byte_offset_and_length(
+            &data.buffer(),
+            data.byte_offset() as u32,
+            byte_length as u32,
+        );
+        samples.copy_to(&mut self.buffer);
         self.offset = 0;
         self.transfers_total += 1;
         self.transfers_since_log += 1;
@@ -574,6 +654,21 @@ impl HackRf {
                 self.transfers_since_log as f64 / elapsed_s,
                 self.transfers_total
             );
+            if let Some(sample_rate) = self.sample_rate {
+                let expected_msps = sample_rate / 1.0e6;
+                if msps < 0.90 * expected_msps {
+                    self.low_rate_intervals += 1;
+                    if self.low_rate_intervals >= 3 && now - self.last_overrun_log_ms >= 5_000.0 {
+                        warn!(
+                            "HackRF WebUSB sustained RX throughput below requested rate: {:.2}/{:.2} MS/s; samples may be dropped",
+                            msps, expected_msps
+                        );
+                        self.last_overrun_log_ms = now;
+                    }
+                } else {
+                    self.low_rate_intervals = 0;
+                }
+            }
             self.samples_since_log = 0;
             self.transfers_since_log = 0;
             self.last_log_ms = now;
@@ -639,14 +734,26 @@ impl LocalKernel for HackRf {
 
         self.device = Some(device);
         info!(
-            "HackRF WebUSB init: frequency {} Hz, requested sample rate {:?} Hz, LNA {} dB, VGA {} dB, amp {}",
-            self.frequency, self.sample_rate, self.lna_gain, self.vga_gain, self.amp
+            "HackRF WebUSB init: frequency {} Hz, requested sample rate {:?} Hz, requested bandwidth {:?} Hz, LNA {} dB, VGA {} dB, amp {}",
+            self.frequency,
+            self.sample_rate,
+            self.bandwidth,
+            self.lna_gain,
+            self.vga_gain,
+            self.amp
         );
 
         if let Some(sample_rate) = self.sample_rate {
             self.set_sample_rate_auto(sample_rate).await?;
         } else {
             self.set_sample_rate(8_000_000, 2).await?;
+        }
+        if let Some(bandwidth) = self.bandwidth {
+            self.set_baseband_filter_bandwidth(bandwidth as u32).await?;
+            info!(
+                "HackRF WebUSB baseband filter bandwidth set to {} Hz",
+                bandwidth
+            );
         }
         self.set_hw_sync_mode(0).await?;
         self.set_freq(self.frequency).await?;
@@ -696,8 +803,8 @@ impl LocalKernel for HackRf {
         } else if self.offset < TRANSFER_SIZE {
             let now = js_sys::Date::now();
             if now - self.last_backpressure_log_ms >= 1000.0 {
-                info!(
-                    "HackRF WebUSB backpressure: no output buffer space (buffer offset {}/{}, total samples {})",
+                debug!(
+                    "HackRF WebUSB output buffer full; applying backpressure (buffer offset {}/{}, total samples {})",
                     self.offset, TRANSFER_SIZE, self.samples_produced_total
                 );
                 self.last_backpressure_log_ms = now;

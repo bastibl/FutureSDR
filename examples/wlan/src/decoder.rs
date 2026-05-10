@@ -157,7 +157,7 @@ where
         }) {
             if *index == 0 {
                 if !self.frame_complete {
-                    warn!("decoder: previous frame not complete, canceling.");
+                    debug!("decoder: previous frame not complete, canceling.");
                 }
                 let frame_param = any.downcast_ref::<FrameParam>().unwrap();
                 if frame_param.n_symbols() <= MAX_SYM && frame_param.psdu_size() <= MAX_PSDU_SIZE {
@@ -165,7 +165,7 @@ where
                     self.copied = 0;
                     self.frame_complete = false;
                 } else {
-                    warn!("decoder: frame too large, dropping. ({:?})", frame_param);
+                    debug!("decoder: frame too large, dropping. ({:?})", frame_param);
                 }
             } else {
                 input = &input[0..*index];

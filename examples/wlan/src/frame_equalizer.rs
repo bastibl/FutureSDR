@@ -98,6 +98,7 @@ where
     starts: usize,
     signal_failures: usize,
     signal_successes: usize,
+    work_logs: usize,
 }
 
 impl<I, O> FrameEqualizer<I, O>
@@ -126,6 +127,7 @@ where
             starts: 0,
             signal_failures: 0,
             signal_successes: 0,
+            work_logs: 0,
         }
     }
 
@@ -241,6 +243,16 @@ where
 
         let max_i = input.len() / 64;
         let max_o = out.len() / 48;
+        if self.work_logs < 20 && (max_i > 0 || !in_tags.is_empty()) {
+            info!(
+                "frame equalizer: work state {:?}, input {}, tags {}, output room {} symbols",
+                self.state,
+                input.len(),
+                in_tags.len(),
+                max_o
+            );
+            self.work_logs += 1;
+        }
         let mut i = 0;
         let mut o = 0;
 

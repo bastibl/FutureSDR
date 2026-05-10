@@ -48,7 +48,6 @@ impl std::future::Future for FlowgraphTask {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for FlowgraphTask {
     fn drop(&mut self) {
         if let TaskState::Running(task) = std::mem::replace(&mut self.state, TaskState::Completed) {
