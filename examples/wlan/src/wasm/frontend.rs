@@ -1,25 +1,41 @@
 use any_spawner::Executor;
+use futuresdr::blocks::Apply;
+use futuresdr::blocks::Combine;
+use futuresdr::blocks::Delay;
+use futuresdr::blocks::Fft;
+use futuresdr::blocks::StreamDuplicator;
 use futuresdr::blocks::wasm::HackRf;
-use futuresdr::blocks::{Apply, Combine, Delay, Fft};
 use futuresdr::prelude::*;
-use futuresdr::runtime::dev::{BlockMeta, MessageOutputs, WorkIo};
+use futuresdr::runtime::dev::BlockMeta;
+use futuresdr::runtime::dev::CpuBufferReader;
+use futuresdr::runtime::dev::DefaultCpuReader;
+use futuresdr::runtime::dev::Kernel;
+use futuresdr::runtime::dev::MessageOutputs;
+use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
 use futuresdr::runtime::scheduler::WasmScheduler;
 use gloo_timers::future::TimeoutFuture;
-use leptos::html::Input;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys::HtmlInputElement;
+use leptos::web_sys::HtmlSelectElement;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::{Decoder, FrameEqualizer, MovingAverage, SyncLong, SyncShort};
+use crate::Decoder;
+use crate::FrameEqualizer;
+use crate::MovingAverage;
+use crate::SyncLong;
+use crate::SyncShort;
 
-const DEFAULT_CHANNEL: &str = "34";
-const DEFAULT_FREQUENCY: f64 = 5_170_000_000.0;
+const DEFAULT_CHANNEL: &str = "1";
+const DEFAULT_FREQUENCY: f64 = 2_412_000_000.0;
 const DEFAULT_SAMPLE_RATE: f64 = 20_000_000.0;
+const DC_OFFSET_CORRECTION: bool = true;
+const DC_OFFSET_WARMUP_SAMPLES: usize = 1_000_000;
 const FRAME_QUEUE_LIMIT: usize = 100;
 const DISPLAY_FRAME_LIMIT: usize = 50;
 
@@ -139,6 +155,7 @@ impl FramePipe {
         p: Pmt,
     ) -> Result<Pmt> {
         if let Pmt::Blob(data) = p {
+            futuresdr::tracing::info!("WLAN decoder output frame: {} bytes", data.len());
             let mut frames = self
                 .frames
                 .lock()
@@ -154,6 +171,112 @@ impl FramePipe {
     }
 }
 
+#[derive(Block)]
+struct SampleStats<I = DefaultCpuReader<Complex32>>
+where
+    I: CpuBufferReader<Item = Complex32>,
+{
+    #[input]
+    input: I,
+    label: &'static str,
+    count: usize,
+    sum_re: f64,
+    sum_im: f64,
+    sum_power: f64,
+    peak_power: f64,
+    last_ms: f64,
+    first_log_done: bool,
+    tags_seen: usize,
+}
+
+impl SampleStats {
+    fn new(label: &'static str) -> Self {
+        Self {
+            input: DefaultCpuReader::default(),
+            label,
+            count: 0,
+            sum_re: 0.0,
+            sum_im: 0.0,
+            sum_power: 0.0,
+            peak_power: 0.0,
+            last_ms: js_sys::Date::now(),
+            first_log_done: false,
+            tags_seen: 0,
+        }
+    }
+}
+
+impl<I> Kernel for SampleStats<I>
+where
+    I: CpuBufferReader<Item = Complex32>,
+{
+    async fn work(
+        &mut self,
+        io: &mut WorkIo,
+        _mo: &mut MessageOutputs,
+        _meta: &mut BlockMeta,
+    ) -> Result<()> {
+        let (input, tags) = self.input.slice_with_tags();
+        let n = input.len();
+
+        for tag in tags.iter() {
+            self.tags_seen += 1;
+            if self.tags_seen <= 20 {
+                futuresdr::tracing::info!(
+                    "{}: tag {} at index {}: {:?}",
+                    self.label,
+                    self.tags_seen,
+                    tag.index,
+                    tag.tag
+                );
+            }
+        }
+
+        for c in input.iter() {
+            self.count += 1;
+            self.sum_re += c.re as f64;
+            self.sum_im += c.im as f64;
+            let power = c.norm_sqr() as f64;
+            self.sum_power += power;
+            self.peak_power = self.peak_power.max(power);
+        }
+
+        self.input.consume(n);
+        if self.input.finished() {
+            io.finished = true;
+        }
+
+        if n > 0 && !self.first_log_done {
+            futuresdr::tracing::info!("{}: received first {n} samples", self.label);
+            self.first_log_done = true;
+        }
+
+        let now = js_sys::Date::now();
+        let elapsed_ms = now - self.last_ms;
+        if elapsed_ms >= 1000.0 && self.count > 0 {
+            let elapsed_s = elapsed_ms / 1000.0;
+            futuresdr::tracing::info!(
+                "{}: {:.2} MS/s, mean=({:.4}, {:.4}), rms={:.4}, peak={:.4}",
+                self.label,
+                self.count as f64 / elapsed_s / 1.0e6,
+                self.sum_re / self.count as f64,
+                self.sum_im / self.count as f64,
+                (self.sum_power / self.count as f64).sqrt(),
+                self.peak_power.sqrt(),
+            );
+
+            self.count = 0;
+            self.sum_re = 0.0;
+            self.sum_im = 0.0;
+            self.sum_power = 0.0;
+            self.peak_power = 0.0;
+            self.last_ms = now;
+        }
+
+        Ok(())
+    }
+}
+
 #[component]
 pub fn Gui() -> impl IntoView {
     let (status, set_status) = signal(String::from("idle"));
@@ -161,11 +284,9 @@ pub fn Gui() -> impl IntoView {
     let (frames, set_frames) = signal(VecDeque::<Frame>::new());
     let (control, set_control) = signal(None::<RunControl>);
     let (frequency, set_frequency) = signal(DEFAULT_FREQUENCY);
-    let (sample_rate, set_sample_rate) = signal(DEFAULT_SAMPLE_RATE);
     let (lna_gain, set_lna_gain) = signal(32u16);
     let (vga_gain, set_vga_gain) = signal(24u16);
     let (amp, set_amp) = signal(true);
-    let dc_offset = NodeRef::<Input>::new();
 
     let start = move |_| {
         if running.get_untracked() {
@@ -174,14 +295,11 @@ pub fn Gui() -> impl IntoView {
 
         let config = ReceiverConfig {
             frequency: frequency.get_untracked(),
-            sample_rate: sample_rate.get_untracked(),
+            sample_rate: DEFAULT_SAMPLE_RATE,
             lna_gain: lna_gain.get_untracked(),
             vga_gain: vga_gain.get_untracked(),
             amp: amp.get_untracked(),
-            dc_offset: dc_offset
-                .get_untracked()
-                .map(|input| input.checked())
-                .unwrap_or(false),
+            dc_offset: DC_OFFSET_CORRECTION,
         };
 
         set_running.set(true);
@@ -208,7 +326,7 @@ pub fn Gui() -> impl IntoView {
             <header class="bg-slate-800 border-b border-slate-700 shadow-lg">
                 <div class="flex items-center gap-3 px-4 py-3">
                     <div class="text-white font-semibold tracking-tight text-base">"FutureSDR WLAN RX"</div>
-                    <div class="text-xs text-slate-400">"HackRF local domain + 3 WASM scheduler workers"</div>
+                    <div class="text-xs text-slate-400">"HackRF local domain + 3 WASM scheduler workers, 20 MHz, DC correction"</div>
                 </div>
             </header>
 
@@ -225,7 +343,7 @@ pub fn Gui() -> impl IntoView {
                             <select
                                 class="mt-1 w-full rounded bg-slate-900 border border-slate-600 text-slate-100 px-2 py-2"
                                 on:change=move |ev| {
-                                    let input: HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
+                                    let input: HtmlSelectElement = ev.target().unwrap().dyn_into().unwrap();
                                     let chan = input.value();
                                     if let Some((_, freq)) = WLAN_CHANNELS.iter().find(|(c, _)| *c == chan) {
                                         set_frequency.set(*freq);
@@ -241,19 +359,9 @@ pub fn Gui() -> impl IntoView {
 
                         <label class="block">
                             <span class="text-slate-300 text-sm">"Sample Rate"</span>
-                            <select
-                                class="mt-1 w-full rounded bg-slate-900 border border-slate-600 text-slate-100 px-2 py-2"
-                                on:change=move |ev| {
-                                    let input: HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
-                                    let rate = input.value().parse::<f64>().unwrap_or(DEFAULT_SAMPLE_RATE);
-                                    set_sample_rate.set(rate);
-                                    post_source(control, "sample_rate", Pmt::F64(rate));
-                                }
-                            >
-                                <option value="5000000">"5 MHz"</option>
-                                <option value="10000000">"10 MHz"</option>
-                                <option value="20000000" selected=true>"20 MHz"</option>
-                            </select>
+                            <div class="mt-1 w-full rounded bg-slate-900 border border-slate-600 text-slate-100 px-2 py-2">
+                                "20 MHz"
+                            </div>
                         </label>
 
                         <label class="block">
@@ -308,7 +416,7 @@ pub fn Gui() -> impl IntoView {
                         </label>
 
                         <label class="inline-flex items-center gap-2 text-sm text-slate-300">
-                            <input class="accent-cyan-400" type="checkbox" node_ref=dc_offset />
+                            <input class="accent-cyan-400" type="checkbox" checked=true disabled=true />
                             "DC Offset Correction"
                         </label>
                     </div>
@@ -349,12 +457,19 @@ pub fn Gui() -> impl IntoView {
 }
 
 fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p: Pmt) {
+    let value = format!("{p:?}");
     if let Some(control) = control.get_untracked() {
         spawn_local(async move {
-            if let Err(e) = control.flowgraph.post(control.source, handler, p).await {
-                futuresdr::tracing::warn!("failed to post {handler}: {e:?}");
+            futuresdr::tracing::info!("posting HackRF setting {handler} = {value}");
+            match control.flowgraph.post(control.source, handler, p).await {
+                Ok(reply) => futuresdr::tracing::info!("HackRF setting {handler} reply: {reply:?}"),
+                Err(e) => futuresdr::tracing::warn!("failed to post {handler}: {e:?}"),
             }
         });
+    } else {
+        futuresdr::tracing::debug!(
+            "ignoring HackRF setting {handler} = {value}; receiver not running"
+        );
     }
 }
 
@@ -363,6 +478,15 @@ async fn start_receiver(
     set_status: WriteSignal<String>,
 ) -> anyhow::Result<Receiver> {
     request_hackrf().await?;
+    futuresdr::tracing::info!(
+        "starting WLAN WASM RX: frequency {} Hz, sample rate {} Hz, LNA {} dB, VGA {} dB, amp {}, dc_offset {}",
+        config.frequency,
+        config.sample_rate,
+        config.lna_gain,
+        config.vga_gain,
+        config.amp,
+        config.dc_offset
+    );
     set_status.set("starting flowgraph".to_string());
 
     let rt = Runtime::with_scheduler(WasmScheduler::new(3));
@@ -445,41 +569,79 @@ fn build_rx_flowgraph(
         (src.into(), "output")
     };
 
-    let delay = fg.add(Delay::<Complex32>::new(16));
-    fg.stream_dyn(prev, output, delay, "input")?;
+    // Drop the initial samples while the simple IIR DC-offset correction
+    // converges. Otherwise the receiver can lock to startup transients and
+    // emit many bogus back-to-back sync candidates.
+    info!(
+        "WLAN RX: dropping first {} samples after DC correction for warm-up",
+        DC_OFFSET_WARMUP_SAMPLES
+    );
+    let dc_warmup = fg.add(Delay::<Complex32>::new(-(DC_OFFSET_WARMUP_SAMPLES as isize)));
+    fg.stream_dyn(prev, output, dc_warmup, "input")?;
 
+    // WASM slab buffers support one reader per output. Explicitly duplicate
+    // streams whenever one output feeds multiple downstream blocks.
+    let input_dup = fg.add(StreamDuplicator::<Complex32, 4>::new());
+    connect!(fg, dc_warmup > input_dup);
+
+    let sample_stats = fg.add(SampleStats::new("WLAN RX samples after DC correction"));
+    let delay = fg.add(Delay::<Complex32>::new(16));
     let complex_to_mag_2 = fg.add(Apply::new(|i: &Complex32| i.norm_sqr()));
+    let mult_conj = fg.add(Combine::new(|a: &Complex32, b: &Complex32| a * b.conj()));
+
+    fg.stream_dyn(input_dup, "outputs[0]", sample_stats, "input")?;
+    fg.stream_dyn(input_dup, "outputs[1]", delay, "input")?;
+    fg.stream_dyn(input_dup, "outputs[2]", complex_to_mag_2, "input")?;
+    fg.stream_dyn(input_dup, "outputs[3]", mult_conj, "in0")?;
+
     let float_avg = MovingAverage::<f32>::new(64);
-    fg.stream_dyn(prev, output, complex_to_mag_2, "input")?;
     connect!(fg, complex_to_mag_2 > float_avg);
 
-    let mult_conj = fg.add(Combine::new(|a: &Complex32, b: &Complex32| a * b.conj()));
+    let delay_dup = StreamDuplicator::<Complex32, 2>::new();
     let complex_avg = MovingAverage::<Complex32>::new(48);
-    fg.stream_dyn(prev, output, mult_conj, "in0")?;
-    connect!(fg, mult_conj > complex_avg;
-                 delay > in1.mult_conj);
+    connect!(fg, delay > delay_dup;
+                 delay_dup.outputs[0] > in1.mult_conj;
+                 mult_conj > complex_avg);
 
-    let divide_mag = Combine::new(|a: &Complex32, b: &f32| a.norm() / b);
-    connect!(fg, complex_avg > in0.divide_mag; float_avg > in1.divide_mag);
+    let complex_avg_dup = StreamDuplicator::<Complex32, 2>::new();
+    let divide_mag = Combine::new(|a: &Complex32, b: &f32| {
+        if *b > 1.0e-12 { a.norm() / b } else { 0.0 }
+    });
+    connect!(fg, complex_avg > complex_avg_dup;
+                 complex_avg_dup.outputs[0] > in0.divide_mag;
+                 float_avg > in1.divide_mag);
 
     let sync_short: SyncShort = SyncShort::new();
-    connect!(fg, delay > in_sig.sync_short;
-                 complex_avg > in_abs.sync_short;
+    connect!(fg, delay_dup.outputs[1] > in_sig.sync_short;
+                 complex_avg_dup.outputs[1] > in_abs.sync_short;
                  divide_mag > in_cor.sync_short);
 
     let sync_long: SyncLong = SyncLong::new();
+    let sync_long_dup = StreamDuplicator::<Complex32, 2>::with_min_output_buffer_size(128);
+    let sync_long_stats = SampleStats::new("WLAN RX after sync long");
     let fft = Fft::new(64);
+    let fft_dup = StreamDuplicator::<Complex32, 2>::with_min_output_buffer_size(64);
+    let fft_stats = SampleStats::new("WLAN RX after FFT");
     let frame_equalizer: FrameEqualizer = FrameEqualizer::new();
     let decoder: Decoder = Decoder::new();
     let frame_pipe = FramePipe::new(frames);
 
-    connect!(fg, sync_short > sync_long > fft > frame_equalizer > decoder;
+    connect!(fg, sync_short > sync_long > sync_long_dup;
+                 sync_long_dup.outputs[0] > sync_long_stats;
+                 sync_long_dup.outputs[1] > fft > fft_dup;
+                 fft_dup.outputs[0] > fft_stats;
+                 fft_dup.outputs[1] > frame_equalizer > decoder;
                  decoder.rx_frames | frame_pipe);
 
     Ok(())
 }
 
-async fn poll_frames(receiver: Receiver, set_frames: WriteSignal<VecDeque<Frame>>, set_status: WriteSignal<String>) {
+async fn poll_frames(
+    receiver: Receiver,
+    set_frames: WriteSignal<VecDeque<Frame>>,
+    set_status: WriteSignal<String>,
+) {
+    let mut total_frames = 0usize;
     loop {
         if let Some(error) = receiver.failure.lock().ok().and_then(|e| e.clone()) {
             set_status.set(format!("flowgraph stopped: {error}"));
@@ -497,6 +659,9 @@ async fn poll_frames(receiver: Receiver, set_frames: WriteSignal<VecDeque<Frame>
             TimeoutFuture::new(50).await;
             continue;
         }
+
+        total_frames += pending.len();
+        set_status.set(format!("running ({total_frames} decoded frames)"));
 
         set_frames.update(|frames| {
             for data in pending {
@@ -522,7 +687,9 @@ async fn request_hackrf() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("USB get_devices failed: {e:?}"))?;
 
+    futuresdr::tracing::info!("WebUSB paired HackRF devices visible: {}", devices.length());
     if devices.length() == 0 {
+        futuresdr::tracing::info!("requesting WebUSB HackRF permission");
         let _ = JsFuture::from(usb.request_device(&options))
             .await
             .map_err(|e| anyhow::anyhow!("USB request_device failed: {e:?}"))?;

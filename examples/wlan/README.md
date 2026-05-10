@@ -41,8 +41,10 @@ You can access a web-based dashboard that displays the constellation diagram. Th
 First, run this command in another terminal while the receiver is running:
 
 ```sh
-trunk serve
+RUSTUP_TOOLCHAIN=nightly trunk serve
 ```
+
+The WASM receiver uses web workers and shared WASM memory, so it must be built with the nightly toolchain configuration in `.cargo/config.toml` and served with the COOP/COEP headers from `Trunk.toml`.
 
 Then, navigate to [`http://127.0.0.1:8080/`](http://127.0.0.1:8080/) in your web browser.
 

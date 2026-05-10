@@ -43,6 +43,18 @@ where
             outputs: std::array::from_fn(|_| O::default()),
         }
     }
+
+    /// Create Stream Duplicator with a minimum output buffer size.
+    pub fn with_min_output_buffer_size(min_items: usize) -> Self {
+        let mut outputs = std::array::from_fn(|_| O::default());
+        for output in outputs.iter_mut() {
+            output.set_min_buffer_size_in_items(min_items);
+        }
+        Self {
+            input: I::default(),
+            outputs,
+        }
+    }
 }
 
 impl<T, const N: usize, I, O> Default for StreamDuplicator<T, N, I, O>
@@ -69,7 +81,7 @@ where
         _mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
-        let input = self.input.slice();
+        let (input, tags) = self.input.slice_with_tags();
         let nitem_to_consume = input.len();
         let n_items_to_produce = self
             .outputs
@@ -80,8 +92,11 @@ where
         let nitem_to_process = min(n_items_to_produce, nitem_to_consume);
         if nitem_to_process > 0 {
             for j in 0..N {
-                let out = self.outputs[j].slice();
+                let (out, mut out_tags) = self.outputs[j].slice_with_tags();
                 out[..nitem_to_process].copy_from_slice(&input[..nitem_to_process]);
+                tags.iter()
+                    .filter(|t| t.index < nitem_to_process)
+                    .for_each(|t| out_tags.add_tag(t.index, t.tag.clone()));
                 self.outputs[j].produce(nitem_to_process);
             }
             self.input.consume(nitem_to_process);

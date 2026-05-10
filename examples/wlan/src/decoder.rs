@@ -24,6 +24,8 @@ where
     deinterleaved_bits: [u8; MAX_ENCODED_BITS],
     decoded_bits: [u8; MAX_ENCODED_BITS],
     out_bytes: [u8; MAX_PSDU_SIZE + 2], // 2 for signal field
+    crc_ok: usize,
+    crc_fail: usize,
 }
 
 impl<I> Decoder<I>
@@ -31,8 +33,10 @@ where
     I: CpuBufferReader<Item = u8>,
 {
     pub fn new() -> Self {
+        let mut input = I::default();
+        input.set_min_items(48);
         Self {
-            input: I::default(),
+            input,
             frame_complete: true,
             frame_param: FrameParam::new(Mcs::Bpsk_1_2, 0),
             decoder: ViterbiDecoder::new(),
@@ -42,6 +46,8 @@ where
             deinterleaved_bits: [0; MAX_ENCODED_BITS],
             decoded_bits: [0; MAX_ENCODED_BITS],
             out_bytes: [0; MAX_PSDU_SIZE + 2], // 2 for signal field
+            crc_ok: 0,
+            crc_fail: 0,
         }
     }
     fn deinterleave(&mut self) {
@@ -188,6 +194,11 @@ where
                 self.frame_complete = true;
 
                 if self.decode() {
+                    self.crc_ok += 1;
+                    info!(
+                        "decoder: CRC OK for {:?} (ok {}, fail {})",
+                        self.frame_param, self.crc_ok, self.crc_fail
+                    );
                     // println!(
                     //     "decoded: {:?}",
                     //     &self.out_bytes[0..self.frame_param.psdu_size() + 2]
@@ -203,6 +214,14 @@ where
                     rftap[12..].copy_from_slice(&blob);
                     mo.post("rx_frames", Pmt::Blob(blob)).await?;
                     mo.post("rftap", Pmt::Blob(rftap)).await?;
+                } else {
+                    self.crc_fail += 1;
+                    if self.crc_fail <= 20 || self.crc_fail.is_multiple_of(100) {
+                        info!(
+                            "decoder: CRC failed for {:?} (ok {}, fail {})",
+                            self.frame_param, self.crc_ok, self.crc_fail
+                        );
+                    }
                 }
 
                 broke_early = true;

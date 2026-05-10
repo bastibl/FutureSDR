@@ -33,6 +33,12 @@ pub struct SyncShort<
     output: O,
     state: State,
     pending_start_tag: Option<f32>,
+    samples_seen: usize,
+    samples_out: usize,
+    starts: usize,
+    resyncs: usize,
+    report_max_cor: f32,
+    next_report_at: usize,
 }
 
 impl<I0, I1, I2, O> SyncShort<I0, I1, I2, O>
@@ -50,6 +56,12 @@ where
             output: O::default(),
             state: State::Search,
             pending_start_tag: None,
+            samples_seen: 0,
+            samples_out: 0,
+            starts: 0,
+            resyncs: 0,
+            report_max_cor: 0.0,
+            next_report_at: 1_000_000,
         }
     }
 }
@@ -90,6 +102,7 @@ where
         let mut i = 0;
 
         while i < n_input && o < out.len() {
+            self.report_max_cor = self.report_max_cor.max(in_cor[i]);
             match self.state {
                 State::Search => {
                     if in_cor[i] > THRESHOLD {
@@ -99,6 +112,16 @@ where
                 State::Found => {
                     if in_cor[i] > THRESHOLD {
                         let f_offset = -in_abs[i].arg() / 16.0;
+                        self.starts += 1;
+                        if self.starts <= 10 {
+                            info!(
+                                "sync short: start candidate {} at total sample {}, cor {:.3}, freq offset {:.6}",
+                                self.starts,
+                                self.samples_seen + i,
+                                in_cor[i],
+                                f_offset
+                            );
+                        }
                         self.state = State::Copy(0, f_offset, false);
                         self.pending_start_tag = Some(f_offset);
                     } else {
@@ -110,6 +133,16 @@ where
                         // resync
                         if last_above_threshold && n_copied > MIN_GAP {
                             let f_offset = -in_abs[i].arg() / 16.0;
+                            self.resyncs += 1;
+                            if self.resyncs <= 10 {
+                                info!(
+                                    "sync short: resync {} at total sample {}, cor {:.3}, freq offset {:.6}",
+                                    self.resyncs,
+                                    self.samples_seen + i,
+                                    in_cor[i],
+                                    f_offset
+                                );
+                            }
                             self.state = State::Copy(0, f_offset, false);
                             self.pending_start_tag = Some(f_offset);
                             i += 1;
@@ -144,6 +177,17 @@ where
         self.in_abs.consume(i);
         self.in_cor.consume(i);
         self.output.produce(o);
+        self.samples_seen += i;
+        self.samples_out += o;
+
+        if self.samples_seen >= self.next_report_at {
+            info!(
+                "sync short: processed {} samples, output {}, starts {}, resyncs {}, max corr {:.3}",
+                self.samples_seen, self.samples_out, self.starts, self.resyncs, self.report_max_cor
+            );
+            self.next_report_at = self.samples_seen + 20_000_000;
+            self.report_max_cor = 0.0;
+        }
 
         if self.in_cor.finished() && i == in_cor_len {
             io.finished = true;

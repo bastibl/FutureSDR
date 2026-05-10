@@ -442,6 +442,7 @@ where
     core: PortCore,
     state: ConnectionState<ConnectedReader<D, S>>,
     current: Option<CurrentBuffer<D>>,
+    tags: Vec<ItemTag>,
     finished: bool,
 }
 
@@ -468,6 +469,7 @@ where
             core: PortCore::new_disconnected(),
             state: ConnectionState::disconnected(),
             current: None,
+            tags: Vec::new(),
             finished: false,
         }
     }
@@ -560,12 +562,25 @@ where
                     items,
                 }) = next
                 {
-                    buffer[(reserved_items - left)..reserved_items]
-                        .clone_from_slice(&cur.buffer[cur.offset..(cur.offset + left)]);
+                    let old_offset = cur.offset;
+                    let old_end_offset = cur.end_offset;
+                    let new_offset = reserved_items - left;
 
-                    for t in tags.iter_mut() {
-                        t.index += left;
-                    }
+                    buffer[new_offset..reserved_items]
+                        .clone_from_slice(&cur.buffer[old_offset..old_end_offset]);
+
+                    cur.tags = cur
+                        .tags
+                        .drain(..)
+                        .filter_map(|mut tag| {
+                            if tag.index >= old_offset && tag.index < old_end_offset {
+                                tag.index = new_offset + (tag.index - old_offset);
+                                Some(tag)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
                     cur.tags.append(&mut tags);
 
                     let old = std::mem::replace(&mut cur.buffer, buffer);
@@ -575,7 +590,7 @@ where
                     connected.writer.inbox().notify();
 
                     cur.end_offset = reserved_items + items;
-                    cur.offset = reserved_items - left;
+                    cur.offset = new_offset;
                 }
             }
         } else {
@@ -599,8 +614,18 @@ where
             }
         }
 
-        let c = self.current.as_mut().unwrap();
-        (&c.buffer[c.offset..c.end_offset], &c.tags)
+        let c = self.current.as_ref().unwrap();
+        self.tags.clear();
+        self.tags.extend(c.tags.iter().filter_map(|tag| {
+            if tag.index >= c.offset && tag.index < c.end_offset {
+                let mut tag = tag.clone();
+                tag.index -= c.offset;
+                Some(tag)
+            } else {
+                None
+            }
+        }));
+        (&c.buffer[c.offset..c.end_offset], &self.tags)
     }
 
     fn consume(&mut self, n: usize) {
@@ -613,6 +638,7 @@ where
         let c = self.current.as_mut().unwrap();
         debug_assert!(n <= c.end_offset - c.offset);
         c.offset += n;
+        c.tags.retain(|tag| tag.index >= c.offset);
 
         if c.offset == c.end_offset {
             let b = self.current.take().unwrap();
@@ -627,10 +653,18 @@ where
             if has_reader_input {
                 self.core.inbox().notify();
             }
-        } else if c.end_offset - c.offset <= reserved_items
-            && connected.state.with(|state| !state.reader_input.is_empty())
-        {
+        } else {
+            // This reader still has immediately readable data in its current
+            // buffer. Wake the owning block again; otherwise a block that had
+            // to stop early because an output buffer was full can go to sleep
+            // even though unread input remains in this slab chunk.
             self.core.inbox().notify();
+
+            if c.end_offset - c.offset <= reserved_items
+                && connected.state.with(|state| !state.reader_input.is_empty())
+            {
+                self.core.inbox().notify();
+            }
         }
     }
 
