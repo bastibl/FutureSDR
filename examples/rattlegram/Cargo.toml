@@ -8,6 +8,11 @@ crate-type = ["cdylib", "rlib"]
 
 [workspace]
 
+
+[[bin]]
+name = "futuresdr_app"
+path = "src/bin/wasm.rs"
+
 [dependencies]
 anyhow = "1.0"
 crc = "3.4"

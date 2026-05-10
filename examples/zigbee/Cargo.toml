@@ -9,6 +9,10 @@ default-run = "rx"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "futuresdr_app"
+path = "src/bin/wasm-worker.rs"
+
 [features]
 default = ["soapy"]
 aaronia_http = ["futuresdr/aaronia_http"]

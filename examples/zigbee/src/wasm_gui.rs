@@ -164,7 +164,7 @@ async fn run_fg(
                 }
             });
         })
-        .spawn("./wasm-worker.js");
+        .spawn("./futuresdr_app.js");
     let bridge = Box::leak(Box::new(bridge));
     bridge.send(WorkerMessage::Start);
     set_handle(Some(bridge));

@@ -102,14 +102,27 @@ Benchmark before switching to the Flow Scheduler. Its deterministic mapping can 
 
 Local domains are available on WASM as well. A local domain creates a dedicated web worker and receives the closure that instantiates each local block, mirroring the native local-domain model. FutureSDR uses one worker script path for both scheduler workers and local-domain workers. The default is `./futuresdr-wasm-scheduler-worker.js`; configure a different path with `futuresdr::runtime::scheduler::wasm::set_worker_script(path)` before creating schedulers or local domains.
 
-With Trunk, the simplest setup is to give the Rust output a fixed target name and copy the stock worker template:
+With Trunk, the simplest setup is to give the Rust output a fixed target name and copy the stock worker template. For a `cdylib` app:
 
 ```html
 <link data-trunk rel="rust" data-target-name="futuresdr_app" data-weak-refs data-reference-types />
 <link data-trunk rel="copy-file" href="assets/futuresdr-wasm-scheduler-worker.js" />
 ```
 
-The worker template imports `./futuresdr_app.js`, initializes the module/memory from the init message, and dispatches both `futuresdr-wasm-scheduler-init` and `futuresdr-wasm-local-domain-init` messages. See `examples/wasm-threaded/assets/futuresdr-wasm-scheduler-worker.js` for the template.
+For a bin target, add a `[[bin]]` alias named `futuresdr_app` in `Cargo.toml` and select it from Trunk:
+
+```toml
+[[bin]]
+name = "futuresdr_app"
+path = "src/bin/app.rs"
+```
+
+```html
+<link data-trunk rel="rust" data-bin="futuresdr_app" data-weak-refs data-reference-types />
+<link data-trunk rel="copy-file" href="assets/futuresdr-wasm-scheduler-worker.js" />
+```
+
+The worker template imports `./futuresdr_app.js`, initializes the module/memory from the init message, and dispatches both `futuresdr-wasm-scheduler-init` and `futuresdr-wasm-local-domain-init` messages. See `examples/wasm-threaded/assets/futuresdr-wasm-scheduler-worker.js` for the template. If a flowgraph is started from another web worker, give that worker target the `futuresdr_app` name/alias and use the same template there as well.
 
 ```rust
 use futuresdr::prelude::*;

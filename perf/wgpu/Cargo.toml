@@ -8,6 +8,11 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+
+[[bin]]
+name = "futuresdr_app"
+path = "src/bin/perf.rs"
+
 [dependencies]
 anyhow = "1.0"
 futuresdr = { path = "../..", features = ["wgpu"] }

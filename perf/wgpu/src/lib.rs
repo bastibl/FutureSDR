@@ -18,12 +18,34 @@ pub async fn run(run: u64, scheduler: String, samples: u64, buffer_size: u64) ->
 
     let mut fg = Flowgraph::new();
 
-    let src = VectorSource::<f32, H2DWriter<f32>>::new(orig.clone());
-    let instance = wgpu::Instance::new().await;
-    let mul = Wgpu::new(instance, buffer_size / 4, 4, 4);
-    let snk = VectorSink::<f32, D2HReader<f32>>::new(1024);
+    #[cfg(not(target_arch = "wasm32"))]
+    let snk = {
+        let src = VectorSource::<f32, H2DWriter<f32>>::new(orig.clone());
+        let instance = wgpu::Instance::new().await;
+        let mul = Wgpu::new(instance, buffer_size / 4, 4, 4);
+        let snk = VectorSink::<f32, D2HReader<f32>>::new(1024);
 
-    connect!(fg, src > mul > snk);
+        connect!(fg, src > mul > snk);
+        snk
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let snk = {
+        let local = fg.local_domain();
+        let input = orig.clone();
+        fg.domain_run_async(local, move |ctx| {
+            Box::pin(async move {
+                let src = ctx.add(VectorSource::<f32, H2DWriter<f32>>::new(input));
+                let instance = wgpu::Instance::new().await;
+                let mul = ctx.add(Wgpu::new(instance, buffer_size / 4, 4, 4));
+                let snk = ctx.add(VectorSink::<f32, D2HReader<f32>>::new(1024));
+
+                connect!(ctx, src ~> mul ~> snk);
+                Ok(snk)
+            })
+        })
+        .await?
+    };
 
     let runtime;
 

@@ -20,6 +20,11 @@ default = []
 vulkan = ["futuresdr/vulkan", "vulkano", "vulkano-shaders"]
 wgpu = ["futuresdr/wgpu"]
 
+
+[[bin]]
+name = "futuresdr_app"
+path = "src/bin/web.rs"
+
 [dependencies]
 anyhow = "1.0"
 futuresdr = { path = "../..", features = ["soapy"] }
