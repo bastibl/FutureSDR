@@ -98,9 +98,18 @@ Benchmark before switching to the Flow Scheduler. Its deterministic mapping can 
 
 ## WebAssembly
 
-`WasmScheduler` is the only scheduler on WebAssembly targets. It is selected by `Runtime::new()` automatically when compiling for `wasm32` and starts one web worker by default. Use `WasmScheduler::new(n)` or `WasmScheduler::with_worker_script(n, path)` to run normal blocks on a worker pool.
+`WasmScheduler` is the only scheduler on WebAssembly targets. It is selected by `Runtime::new()` automatically when compiling for `wasm32` and starts one web worker by default. Use `WasmScheduler::new(n)` to run normal blocks on a worker pool.
 
-Local domains are available on WASM as well. A local domain creates a dedicated web worker and receives the closure that instantiates each local block, mirroring the native local-domain model. The worker script used with threaded WASM should dispatch both `futuresdr-wasm-scheduler-init` and `futuresdr-wasm-local-domain-init` messages.
+Local domains are available on WASM as well. A local domain creates a dedicated web worker and receives the closure that instantiates each local block, mirroring the native local-domain model. FutureSDR uses one worker script path for both scheduler workers and local-domain workers. The default is `./futuresdr-wasm-scheduler-worker.js`; configure a different path with `futuresdr::runtime::scheduler::wasm::set_worker_script(path)` before creating schedulers or local domains.
+
+With Trunk, the simplest setup is to give the Rust output a fixed target name and copy the stock worker template:
+
+```html
+<link data-trunk rel="rust" data-target-name="futuresdr_app" data-weak-refs data-reference-types />
+<link data-trunk rel="copy-file" href="assets/futuresdr-wasm-scheduler-worker.js" />
+```
+
+The worker template imports `./futuresdr_app.js`, initializes the module/memory from the init message, and dispatches both `futuresdr-wasm-scheduler-init` and `futuresdr-wasm-local-domain-init` messages. See `examples/wasm-threaded/assets/futuresdr-wasm-scheduler-worker.js` for the template.
 
 ```rust
 use futuresdr::prelude::*;

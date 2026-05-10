@@ -274,11 +274,15 @@ pub(crate) struct LocalDomainRuntime {
 
 impl LocalDomainRuntime {
     pub(crate) fn new() -> Self {
-        Self {
-            controller: LocalDomainController::new(),
+        Self::try_new().expect("failed to create local domain")
+    }
+
+    pub(crate) fn try_new() -> Result<Self, Error> {
+        Ok(Self {
+            controller: LocalDomainController::try_new()?,
             blocks: 0,
             running: false,
-        }
+        })
     }
 
     pub(crate) fn reserve_block(&mut self) -> usize {
@@ -428,7 +432,7 @@ impl LocalDomainHandle {
 }
 
 impl LocalDomainController {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn try_new() -> Result<Self, Error> {
         let (tx, rx) = kanal::unbounded();
         let terminate = Arc::new(AtomicBool::new(false));
         let init = WasmLocalDomainInit {
@@ -436,20 +440,23 @@ impl LocalDomainController {
             terminate: terminate.clone(),
         };
         let domain_id = WASM_LOCAL_DOMAINS.lock().unwrap().insert(init);
-        let worker = match spawn_local_domain_worker(default_worker_script(), domain_id) {
-            Ok(worker) => worker,
-            Err(e) => {
-                let _ = WASM_LOCAL_DOMAINS.lock().unwrap().try_remove(domain_id);
-                panic!("failed to spawn WASM local-domain worker: {e:?}");
-            }
-        };
+        let worker_script = default_worker_script();
+        let worker = spawn_local_domain_worker(&worker_script, domain_id).map_err(|e| {
+            let _ = WASM_LOCAL_DOMAINS.lock().unwrap().try_remove(domain_id);
+            Error::RuntimeError(format!(
+                "failed to spawn WASM local-domain worker from {worker_script:?}: {e:?}. \
+                 Serve a worker script that dispatches FutureSDR scheduler/local-domain init \
+                 messages, or configure it with \
+                 futuresdr::runtime::scheduler::wasm::set_worker_script(path)."
+            ))
+        })?;
 
-        Self {
+        Ok(Self {
             tx,
             terminate,
             worker: Some(worker),
             domain_id: Some(domain_id),
-        }
+        })
     }
 
     pub(crate) fn handle(&self) -> LocalDomainHandle {
@@ -551,8 +558,8 @@ impl WasmWorker {
     }
 }
 
-fn default_worker_script() -> &'static str {
-    crate::runtime::scheduler::wasm::DEFAULT_WORKER_SCRIPT
+fn default_worker_script() -> String {
+    crate::runtime::scheduler::wasm::worker_script()
 }
 
 /// WASM local-domain worker entry point.

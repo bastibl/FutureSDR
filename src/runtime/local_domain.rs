@@ -192,11 +192,15 @@ pub(crate) struct LocalDomainRuntime {
 
 impl LocalDomainRuntime {
     pub(crate) fn new() -> Self {
-        Self {
-            controller: LocalDomainController::new(),
+        Self::try_new().expect("failed to create local domain")
+    }
+
+    pub(crate) fn try_new() -> Result<Self, Error> {
+        Ok(Self {
+            controller: LocalDomainController::try_new()?,
             blocks: 0,
             running: false,
-        }
+        })
     }
 
     pub(crate) fn reserve_block(&mut self) -> usize {
@@ -348,20 +352,22 @@ impl LocalDomainHandle {
 }
 
 impl LocalDomainController {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn try_new() -> Result<Self, Error> {
         let (tx, rx) = sync_mpsc::channel();
         let (terminate_tx, terminate_rx) = oneshot::channel();
         let join = thread::Builder::new()
             .stack_size(config::config().stack_size)
             .name("futuresdr-local".to_string())
             .spawn(move || run_domain_thread(rx, terminate_rx))
-            .expect("failed to spawn local domain thread");
+            .map_err(|e| {
+                Error::RuntimeError(format!("failed to spawn local domain thread: {e}"))
+            })?;
 
-        Self {
+        Ok(Self {
             tx,
             terminate_tx: Some(terminate_tx),
             join: Some(join),
-        }
+        })
     }
 
     pub(crate) fn handle(&self) -> LocalDomainHandle {

@@ -7,11 +7,11 @@ import {
 const THREAD_STACK_SIZE = 1024 * 1024;
 
 self.onerror = (event) => {
-  console.error("FutureSDR scheduler worker error", event.message, event.error);
+  console.error("FutureSDR worker error", event.message, event.error);
 };
 
 self.onunhandledrejection = (event) => {
-  console.error("FutureSDR scheduler worker unhandled rejection", event.reason);
+  console.error("FutureSDR worker unhandled rejection", event.reason);
 };
 
 self.onmessage = (event) => {

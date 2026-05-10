@@ -27,7 +27,6 @@ mod app {
     use zigbee::Decoder;
     use zigbee::Mac;
 
-    const WORKER_SCRIPT: &str = "./futuresdr-wasm-scheduler-worker.js";
     const FRAME_QUEUE_LIMIT: usize = 100;
 
     type FrameQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
@@ -119,7 +118,7 @@ mod app {
 
         let frame_queue = FrameQueue::default();
         let frame_queue_writer = frame_queue.clone();
-        let rt = Runtime::with_scheduler(WasmScheduler::with_worker_script(2, WORKER_SCRIPT));
+        let rt = Runtime::with_scheduler(WasmScheduler::new(2));
         let handle = rt.handle();
 
         // Create the local-domain worker from the browser thread. The remaining

@@ -40,6 +40,22 @@ unsafe extern "C" {
 
 pub(crate) const DEFAULT_WORKER_SCRIPT: &str = "./futuresdr-wasm-scheduler-worker.js";
 
+static WASM_WORKER_SCRIPT: once_cell::sync::Lazy<Mutex<String>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(DEFAULT_WORKER_SCRIPT.to_string()));
+
+/// Set the default worker script used by the WASM scheduler and local domains.
+///
+/// Applications that do not serve `./futuresdr-wasm-scheduler-worker.js` should
+/// call this before creating [`WasmScheduler`]s or [`LocalDomain`](crate::runtime::LocalDomain)s.
+pub fn set_worker_script(worker_script: impl Into<String>) {
+    *WASM_WORKER_SCRIPT.lock().unwrap() = worker_script.into();
+}
+
+/// Return the default worker script used by the WASM scheduler and local domains.
+pub fn worker_script() -> String {
+    WASM_WORKER_SCRIPT.lock().unwrap().clone()
+}
+
 pub(crate) fn reset_wasm_thread_metadata() {
     if WASM_THREAD_METADATA_RESET.swap(true, Ordering::AcqRel) {
         return;
@@ -80,8 +96,8 @@ impl WasmWorker {
 /// WASM scheduler worker entry point.
 ///
 /// Application worker scripts should call this after initializing the generated
-/// wasm-bindgen module with the `module` and `memory` values sent by
-/// [`WasmScheduler::with_worker_script`].
+/// wasm-bindgen module with the `module` and `memory` values sent by the
+/// scheduler.
 #[wasm_bindgen]
 pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: usize) {
     crate::runtime::init();
@@ -141,19 +157,11 @@ impl Drop for WasmSchedulerInner {
 impl WasmScheduler {
     /// Create a scheduler with `n_threads` worker threads.
     ///
-    /// A thread count of zero is treated as one. The scheduler expects an
-    /// application-provided worker script at `./futuresdr-wasm-scheduler-worker.js`. Use
-    /// [`WasmScheduler::with_worker_script`] to override the path.
+    /// A thread count of zero is treated as one. The scheduler expects the
+    /// worker script configured with [`set_worker_script`], defaulting to
+    /// `./futuresdr-wasm-scheduler-worker.js`.
     pub fn new(n_threads: usize) -> WasmScheduler {
-        Self::with_worker_script(n_threads, DEFAULT_WORKER_SCRIPT)
-    }
-
-    /// Create a scheduler with `n_threads` web workers using `worker_script`.
-    ///
-    /// The worker script has to initialize the same wasm module/memory and call
-    /// [`futuresdr_wasm_scheduler_worker_entry`] with the `executor_id` and
-    /// `worker_index` values from the init message.
-    pub fn with_worker_script(n_threads: usize, worker_script: &str) -> WasmScheduler {
+        let worker_script = worker_script();
         let n_threads = n_threads.max(1);
 
         debug!("WASM scheduler starting {n_threads} web workers with script {worker_script}");
@@ -164,7 +172,7 @@ impl WasmScheduler {
         let mut workers = Vec::with_capacity(n_threads);
 
         for worker_index in 0..n_threads {
-            match spawn_worker(worker_script, executor_id, worker_index) {
+            match spawn_worker(&worker_script, executor_id, worker_index) {
                 Ok(worker) => workers.push(worker),
                 Err(e) => {
                     warn!("failed to spawn WASM scheduler web worker: {:?}", e);
