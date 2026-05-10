@@ -372,6 +372,148 @@ impl<'a> LocalDomainContext<'a> {
             _marker: PhantomData,
         }
     }
+
+    /// Connect local-only stream ports between blocks in this domain context.
+    pub fn stream_local<KS, KD, B, FS, FD>(
+        &self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B,
+        FD: FnOnce(&mut KD) -> &mut B::Reader,
+    {
+        let mut inner = self.inner.borrow_mut();
+        if src_block.flowgraph_id != inner.flowgraph_id {
+            return Err(Error::ValidationError(format!(
+                "block {:?} belongs to another flowgraph",
+                src_block.id
+            )));
+        }
+        if dst_block.flowgraph_id != inner.flowgraph_id {
+            return Err(Error::ValidationError(format!(
+                "block {:?} belongs to another flowgraph",
+                dst_block.id
+            )));
+        }
+
+        let (
+            BlockPlacement::Local {
+                domain_id: src_domain,
+                local_id: src_local,
+                kind: src_kind,
+            },
+            BlockPlacement::Local {
+                domain_id: dst_domain,
+                local_id: dst_local,
+                kind: dst_kind,
+            },
+        ) = (src_block.placement, dst_block.placement)
+        else {
+            return Err(Error::ValidationError(
+                "local-domain context stream connections require local blocks".to_string(),
+            ));
+        };
+
+        if src_domain != inner.domain_id || dst_domain != inner.domain_id {
+            return Err(Error::ValidationError(
+                "local-domain context stream connections require blocks in this domain".to_string(),
+            ));
+        }
+
+        let edge = {
+            let (src, dst) = Flowgraph::two_local_state_kernels_mut::<KS, KD>(
+                inner.state,
+                (src_local, src_block.id, src_kind),
+                (dst_local, dst_block.id, dst_kind),
+            )?;
+            Flowgraph::connect_stream_ports(src_port(src), dst_port(dst))
+        };
+        inner.state.add_stream_edge(edge.endpoints());
+        Ok(())
+    }
+
+    /// Connect message ports between local blocks in this domain context.
+    pub fn message(
+        &self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        let src_block_id = src_block_id.into();
+        let src_port_id = src_port_id.into();
+        let dst_block_id = dst_block_id.into();
+        let dst_port_id = dst_port_id.into();
+        let mut inner = self.inner.borrow_mut();
+
+        let first_block_id = inner.next_block_id - inner.entries.len();
+        let src_placement = inner
+            .entries
+            .get(
+                src_block_id
+                    .0
+                    .checked_sub(first_block_id)
+                    .ok_or(Error::InvalidBlock(src_block_id))?,
+            )
+            .map(|entry| entry.placement)
+            .ok_or(Error::InvalidBlock(src_block_id))?;
+        let dst_placement = inner
+            .entries
+            .get(
+                dst_block_id
+                    .0
+                    .checked_sub(first_block_id)
+                    .ok_or(Error::InvalidBlock(dst_block_id))?,
+            )
+            .map(|entry| entry.placement)
+            .ok_or(Error::InvalidBlock(dst_block_id))?;
+
+        let (
+            BlockPlacement::Local {
+                domain_id: src_domain,
+                local_id: src_local,
+                ..
+            },
+            BlockPlacement::Local {
+                domain_id: dst_domain,
+                local_id: dst_local,
+                ..
+            },
+        ) = (src_placement, dst_placement)
+        else {
+            return Err(Error::ValidationError(
+                "local-domain context message connections require local blocks".to_string(),
+            ));
+        };
+
+        if src_domain != inner.domain_id || dst_domain != inner.domain_id {
+            return Err(Error::ValidationError(
+                "local-domain context message connections require blocks in this domain"
+                    .to_string(),
+            ));
+        }
+
+        let dst_block = inner.state.block(dst_local, dst_block_id)?;
+        if !dst_block.message_inputs().contains(&dst_port_id.name()) {
+            return Err(Error::InvalidMessagePort(
+                BlockPortCtx::Id(dst_block_id),
+                dst_port_id.clone(),
+            ));
+        }
+        let dst_box = dst_block.inbox();
+        let src_block = inner.state.block_mut(src_local, src_block_id)?;
+        src_block.connect(&src_port_id, dst_box, &dst_port_id)?;
+        inner
+            .state
+            .add_message_edge((src_block_id, src_port_id, dst_block_id, dst_port_id));
+        Ok(())
+    }
 }
 
 pub(crate) struct BlockEntry {
@@ -1837,6 +1979,30 @@ impl Flowgraph {
             ids.push(block_id);
         }
         Ok((inboxes, ids))
+    }
+
+    pub(crate) fn startup_snapshot(
+        &self,
+    ) -> Result<
+        (
+            Vec<Option<crate::runtime::dev::BlockInbox>>,
+            Vec<BlockId>,
+            Vec<(BlockId, PortId, BlockId, PortId)>,
+            Vec<(BlockId, PortId, BlockId, PortId)>,
+        ),
+        Error,
+    > {
+        let (inboxes, ids) = self.inboxes()?;
+        let mut stream_edges = self.stream_edge_endpoints();
+        let mut message_edges = self.message_edges.clone();
+
+        for domain in self.local_domains.iter() {
+            let (domain_stream_edges, domain_message_edges) = domain.topology()?;
+            stream_edges.extend(domain_stream_edges);
+            message_edges.extend(domain_message_edges);
+        }
+
+        Ok((inboxes, ids, stream_edges, message_edges))
     }
 
     pub(crate) fn run_local_domains(

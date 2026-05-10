@@ -22,9 +22,72 @@ pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static
 
 pub(crate) struct LocalDomainState {
     blocks: Vec<Option<Box<dyn LocalBlock>>>,
+    stream_edges: Vec<(
+        BlockId,
+        crate::runtime::PortId,
+        BlockId,
+        crate::runtime::PortId,
+    )>,
+    message_edges: Vec<(
+        BlockId,
+        crate::runtime::PortId,
+        BlockId,
+        crate::runtime::PortId,
+    )>,
 }
 
 impl LocalDomainState {
+    pub(crate) fn new() -> Self {
+        Self {
+            blocks: Vec::new(),
+            stream_edges: Vec::new(),
+            message_edges: Vec::new(),
+        }
+    }
+
+    pub(crate) fn add_stream_edge(
+        &mut self,
+        edge: (
+            BlockId,
+            crate::runtime::PortId,
+            BlockId,
+            crate::runtime::PortId,
+        ),
+    ) {
+        self.stream_edges.push(edge);
+    }
+
+    pub(crate) fn add_message_edge(
+        &mut self,
+        edge: (
+            BlockId,
+            crate::runtime::PortId,
+            BlockId,
+            crate::runtime::PortId,
+        ),
+    ) {
+        self.message_edges.push(edge);
+    }
+
+    pub(crate) fn topology(
+        &self,
+    ) -> (
+        Vec<(
+            BlockId,
+            crate::runtime::PortId,
+            BlockId,
+            crate::runtime::PortId,
+        )>,
+        Vec<(
+            BlockId,
+            crate::runtime::PortId,
+            BlockId,
+            crate::runtime::PortId,
+        )>,
+    ) {
+        (self.stream_edges.clone(), self.message_edges.clone())
+    }
+
     pub(crate) fn insert_block(
         &mut self,
         local_id: usize,
@@ -167,6 +230,28 @@ impl LocalDomainRuntime {
         self.controller.exec(f)
     }
 
+    pub(crate) fn topology(
+        &self,
+    ) -> Result<
+        (
+            Vec<(
+                BlockId,
+                crate::runtime::PortId,
+                BlockId,
+                crate::runtime::PortId,
+            )>,
+            Vec<(
+                BlockId,
+                crate::runtime::PortId,
+                BlockId,
+                crate::runtime::PortId,
+            )>,
+        ),
+        Error,
+    > {
+        self.exec(|state| Ok(state.topology()))
+    }
+
     pub(crate) fn run_if_needed(
         &mut self,
         main_channel: Sender<FlowgraphMessage>,
@@ -305,7 +390,7 @@ fn run_domain_thread(
     rx: sync_mpsc::Receiver<LocalDomainMessage>,
     mut terminate_rx: oneshot::Receiver<()>,
 ) {
-    let mut state = LocalDomainState { blocks: Vec::new() };
+    let mut state = LocalDomainState::new();
 
     while let Ok(message) = rx.recv() {
         match message {

@@ -19,13 +19,13 @@ pub trait AddLocal: Sized {
 }
 
 #[doc(hidden)]
-pub trait ConnectAdd {
+pub trait ConnectAdd<Target: ?Sized> {
     type Added;
 
-    fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error>;
+    fn connect_add(self, target: &mut Target) -> Result<Self::Added, Error>;
 }
 
-impl<K> ConnectAdd for K
+impl<K> ConnectAdd<Flowgraph> for K
 where
     K: SendKernel + SendKernelInterface + 'static,
 {
@@ -36,11 +36,30 @@ where
     }
 }
 
-impl<K: 'static> ConnectAdd for BlockRef<K> {
+impl<K: 'static> ConnectAdd<Flowgraph> for BlockRef<K> {
     type Added = BlockRef<K>;
 
     fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
         fg.validate_block_ref(&self)?;
+        Ok(self)
+    }
+}
+
+impl<'a, K> ConnectAdd<&LocalDomainContext<'a>> for K
+where
+    K: AddLocal + 'static,
+{
+    type Added = BlockRef<K>;
+
+    fn connect_add(self, ctx: &mut &LocalDomainContext<'a>) -> Result<Self::Added, Error> {
+        Ok((*ctx).add(self))
+    }
+}
+
+impl<'a, K: 'static> ConnectAdd<&LocalDomainContext<'a>> for BlockRef<K> {
+    type Added = BlockRef<K>;
+
+    fn connect_add(self, _ctx: &mut &LocalDomainContext<'a>) -> Result<Self::Added, Error> {
         Ok(self)
     }
 }

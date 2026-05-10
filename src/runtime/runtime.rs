@@ -362,10 +362,8 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
 ) -> Result<Flowgraph, Error> {
     debug!("in run_flowgraph");
 
-    let (mut inboxes, ids) = fg.inboxes()?;
+    let (mut inboxes, ids, stream_edges_desc, message_edges_desc) = fg.startup_snapshot()?;
     let blocks = fg.take_blocks()?;
-    let stream_edges_desc = fg.stream_edge_endpoints();
-    let message_edges_desc = fg.message_edges.clone();
     let block_tasks = scheduler.run_domain(blocks, &main_channel);
     let local_tasks = fg.run_local_domains(main_channel.clone())?;
 
