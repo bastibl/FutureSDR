@@ -34,8 +34,18 @@ rand_distr = "0.6"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 any_spawner = { version = "0.3", features = ["wasm-bindgen"] }
 console_error_panic_hook = "0.1"
-gloo-net = "0.7"
+gloo-timers = { version = "0.4", features = ["futures"] }
+js-sys = "0.3"
 leptos = { version = "0.8", features = ["csr", "nightly"] }
-log = "0.4"
-prophecy = { path = "../../crates/prophecy" }
-serde_json = "1.0"
+wasm-bindgen-futures = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Navigator",
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+    "Window",
+]

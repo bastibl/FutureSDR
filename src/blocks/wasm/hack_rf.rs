@@ -134,6 +134,11 @@ pub struct HackRf {
     offset: usize,
     device: Option<web_sys::UsbDevice>,
     pending_transfer: Option<js_sys::Promise<web_sys::UsbInTransferResult>>,
+    frequency: u64,
+    sample_rate: Option<f64>,
+    vga_gain: u16,
+    lna_gain: u16,
+    amp: bool,
 }
 
 impl Default for HackRf {
@@ -151,7 +156,42 @@ impl HackRf {
             offset: TRANSFER_SIZE,
             device: None,
             pending_transfer: None,
+            frequency: 2_480_000_000,
+            sample_rate: None,
+            vga_gain: 2,
+            lna_gain: 32,
+            amp: true,
         }
+    }
+
+    /// Set the initial center frequency in Hz.
+    pub fn frequency(mut self, frequency: u64) -> Self {
+        self.frequency = frequency;
+        self
+    }
+
+    /// Set the initial sample rate in Hz.
+    pub fn initial_sample_rate(mut self, sample_rate: f64) -> Self {
+        self.sample_rate = Some(sample_rate);
+        self
+    }
+
+    /// Set the initial VGA gain in dB.
+    pub fn vga_gain(mut self, gain: u16) -> Self {
+        self.vga_gain = gain;
+        self
+    }
+
+    /// Set the initial LNA gain in dB.
+    pub fn lna_gain(mut self, gain: u16) -> Self {
+        self.lna_gain = gain;
+        self
+    }
+
+    /// Enable or disable the RF amplifier initially.
+    pub fn amp_enable(mut self, enabled: bool) -> Self {
+        self.amp = enabled;
+        self
     }
 
     async fn freq(
@@ -556,12 +596,16 @@ impl LocalKernel for HackRf {
         .await?;
 
         self.device = Some(device);
-        self.set_sample_rate(8_000_000, 2).await.unwrap();
+        if let Some(sample_rate) = self.sample_rate {
+            self.set_sample_rate_auto(sample_rate).await.unwrap();
+        } else {
+            self.set_sample_rate(8_000_000, 2).await.unwrap();
+        }
         self.set_hw_sync_mode(0).await.unwrap();
-        self.set_freq(2_480_000_000).await.unwrap();
-        self.set_vga_gain(2).await.unwrap();
-        self.set_lna_gain(32).await.unwrap();
-        self.set_amp_enable(true).await.unwrap();
+        self.set_freq(self.frequency).await.unwrap();
+        self.set_vga_gain(self.vga_gain).await.unwrap();
+        self.set_lna_gain(self.lna_gain).await.unwrap();
+        self.set_amp_enable(self.amp).await.unwrap();
         self.set_transceiver_mode(TransceiverMode::Receive)
             .await
             .unwrap();
