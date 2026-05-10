@@ -4,6 +4,7 @@ use crate::runtime::Flowgraph;
 use crate::runtime::Result;
 use crate::runtime::dev::SendKernel;
 use crate::runtime::flowgraph::LocalDomain;
+use crate::runtime::flowgraph::LocalDomainContext;
 use crate::runtime::kernel_interface::SendKernelInterface;
 
 #[doc(hidden)]
@@ -13,6 +14,8 @@ pub trait AddLocal: Sized {
         fg: &mut Flowgraph,
         domain: LocalDomain,
     ) -> BlockRef<Self>;
+
+    fn add_domain(block: Self, ctx: &LocalDomainContext<'_>) -> BlockRef<Self>;
 }
 
 #[doc(hidden)]

@@ -31,6 +31,23 @@ pub(crate) struct LocalDomainState {
 }
 
 impl LocalDomainState {
+    pub(crate) fn insert_block(
+        &mut self,
+        local_id: usize,
+        block: Box<dyn LocalBlock>,
+    ) -> Result<(), Error> {
+        if self.blocks.len() <= local_id {
+            self.blocks.resize_with(local_id + 1, || None);
+        }
+        if self.blocks[local_id].is_some() {
+            return Err(Error::RuntimeError(format!(
+                "local block slot {local_id} was inserted more than once"
+            )));
+        }
+        self.blocks[local_id] = Some(block);
+        Ok(())
+    }
+
     pub(crate) fn block(
         &self,
         local_id: usize,
@@ -196,6 +213,14 @@ impl LocalDomainRuntime {
         let local_id = self.blocks;
         self.blocks += 1;
         local_id
+    }
+
+    pub(crate) fn block_count(&self) -> usize {
+        self.blocks
+    }
+
+    pub(crate) fn reserve_blocks(&mut self, n: usize) {
+        self.blocks += n;
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -456,7 +481,7 @@ async fn run_domain_worker(init: WasmLocalDomainInit) {
                 inbox_rx,
             } => {
                 let block = builder(inbox, inbox_rx);
-                if let Err(e) = insert_at(&mut state.blocks, local_id, block) {
+                if let Err(e) = state.insert_block(local_id, block) {
                     error!("failed to insert local block: {e}");
                 }
             }
@@ -474,23 +499,6 @@ async fn run_domain_worker(init: WasmLocalDomainInit) {
             LocalDomainMessage::Terminate => break,
         }
     }
-}
-
-fn insert_at(
-    blocks: &mut Vec<Option<Box<dyn LocalBlock>>>,
-    local_id: usize,
-    block: Box<dyn LocalBlock>,
-) -> Result<(), Error> {
-    if blocks.len() <= local_id {
-        blocks.resize_with(local_id + 1, || None);
-    }
-    if blocks[local_id].is_some() {
-        return Err(Error::RuntimeError(format!(
-            "local block slot {local_id} was inserted more than once"
-        )));
-    }
-    blocks[local_id] = Some(block);
-    Ok(())
 }
 
 async fn run_local_domain(
@@ -547,5 +555,5 @@ async fn run_local_domain(
 
     finished
         .into_iter()
-        .try_for_each(|(local_id, block)| insert_at(&mut state.blocks, local_id, block))
+        .try_for_each(|(local_id, block)| state.insert_block(local_id, block))
 }

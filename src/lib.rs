@@ -78,6 +78,8 @@ pub mod prelude {
     pub use futuresdr::runtime::FlowgraphBlockHandle;
     pub use futuresdr::runtime::FlowgraphHandle;
     pub use futuresdr::runtime::FlowgraphId;
+    pub use futuresdr::runtime::LocalDomain;
+    pub use futuresdr::runtime::LocalDomainContext;
     pub use futuresdr::runtime::Pmt;
     pub use futuresdr::runtime::PortId;
     pub use futuresdr::runtime::Result;

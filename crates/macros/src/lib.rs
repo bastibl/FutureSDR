@@ -1191,6 +1191,11 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
     } else {
         quote! { __add_local_from_kernel }
     };
+    let add_domain_method = if local {
+        quote! { __add_from_local_kernel }
+    } else {
+        quote! { __add_from_kernel }
+    };
     let port_getters = quote! {
         impl #generics #struct_name #unconstraint_generics
             #where_clause
@@ -1323,6 +1328,14 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
             ) -> ::futuresdr::runtime::BlockRef<Self>
             {
                 fg.#add_local_method(domain, block)
+            }
+
+            fn add_domain(
+                block: Self,
+                ctx: &::futuresdr::runtime::LocalDomainContext<'_>,
+            ) -> ::futuresdr::runtime::BlockRef<Self>
+            {
+                ctx.#add_domain_method(block)
             }
         }
 

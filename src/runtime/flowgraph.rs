@@ -1,4 +1,5 @@
 use futures::channel::oneshot;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -239,6 +240,140 @@ pub struct LocalDomain {
     domain_id: usize,
 }
 
+struct LocalDomainContextEntry {
+    placement: BlockPlacement,
+    inbox: BlockInbox,
+    message_inputs: &'static [&'static str],
+}
+
+struct LocalDomainContextInner<'a> {
+    flowgraph_id: FlowgraphId,
+    domain_id: usize,
+    next_block_id: usize,
+    next_local_id: usize,
+    entries: Vec<LocalDomainContextEntry>,
+    state: &'a mut LocalDomainState,
+}
+
+/// Builder context for constructing blocks directly inside a local domain.
+///
+/// Blocks added through this context are constructed on the local-domain
+/// thread/worker, so their state does not have to be `Send`.
+pub struct LocalDomainContext<'a> {
+    inner: RefCell<LocalDomainContextInner<'a>>,
+}
+
+impl<'a> LocalDomainContext<'a> {
+    fn new(
+        flowgraph_id: FlowgraphId,
+        domain_id: usize,
+        next_block_id: usize,
+        next_local_id: usize,
+        state: &'a mut LocalDomainState,
+    ) -> Self {
+        Self {
+            inner: RefCell::new(LocalDomainContextInner {
+                flowgraph_id,
+                domain_id,
+                next_block_id,
+                next_local_id,
+                entries: Vec::new(),
+                state,
+            }),
+        }
+    }
+
+    fn into_entries(self) -> Vec<LocalDomainContextEntry> {
+        self.inner.into_inner().entries
+    }
+
+    /// Add a block to this local domain.
+    pub fn add<K>(&self, block: K) -> BlockRef<K>
+    where
+        K: crate::runtime::__private::AddLocal + 'static,
+    {
+        crate::runtime::__private::AddLocal::add_domain(block, self)
+    }
+
+    #[doc(hidden)]
+    pub fn __add_from_kernel<K>(&self, block: K) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
+        let mut inner = self.inner.borrow_mut();
+        let block_id = BlockId(inner.next_block_id);
+        inner.next_block_id += 1;
+        let local_id = inner.next_local_id;
+        inner.next_local_id += 1;
+        let placement = BlockPlacement::Local {
+            domain_id: inner.domain_id,
+            local_id,
+            kind: LocalBlockKind::Kernel,
+        };
+
+        let (inbox, inbox_rx) =
+            crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
+        let mut b = WrappedKernel::new_with_inbox(block, block_id, inbox.clone(), inbox_rx);
+        let block_name = <K as KernelInterface>::type_name();
+        b.meta
+            .set_instance_name(format!("{}-{}", block_name, block_id.0));
+        inner
+            .state
+            .insert_block(local_id, Box::new(b))
+            .expect("failed to insert local-domain block");
+        inner.entries.push(LocalDomainContextEntry {
+            placement,
+            inbox,
+            message_inputs: <K as KernelInterface>::message_inputs(),
+        });
+        BlockRef {
+            id: block_id,
+            flowgraph_id: inner.flowgraph_id,
+            placement,
+            _marker: PhantomData,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn __add_from_local_kernel<K>(&self, block: K) -> BlockRef<K>
+    where
+        K: LocalKernel + LocalKernelInterface + 'static,
+    {
+        let mut inner = self.inner.borrow_mut();
+        let block_id = BlockId(inner.next_block_id);
+        inner.next_block_id += 1;
+        let local_id = inner.next_local_id;
+        inner.next_local_id += 1;
+        let placement = BlockPlacement::Local {
+            domain_id: inner.domain_id,
+            local_id,
+            kind: LocalBlockKind::LocalKernel,
+        };
+
+        let (inbox, inbox_rx) =
+            crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
+        let mut b = WrappedLocalKernel::new_with_inbox(block, block_id, inbox.clone(), inbox_rx);
+        let block_name = <K as LocalKernelInterface>::type_name();
+        b.meta
+            .set_instance_name(format!("{}-{}", block_name, block_id.0));
+        inner
+            .state
+            .insert_block(local_id, Box::new(b))
+            .expect("failed to insert local-domain block");
+        inner.entries.push(LocalDomainContextEntry {
+            placement,
+            inbox,
+            message_inputs: <K as LocalKernelInterface>::message_inputs(),
+        });
+        BlockRef {
+            id: block_id,
+            flowgraph_id: inner.flowgraph_id,
+            placement,
+            _marker: PhantomData,
+        }
+    }
+}
+
 pub(crate) struct BlockEntry {
     block: Option<Box<dyn Block>>,
     placement: BlockPlacement,
@@ -462,6 +597,51 @@ impl Flowgraph {
             flowgraph_id: self.id,
             domain_id,
         }
+    }
+
+    /// Run a builder closure inside a local domain.
+    ///
+    /// Blocks added through the [`LocalDomainContext`] are constructed inside the
+    /// local domain and therefore may contain non-`Send` state.
+    pub fn domain_run<R>(
+        &mut self,
+        domain: LocalDomain,
+        f: impl FnOnce(&LocalDomainContext<'_>) -> R + Send + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        let domain_id = self.validate_local_domain(domain)?;
+        if self.local_domains[domain_id].is_running() {
+            return Err(Error::LockError);
+        }
+
+        let next_block_id = self.blocks.len();
+        let next_local_id = self.local_domains[domain_id].block_count();
+        let flowgraph_id = self.id;
+        let (ret, entries) = self.local_domains[domain_id].exec(move |state| {
+            let ctx = LocalDomainContext::new(
+                flowgraph_id,
+                domain_id,
+                next_block_id,
+                next_local_id,
+                state,
+            );
+            let ret = f(&ctx);
+            Ok((ret, ctx.into_entries()))
+        })?;
+
+        self.local_domains[domain_id].reserve_blocks(entries.len());
+        for entry in entries {
+            self.blocks.push(BlockEntry {
+                block: None,
+                placement: entry.placement,
+                inbox: Some(entry.inbox),
+                message_inputs: Some(entry.message_inputs),
+            });
+        }
+
+        Ok(ret)
     }
 
     /// Add a block and return a typed reference to it.
