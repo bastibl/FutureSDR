@@ -1,6 +1,8 @@
 use async_executor::LocalExecutor;
+use futures::Future;
 use futures::channel::oneshot;
 use futures::future::Either;
+use std::pin::Pin;
 use std::sync::mpsc as sync_mpsc;
 use std::thread;
 
@@ -17,6 +19,12 @@ use crate::runtime::dev::BlockInbox;
 
 pub(crate) type LocalBlockBuilder =
     Box<dyn FnOnce(BlockInbox, BlockInboxReader) -> Box<dyn LocalBlock> + Send + 'static>;
+
+type LocalDomainAsyncExec = Box<
+    dyn for<'a> FnOnce(&'a mut LocalDomainState) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+        + Send
+        + 'static,
+>;
 
 pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static> + Send + 'static>;
 
@@ -167,6 +175,7 @@ enum LocalDomainMessage {
         inbox_rx: BlockInboxReader,
     },
     Exec(Box<dyn FnOnce(&mut LocalDomainState) + Send + 'static>),
+    ExecAsync(LocalDomainAsyncExec),
     Run {
         main_channel: Sender<FlowgraphMessage>,
         executor_factory: LocalExecutorFactory,
@@ -228,6 +237,20 @@ impl LocalDomainRuntime {
         R: Send + 'static,
     {
         self.controller.exec(f)
+    }
+
+    pub(crate) async fn exec_async<R>(
+        &self,
+        f: impl for<'a> FnOnce(
+            &'a mut LocalDomainState,
+        ) -> Pin<Box<dyn Future<Output = Result<R, Error>> + 'a>>
+        + Send
+        + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        self.controller.exec_async(f).await
     }
 
     pub(crate) fn topology(
@@ -299,6 +322,29 @@ impl LocalDomainHandle {
         async_io::block_on(rx)
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
     }
+
+    pub(crate) async fn exec_async<R>(
+        &self,
+        f: impl for<'a> FnOnce(
+            &'a mut LocalDomainState,
+        ) -> Pin<Box<dyn Future<Output = Result<R, Error>> + 'a>>
+        + Send
+        + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(LocalDomainMessage::ExecAsync(Box::new(move |state| {
+                Box::pin(async move {
+                    let _ = reply.send(f(state).await);
+                })
+            })))
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
+        rx.await
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
+    }
 }
 
 impl LocalDomainController {
@@ -355,6 +401,20 @@ impl LocalDomainController {
         self.handle().exec(f)
     }
 
+    pub(crate) async fn exec_async<R>(
+        &self,
+        f: impl for<'a> FnOnce(
+            &'a mut LocalDomainState,
+        ) -> Pin<Box<dyn Future<Output = Result<R, Error>> + 'a>>
+        + Send
+        + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        self.handle().exec_async(f).await
+    }
+
     pub(crate) fn run(
         &self,
         main_channel: Sender<FlowgraphMessage>,
@@ -406,6 +466,7 @@ fn run_domain_thread(
                 }
             }
             LocalDomainMessage::Exec(f) => f(&mut state),
+            LocalDomainMessage::ExecAsync(f) => async_io::block_on(f(&mut state)),
             LocalDomainMessage::Run {
                 main_channel,
                 executor_factory,

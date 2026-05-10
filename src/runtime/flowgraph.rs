@@ -1,9 +1,11 @@
+use futures::Future;
 use futures::channel::oneshot;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -283,8 +285,8 @@ impl<'a> LocalDomainContext<'a> {
         }
     }
 
-    fn into_entries(self) -> Vec<LocalDomainContextEntry> {
-        self.inner.into_inner().entries
+    fn take_entries(&self) -> Vec<LocalDomainContextEntry> {
+        std::mem::take(&mut self.inner.borrow_mut().entries)
     }
 
     /// Add a block to this local domain.
@@ -748,7 +750,7 @@ impl Flowgraph {
     pub fn domain_run<R>(
         &mut self,
         domain: LocalDomain,
-        f: impl FnOnce(&LocalDomainContext<'_>) -> R + Send + 'static,
+        f: impl FnOnce(&LocalDomainContext<'_>) -> Result<R, Error> + Send + 'static,
     ) -> Result<R, Error>
     where
         R: Send + 'static,
@@ -769,9 +771,63 @@ impl Flowgraph {
                 next_local_id,
                 state,
             );
-            let ret = f(&ctx);
-            Ok((ret, ctx.into_entries()))
+            let ret = f(&ctx)?;
+            Ok((ret, ctx.take_entries()))
         })?;
+
+        self.local_domains[domain_id].reserve_blocks(entries.len());
+        for entry in entries {
+            self.blocks.push(BlockEntry {
+                block: None,
+                placement: entry.placement,
+                inbox: Some(entry.inbox),
+                message_inputs: Some(entry.message_inputs),
+            });
+        }
+
+        Ok(ret)
+    }
+
+    /// Run an async builder closure inside a local domain.
+    ///
+    /// This is the async counterpart of [`Flowgraph::domain_run`]. The future
+    /// is created and awaited inside the local domain, so it may hold non-`Send`
+    /// state across await points as long as that state is constructed there.
+    pub async fn domain_run_async<R>(
+        &mut self,
+        domain: LocalDomain,
+        f: impl for<'a> FnOnce(
+            &'a LocalDomainContext<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<R, Error>> + 'a>>
+        + Send
+        + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        let domain_id = self.validate_local_domain(domain)?;
+        if self.local_domains[domain_id].is_running() {
+            return Err(Error::LockError);
+        }
+
+        let next_block_id = self.blocks.len();
+        let next_local_id = self.local_domains[domain_id].block_count();
+        let flowgraph_id = self.id;
+        let (ret, entries) = self.local_domains[domain_id]
+            .exec_async(move |state| {
+                Box::pin(async move {
+                    let ctx = LocalDomainContext::new(
+                        flowgraph_id,
+                        domain_id,
+                        next_block_id,
+                        next_local_id,
+                        state,
+                    );
+                    let ret = f(&ctx).await?;
+                    Ok((ret, ctx.take_entries()))
+                })
+            })
+            .await?;
 
         self.local_domains[domain_id].reserve_blocks(entries.len());
         for entry in entries {

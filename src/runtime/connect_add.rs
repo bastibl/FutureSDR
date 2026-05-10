@@ -19,47 +19,47 @@ pub trait AddLocal: Sized {
 }
 
 #[doc(hidden)]
-pub trait ConnectAdd<Target: ?Sized> {
+pub trait ConnectAdd<B> {
     type Added;
 
-    fn connect_add(self, target: &mut Target) -> Result<Self::Added, Error>;
+    fn connect_add(self, block: B) -> Result<Self::Added, Error>;
 }
 
-impl<K> ConnectAdd<Flowgraph> for K
+impl<K> ConnectAdd<K> for &mut Flowgraph
 where
     K: SendKernel + SendKernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 
-    fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        Ok(fg.add(self))
+    fn connect_add(self, block: K) -> Result<Self::Added, Error> {
+        Ok(self.add(block))
     }
 }
 
-impl<K: 'static> ConnectAdd<Flowgraph> for BlockRef<K> {
+impl<K: 'static> ConnectAdd<BlockRef<K>> for &mut Flowgraph {
     type Added = BlockRef<K>;
 
-    fn connect_add(self, fg: &mut Flowgraph) -> Result<Self::Added, Error> {
-        fg.validate_block_ref(&self)?;
-        Ok(self)
+    fn connect_add(self, block: BlockRef<K>) -> Result<Self::Added, Error> {
+        self.validate_block_ref(&block)?;
+        Ok(block)
     }
 }
 
-impl<'a, K> ConnectAdd<&LocalDomainContext<'a>> for K
+impl<'ctx, 'borrow, K> ConnectAdd<K> for &'borrow LocalDomainContext<'ctx>
 where
     K: AddLocal + 'static,
 {
     type Added = BlockRef<K>;
 
-    fn connect_add(self, ctx: &mut &LocalDomainContext<'a>) -> Result<Self::Added, Error> {
-        Ok((*ctx).add(self))
+    fn connect_add(self, block: K) -> Result<Self::Added, Error> {
+        Ok(self.add(block))
     }
 }
 
-impl<'a, K: 'static> ConnectAdd<&LocalDomainContext<'a>> for BlockRef<K> {
+impl<'ctx, 'borrow, K: 'static> ConnectAdd<BlockRef<K>> for &'borrow LocalDomainContext<'ctx> {
     type Added = BlockRef<K>;
 
-    fn connect_add(self, _ctx: &mut &LocalDomainContext<'a>) -> Result<Self::Added, Error> {
-        Ok(self)
+    fn connect_add(self, block: BlockRef<K>) -> Result<Self::Added, Error> {
+        Ok(block)
     }
 }

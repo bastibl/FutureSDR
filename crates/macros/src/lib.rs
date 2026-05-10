@@ -240,11 +240,12 @@ pub fn connect(input: TokenStream) -> TokenStream {
     // Generate block declarations
     let block_decls = blocks.iter().map(|block| {
         quote! {
-            let #block = ::futuresdr::runtime::__private::ConnectAdd::connect_add(#block, &mut #fg)?;
+            let #block = #fg.connect_add(#block)?;
         }
     });
 
     let out = quote! {
+        use ::futuresdr::runtime::__private::ConnectAdd as _;
         #(#block_decls)*
         #(#connections)*
         (#(#blocks),*)
