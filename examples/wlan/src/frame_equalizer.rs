@@ -95,10 +95,6 @@ where
     decoder: ViterbiDecoder,
     syms: Vec<Complex32>,
     pending_frame_tag: Option<FrameParam>,
-    starts: usize,
-    signal_failures: usize,
-    signal_successes: usize,
-    work_logs: usize,
 }
 
 impl<I, O> FrameEqualizer<I, O>
@@ -107,14 +103,9 @@ where
     O: CpuBufferWriter<Item = u8>,
 {
     pub fn new() -> Self {
-        let mut input = I::default();
-        input.set_min_items(64);
-        let mut output = O::default();
-        output.set_min_items(48);
-        output.set_min_buffer_size_in_items(48);
         Self {
-            input,
-            output,
+            input: I::default(),
+            output: O::default(),
             equalizer: Equalizer::new(),
             state: State::Skip,
             sym_in: [Complex32::new(0.0, 0.0); 64],
@@ -124,10 +115,6 @@ where
             decoder: ViterbiDecoder::new(),
             syms: Vec::new(),
             pending_frame_tag: None,
-            starts: 0,
-            signal_failures: 0,
-            signal_successes: 0,
-            work_logs: 0,
         }
     }
 
@@ -227,12 +214,8 @@ where
             _ => None,
         }) {
             if *index == 0 {
-                self.starts += 1;
                 if !matches!(self.state, State::Skip) {
                     info!("frame equalizer: canceling frame");
-                }
-                if self.starts <= 20 {
-                    info!("frame equalizer: got wifi_start tag {}", self.starts);
                 }
                 self.state = State::Sync1;
                 self.pending_frame_tag = None;
@@ -243,16 +226,6 @@ where
 
         let max_i = input.len() / 64;
         let max_o = out.len() / 48;
-        if self.work_logs < 20 && (max_i > 0 || !in_tags.is_empty()) {
-            info!(
-                "frame equalizer: work state {:?}, input {}, tags {}, output room {} symbols",
-                self.state,
-                input.len(),
-                in_tags.len(),
-                max_o
-            );
-            self.work_logs += 1;
-        }
         let mut i = 0;
         let mut o = 0;
 
@@ -340,14 +313,7 @@ where
                         &self.bits_out,
                         &mut self.decoded_bits,
                     ) {
-                        self.signal_successes += 1;
-                        info!(
-                            "signal field decoded {:?}, snr {} (success {}, failures {})",
-                            &frame,
-                            self.equalizer.snr(),
-                            self.signal_successes,
-                            self.signal_failures
-                        );
+                        // info!("signal field decoded {:?}, snr {}", &frame, self.equalizer.snr());
 
                         self.state = State::Copy(
                             frame.n_symbols(),
@@ -356,15 +322,10 @@ where
                         );
                         self.pending_frame_tag = Some(frame);
                     } else {
-                        self.signal_failures += 1;
-                        if self.signal_failures <= 20 || self.signal_failures.is_multiple_of(100) {
-                            info!(
-                                "signal field could not be decoded, snr {} (failure {}, successes {})",
-                                self.equalizer.snr(),
-                                self.signal_failures,
-                                self.signal_successes
-                            );
-                        }
+                        info!(
+                            "signal field could not be decoded, snr {}",
+                            self.equalizer.snr()
+                        );
                         self.state = State::Skip;
                         self.pending_frame_tag = None;
                     }

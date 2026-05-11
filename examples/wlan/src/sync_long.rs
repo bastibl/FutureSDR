@@ -61,10 +61,6 @@ where
     output: O,
     corr: Correlator,
     state: State,
-    starts: usize,
-    dropped_untagged: usize,
-    symbols_out: usize,
-    copy_logs: usize,
 }
 
 impl<I, O> SyncLong<I, O>
@@ -73,23 +69,14 @@ where
     O: CpuBufferWriter<Item = Complex32>,
 {
     pub fn new() -> Self {
-        let mut input = I::default();
-        input.set_min_items(SEARCH_WINDOW + 128);
-        let mut output = O::default();
-        output.set_min_items(128);
-        output.set_min_buffer_size_in_items(128);
         Self {
-            input,
-            output,
+            input: I::default(),
+            output: O::default(),
             corr: Correlator {
                 cor: [Complex32::new(0.0, 0.0); SEARCH_WINDOW],
                 cor_index: Vec::with_capacity(SEARCH_WINDOW),
             },
             state: State::Broken,
-            starts: 0,
-            dropped_untagged: 0,
-            symbols_out: 0,
-            copy_logs: 0,
         }
     }
 }
@@ -119,7 +106,7 @@ where
         let input_len = input.len();
         let (out, mut out_tags) = self.output.slice_with_tags();
 
-        let mut input_limit = input.len();
+        let mut m = std::cmp::min(input.len(), out.len());
 
         // println!("long tags {:?}", &tags);
         if let Some((index, freq)) = in_tags.iter().find_map(|x| match x {
@@ -136,26 +123,11 @@ where
             _ => None,
         }) {
             if *index == 0 {
-                let was_copy = matches!(self.state, State::Copy(..));
-                self.starts += 1;
-                if self.starts <= 10 || was_copy {
-                    info!(
-                        "sync long: got wifi_start tag {} with short freq offset {:.6}{}",
-                        self.starts,
-                        freq,
-                        if was_copy { " while in Copy; resetting" } else { "" }
-                    );
-                }
                 self.state = State::Sync(*freq);
             } else {
-                input_limit = std::cmp::min(input_limit, *index);
-                if input_limit < 80 {
-                    if matches!(self.state, State::Copy(..)) {
-                        info!(
-                            "sync long: next wifi_start is only {input_limit} samples ahead while in Copy; advancing to it"
-                        );
-                    }
-                    self.input.consume(input_limit);
+                m = std::cmp::min(m, *index);
+                if m < 80 {
+                    self.input.consume(m);
                     return Ok(());
                 }
             }
@@ -163,28 +135,14 @@ where
 
         match self.state {
             State::Broken => {
-                if input_limit > 0 {
-                    self.dropped_untagged += input_limit;
-                    if self.dropped_untagged <= 10 * input_limit {
-                        debug!(
-                            "sync long: dropping {input_limit} untagged samples while waiting for wifi_start tag (total dropped {})",
-                            self.dropped_untagged
-                        );
-                    }
-                    self.input.consume(input_limit);
+                if m > 0 {
+                    panic!("Sync Long is in broken state")
                 }
             }
             State::Sync(freq_offset_short) => {
-                if input.len() >= SEARCH_WINDOW + 128 && out.len() >= 128 {
+                if m >= SEARCH_WINDOW + 128 {
                     let (offset, freq_offset) = self.corr.sync(&input[0..SEARCH_WINDOW + 63]);
-                    if self.starts <= 10 {
-                        info!(
-                            "sync long: long preamble offset {}, long freq offset {:.6}, combined {:.6}",
-                            offset,
-                            freq_offset,
-                            freq_offset_short + freq_offset
-                        );
-                    }
+                    // debug!("long start: offset {}   freq {}", offset, freq_offset);
 
                     for i in 0..128 {
                         out[i] =
@@ -199,23 +157,11 @@ where
                     self.output.produce(128);
                     io.call_again = true;
 
-                    if self.starts <= 10 {
-                        info!("sync long: produced long preamble and entered Copy state");
-                    }
                     self.state = State::Copy(0, freq_offset);
                 }
             }
             State::Copy(n_copied, freq_offset) => {
-                let syms = std::cmp::min(input_limit / 80, out.len() / 64);
-                if self.copy_logs < 20 {
-                    info!(
-                        "sync long: copy state input_limit {}, output room {}, producing {} OFDM symbols",
-                        input_limit,
-                        out.len(),
-                        syms
-                    );
-                    self.copy_logs += 1;
-                }
+                let syms = m / 80;
                 for i in 0..syms {
                     for k in 0..64 {
                         out[i * 64 + k] = input[i * 80 + 16 + k]
@@ -227,16 +173,11 @@ where
                 }
                 self.input.consume(syms * 80);
                 self.output.produce(syms * 64);
-                self.symbols_out += syms;
-                if self.symbols_out >= 1000 {
-                    info!("sync long: output {} OFDM symbols", self.symbols_out);
-                    self.symbols_out = 0;
-                }
                 self.state = State::Copy(n_copied + syms, freq_offset);
             }
         }
 
-        if self.input.finished() && input_len - input_limit < 80 {
+        if self.input.finished() && input_len - m < 80 {
             io.finished = true;
         }
 

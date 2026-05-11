@@ -47,10 +47,8 @@ where
 {
     pub fn new(len: usize) -> Self {
         assert!(len > 0);
-        let mut input = I::default();
-        input.set_min_items(len);
         Self {
-            input,
+            input: I::default(),
             output: O::default(),
             len,
             pad: len - 1,

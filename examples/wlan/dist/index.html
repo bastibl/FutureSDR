@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FutureSDR :: WLAN RX</title>
+    <title>FutureSDR :: Prophecy GUI</title>
 
-    <link rel="icon" href="/examples/wlan/favicon.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
-    <link rel="stylesheet" href="/examples/wlan/style.css" integrity="sha384-8vSKGYrqt/ADjH8jANGFm2YhiYtsNcXLdDQEaQBmnXt8kdKjVcN48VLDAOkKxUnY"/>
+    <link rel="icon" href="/favicon-baad1291935ce574.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
+    <link rel="stylesheet" href="/style-a73fd4a7ffe584e6.css" integrity="sha384-BcyYGNUH13FS0n0ze4od74g5ERgzoEd67xmlJJtwWkMC3eBloeadcprgKcYQr+cL"/>
     
 <script type="module">
-import init, * as bindings from '/examples/wlan/futuresdr_app.js';
-const wasm = await init({ module_or_path: '/examples/wlan/futuresdr_app_bg.wasm' });
+import init, * as bindings from '/frontend-4909fbba453ea34b.js';
+const wasm = await init({ module_or_path: '/frontend-4909fbba453ea34b_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -19,9 +19,8 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-    
-    <base href="/examples/wlan/" />
-  <link rel="modulepreload" href="/examples/wlan/futuresdr_app.js" crossorigin="anonymous" integrity="sha384-7BqwQTz18XIObJYThXs/+OdhXWYhXYPIZQnoaaaA8xilVa3tDKd10RXtRlUoXlTt"><link rel="preload" href="/examples/wlan/futuresdr_app_bg.wasm" crossorigin="anonymous" integrity="sha384-37OkqbuJL7xeEQnp3s8QINVovZWaClLICK3NQ7DGq7kjaSEHh3pj/PeiAYjulXmc" as="fetch" type="application/wasm"></head>
+    <base href="/" />
+  <link rel="modulepreload" href="/frontend-4909fbba453ea34b.js" crossorigin="anonymous" integrity="sha384-VW9BSLbA+e4/dUkurluAhs2xFqfHsC0MIMj8RyGpKLmqjZdqWGcEBSl+79WlUggx"><link rel="preload" href="/frontend-4909fbba453ea34b_bg.wasm" crossorigin="anonymous" integrity="sha384-2po0KIHXB4g56nQgU1O3eUpO3SM8QRC0VN/jCxuFlkLitOvj0Bfo3hEbXBUu/T3q" as="fetch" type="application/wasm"></head>
   <body class="bg-slate-900">
   </body>
 </html>
