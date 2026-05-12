@@ -8,6 +8,8 @@ use crate::*;
 
 /// The duration considered to be recent when decoding CPR frames
 const ADSB_TIME_RECENT: Duration = Duration::new(10, 0);
+/// Default number of position/velocity records retained per aircraft.
+const DEFAULT_MAX_HISTORY_LEN: usize = 512;
 
 #[derive(Block)]
 #[message_inputs(r#in, ctrl_port)]
@@ -16,25 +18,36 @@ pub struct Tracker {
     prune_after: Option<Duration>,
     /// A register of the received aircrafts.
     aircraft_register: AircraftRegister,
+    /// Maximum number of position/velocity records retained per aircraft.
+    max_history_len: usize,
 }
 
 impl Tracker {
     /// Creates a new tracker without pruning.
     pub fn new() -> Self {
-        Tracker::new_with_optional_args(None)
+        Tracker::new_with_optional_args(None, DEFAULT_MAX_HISTORY_LEN)
     }
 
     pub fn with_pruning(after: Duration) -> Self {
-        Tracker::new_with_optional_args(Some(after))
+        Tracker::new_with_optional_args(Some(after), DEFAULT_MAX_HISTORY_LEN)
     }
 
-    fn new_with_optional_args(prune_after: Option<Duration>) -> Self {
+    pub fn with_max_history_len(max_history_len: usize) -> Self {
+        Tracker::new_with_optional_args(None, max_history_len)
+    }
+
+    pub fn with_pruning_and_max_history_len(after: Duration, max_history_len: usize) -> Self {
+        Tracker::new_with_optional_args(Some(after), max_history_len)
+    }
+
+    fn new_with_optional_args(prune_after: Option<Duration>, max_history_len: usize) -> Self {
         let aircraft_register = AircraftRegister {
             register: HashMap::new(),
         };
         Self {
             prune_after,
             aircraft_register,
+            max_history_len: max_history_len.max(1),
         }
     }
 
@@ -190,8 +203,12 @@ impl Tracker {
             && let Some(odd_cpr_rec) = &rec.last_cpr_odd.as_ref()
         {
             // The frames must be recent
-            if even_cpr_rec.time < now + ADSB_TIME_RECENT
-                && odd_cpr_rec.time < now + ADSB_TIME_RECENT
+            if now
+                .duration_since(even_cpr_rec.time)
+                .is_ok_and(|d| d <= ADSB_TIME_RECENT)
+                && now
+                    .duration_since(odd_cpr_rec.time)
+                    .is_ok_and(|d| d <= ADSB_TIME_RECENT)
             {
                 // The CPR frames must be orderd by time
                 let (cpr1, cpr2) = match even_cpr_rec.time.cmp(&odd_cpr_rec.time) {
@@ -213,6 +230,7 @@ impl Tracker {
                     };
                     let rec = self.aircraft_register.register.get_mut(icao).unwrap();
                     rec.positions.push(new_rec);
+                    Self::trim_history(&mut rec.positions, self.max_history_len);
                 }
             }
         }
@@ -251,8 +269,15 @@ impl Tracker {
             };
             let rec = self.aircraft_register.register.get_mut(icao).unwrap();
             rec.velocities.push(new_record);
+            Self::trim_history(&mut rec.velocities, self.max_history_len);
         }
         self.update_last_seen(icao);
+    }
+
+    fn trim_history<T>(records: &mut Vec<T>, max_len: usize) {
+        if records.len() > max_len {
+            records.drain(0..records.len() - max_len);
+        }
     }
 }
 

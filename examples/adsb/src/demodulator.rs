@@ -58,10 +58,11 @@ where
         let max_packet_len_samples: usize = 120 * 2 * N_SAMPLES_PER_HALF_SYM;
         let max_packet_data_len_bits: usize = 112;
         let preamble_len_samples: usize = 8 * 2 * N_SAMPLES_PER_HALF_SYM;
+        let samples_to_keep = max_packet_len_samples - 1;
 
         // Search for preamble_start tags
         for tagitem in tags {
-            if tagitem.index + max_packet_len_samples < samples.len() {
+            if tagitem.index + max_packet_len_samples <= samples.len() {
                 let result = match &tagitem.tag {
                     Tag::NamedF32(k, preamble_corr) if k == "preamble_start" => {
                         let bits: Vec<u8> = (0..max_packet_data_len_bits)
@@ -100,9 +101,10 @@ where
             }
         }
 
-        if samples.len() >= max_packet_len_samples {
-            self.input.consume(samples_len - max_packet_len_samples);
-            self.n_received += (samples_len - max_packet_len_samples) as u64;
+        if samples_len > samples_to_keep {
+            let samples_to_consume = samples_len - samples_to_keep;
+            self.input.consume(samples_to_consume);
+            self.n_received += samples_to_consume as u64;
         }
 
         if self.input.finished() {

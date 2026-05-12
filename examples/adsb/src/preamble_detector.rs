@@ -62,7 +62,13 @@ where
     }
 }
 
-impl Kernel for PreambleDetector {
+impl<IS, IN, IP, O> Kernel for PreambleDetector<IS, IN, IP, O>
+where
+    IS: CpuBufferReader<Item = f32>,
+    IN: CpuBufferReader<Item = f32>,
+    IP: CpuBufferReader<Item = f32>,
+    O: CpuBufferWriter<Item = f32>,
+{
     async fn work(
         &mut self,
         io: &mut WorkIo,

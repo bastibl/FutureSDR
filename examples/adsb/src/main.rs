@@ -39,6 +39,9 @@ struct Args {
     /// Remove aircrafts when no packets have been received for the specified number of seconds
     #[arg(short, long)]
     lifetime: Option<u64>,
+    /// Maximum number of position/velocity records to retain per aircraft
+    #[arg(long, default_value_t = 512)]
+    history_size: usize,
 }
 
 fn sample_rate_parser(sample_rate_str: &str) -> Result<f64, String> {
@@ -104,12 +107,14 @@ fn main() -> Result<()> {
     let nf_est_block = FirBuilder::fir::<f32, f32, _>(vec![1.0f32 / 32.0; 32]);
     let preamble_taps: Vec<f32> = preamble_correlator_taps();
     let preamble_corr_block = FirBuilder::fir::<f32, f32, _>(preamble_taps);
-    let preamble_detector = PreambleDetector::new(args.preamble_threshold);
+    let preamble_detector: PreambleDetector = PreambleDetector::new(args.preamble_threshold);
     let adsb_demod = Demodulator::new();
     let adsb_decoder = Decoder::new(false);
     let tracker = match args.lifetime {
-        Some(s) => Tracker::with_pruning(Duration::from_secs(s)),
-        None => Tracker::new(),
+        Some(s) => {
+            Tracker::with_pruning_and_max_history_len(Duration::from_secs(s), args.history_size)
+        }
+        None => Tracker::with_max_history_len(args.history_size),
     };
     connect!(fg, interp_block > complex_to_mag_2 > nf_est_block;
     complex_to_mag_2 > preamble_corr_block;

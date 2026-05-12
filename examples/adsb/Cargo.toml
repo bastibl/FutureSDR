@@ -5,10 +5,6 @@ edition = "2024"
 
 [workspace]
 
-[[bin]]
-name = "listen-adsb"
-path = "src/bin/listen_adsb.rs"
-
 [features]
 default = ["soapy"]
 aaronia_http = ["futuresdr/aaronia_http"]
@@ -24,7 +20,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
 
-# 0.19.1 is broken. remove when fixed
+# adsb_deku 0.8 depends on deku 0.19; 0.19.1 breaks its derives.
 [patch.crates-io]
-deku = { git = "https://github.com/sharksforarms/deku.git", tag = "deku-v0.19.0"}
-deku_derive = { git = "https://github.com/sharksforarms/deku.git", tag = "deku-v0.19.0"}
+deku = { git = "https://github.com/sharksforarms/deku.git", tag = "deku-v0.19.0" }
+deku_derive = { git = "https://github.com/sharksforarms/deku.git", tag = "deku-v0.19.0" }
+
