@@ -1,8 +1,0 @@
-[build]
-target = "index.html"
-dist = "dist"
-filehash = false
-
-[serve.headers]
-"Cross-Origin-Opener-Policy" = "same-origin"
-"Cross-Origin-Embedder-Policy" = "require-corp"
