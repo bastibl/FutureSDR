@@ -10,8 +10,6 @@ use futuresdr::runtime::buffer::LocalCpuWriter;
 
 fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
-    let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
-
     let local = fg.local_domain();
 
     let src = fg.add_local(local, || {
@@ -20,6 +18,7 @@ fn main() -> Result<()> {
     let head = fg.add_local(local, || {
         Head::<u8, LocalCpuReader<u8>, DefaultCpuWriter<u8>>::new(3)
     });
+    let snk = fg.add(NullSink::<u8, DefaultCpuReader<u8>>::new());
 
     fg.stream_local(&src, |b| b.output(), &head, |b| b.input())?;
     fg.stream(&head, |b| b.output(), &snk, |b| b.input())?;

@@ -4,7 +4,6 @@ use futuresdr::blocks::VectorSink;
 use futuresdr::blocks::VectorSource;
 use futuresdr::prelude::*;
 use std::iter::repeat_with;
-use std::time;
 
 fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
@@ -24,9 +23,7 @@ fn main() -> Result<()> {
         dup.outputs[2] > snk2;
     );
 
-    let now = time::Instant::now();
     let fg = Runtime::new().run(fg)?;
-    let elapsed = now.elapsed();
 
     for snk in [snk0, snk1, snk2].iter() {
         let snk = fg.block(snk)?;
@@ -37,8 +34,6 @@ fn main() -> Result<()> {
             assert_eq!(orig[i], v[i]);
         }
     }
-
-    println!("flowgraph took {elapsed:?}");
 
     Ok(())
 }
