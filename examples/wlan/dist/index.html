@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FutureSDR :: Prophecy GUI</title>
 
-    <link rel="icon" href="/favicon-baad1291935ce574.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
-    <link rel="stylesheet" href="/style-a73fd4a7ffe584e6.css" integrity="sha384-BcyYGNUH13FS0n0ze4od74g5ERgzoEd67xmlJJtwWkMC3eBloeadcprgKcYQr+cL"/>
+    <link rel="icon" href="/favicon.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
+    <link rel="stylesheet" href="/style.css" integrity="sha384-BcyYGNUH13FS0n0ze4od74g5ERgzoEd67xmlJJtwWkMC3eBloeadcprgKcYQr+cL"/>
     
 <script type="module">
-import init, * as bindings from '/frontend-17f0eb36af3447c2.js';
-const wasm = await init({ module_or_path: '/frontend-17f0eb36af3447c2_bg.wasm' });
+import init, * as bindings from '/frontend.js';
+const wasm = await init({ module_or_path: '/frontend_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -20,7 +20,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
     <base href="/" />
-  <link rel="modulepreload" href="/frontend-17f0eb36af3447c2.js" crossorigin="anonymous" integrity="sha384-KtGOooo/ygrZmGC6fPCfi0cJKEfxGoOxBhoolrP1kQMXEjSM34xgJE5jpls+XBgA"><link rel="preload" href="/frontend-17f0eb36af3447c2_bg.wasm" crossorigin="anonymous" integrity="sha384-0YRF+8QtMJI4TvPmL2GnrM53pgwz2JUk+GRnsAiMeHndvyVVJcA9bG/mhRktXZpW" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/frontend.js" crossorigin="anonymous" integrity="sha384-KtGOooo/ygrZmGC6fPCfi0cJKEfxGoOxBhoolrP1kQMXEjSM34xgJE5jpls+XBgA"><link rel="preload" href="/frontend_bg.wasm" crossorigin="anonymous" integrity="sha384-0YRF+8QtMJI4TvPmL2GnrM53pgwz2JUk+GRnsAiMeHndvyVVJcA9bG/mhRktXZpW" as="fetch" type="application/wasm"></head>
   <body class="bg-slate-900">
   </body>
 </html>
