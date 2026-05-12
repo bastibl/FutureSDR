@@ -4,7 +4,7 @@
 
 Zigbee is a wireless standard designed for low-power, low-data-rate applications, operating under the IEEE 802.15.4 specification. It is commonly used in Internet of Things (IoT) networks for device-to-device communication in smart homes and industrial environments. This implementation utilizes O-QPSK modulation and DSSS (Direct Sequence Spread Spectrum) within the 2.4 GHz ISM band.
 
-This project implements Zigbee signal processing using the FutureSDR framework. It provides tools to transmit, receive, and analyze Zigbee frames using Software Defined Radio (SDR) hardware. The system is organized into four distinct modes for different testing and deployment scenarios.
+This project implements Zigbee signal processing using the FutureSDR framework. It provides native tools to transmit, receive, and analyze Zigbee frames using Software Defined Radio (SDR) hardware. The signal-processing blocks in this crate are also reused by the separate `../zigbee-wasm` browser receiver.
 
 ## 1. Transmitter (tx)
 The transmitter mode generates Zigbee-compliant frames and broadcasts them via the connected SDR hardware. It handles the MAC-layer framing and physical layer modulation.
@@ -43,17 +43,16 @@ The transceiver mode runs the transmitter and receiver chains simultaneously wit
 cargo run --release --bin trx -- --rx-gain {value} --tx-gain {value} --tx-channel {11..26} --rx-channel {11..26}
 ```
 
-## 4. WebAssembly Receiver
-The project includes a web-based receiver implemented with WebAssembly (WASM). This provides a graphical interface to monitor Zigbee traffic through a browser.
+## 4. Native Web GUI
 
-First, run this command:
+The native receiver can serve a browser GUI through the FutureSDR control port. Build the frontend once:
 
 ```sh
-trunk serve
+trunk build --release
 ```
 
-Then, navigate to `http://127.0.0.1:8080/` in your web browser.
+Then run `rx` from this directory. `config.toml` points the control port at `dist/`, so open <http://127.0.0.1:1337/> to control the native flowgraph and monitor decoded frames.
 
-Use the `Channel` dropdown to select the frequency and the `Start` button to initialize the device. Decoded frame details will be listed in the UI as they are received.
+## 5. WebAssembly Receiver
 
-**Note**: This interface currently supports HackRF devices only.
+The browser/WebUSB receiver lives in the separate `../zigbee-wasm` workspace. It depends on this crate with default features disabled and reuses the blocks here.

@@ -2,7 +2,7 @@ import {
   initSync,
   futuresdr_wasm_local_domain_worker_entry,
   futuresdr_wasm_scheduler_worker_entry,
-} from "./wasm-gui.js";
+} from "./futuresdr_app.js";
 
 const THREAD_STACK_SIZE = 1024 * 1024;
 

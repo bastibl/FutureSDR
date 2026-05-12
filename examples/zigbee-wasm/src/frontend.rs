@@ -24,9 +24,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::ClockRecoveryMm;
-use crate::Decoder;
-use crate::Mac;
+use zigbee::ClockRecoveryMm;
+use zigbee::Decoder;
+use zigbee::Mac;
 
 const FRAME_QUEUE_LIMIT: usize = 100;
 const DISPLAY_FRAME_LIMIT: usize = 20;

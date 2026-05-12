@@ -13,8 +13,8 @@ pub use mac::Mac;
 mod modulator;
 pub use modulator::modulator;
 
-#[cfg(target_arch = "wasm32")]
-pub mod wasm_gui;
+#[cfg(all(target_arch = "wasm32", feature = "frontend"))]
+pub mod frontend;
 
 use anyhow::Result;
 use anyhow::bail;

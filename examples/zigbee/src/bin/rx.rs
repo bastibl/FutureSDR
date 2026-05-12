@@ -4,6 +4,7 @@ use futuresdr::blocks::Apply;
 use futuresdr::blocks::BlobToUdp;
 use futuresdr::blocks::FileSource;
 use futuresdr::blocks::NullSink;
+use futuresdr::blocks::WebsocketPmtSink;
 use futuresdr::blocks::seify::Builder;
 use futuresdr::prelude::*;
 
@@ -86,10 +87,12 @@ fn main() -> Result<()> {
     let decoder = Decoder::new(6);
     let mac: Mac = Mac::new();
     let snk = NullSink::<u8>::new();
+    let frame_ws = WebsocketPmtSink::new(9001);
 
     connect!(fg, avg > mm > decoder;
                  mac > snk;
-                 decoder | rx.mac);
+                 decoder | rx.mac;
+                 mac.rxed | r#in.frame_ws);
 
     if let Some(u) = args.udp_addr {
         let blob_to_udp = BlobToUdp::new(u);

@@ -6,25 +6,37 @@ default-run = "rx"
 
 [workspace]
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [features]
 default = ["soapy"]
 aaronia_http = ["futuresdr/aaronia_http"]
-soapy = ["futuresdr/soapy"]
+frontend = [
+    "dep:any_spawner",
+    "dep:console_error_panic_hook",
+    "dep:gloo-net",
+    "dep:leptos",
+    "dep:prophecy",
+    "dep:web-sys",
+]
+soapy = ["futuresdr/seify", "futuresdr/soapy"]
 
 [dependencies]
 anyhow = "1.0"
+futuresdr = { path = "../..", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = { version = "4", features = ["derive"] }
-futuresdr = { path = "../..", features = ["seify"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-any_spawner = { version = "0.3", features = ["wasm-bindgen"] }
-console_error_panic_hook = "0.1"
-futuresdr = { path = "../.." }
-js-sys = "0.3"
-leptos = { version = "0.8", features = ["csr", "nightly"] }
-wasm-bindgen-futures = "0.4"
+any_spawner = { version = "0.3", features = ["wasm-bindgen"], optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+gloo-net = { version = "0.7", features = ["websocket"], optional = true }
+leptos = { version = "0.8", features = ["csr", "nightly"], optional = true }
+prophecy = { path = "../../crates/prophecy", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "HtmlInputElement",
+    "HtmlSelectElement",
+]
+optional = true
