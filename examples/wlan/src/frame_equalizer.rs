@@ -103,9 +103,14 @@ where
     O: CpuBufferWriter<Item = u8>,
 {
     pub fn new() -> Self {
+        let mut input = I::default();
+        input.set_min_items(64);
+        let mut output = O::default();
+        output.set_min_items(48);
+        output.set_min_buffer_size_in_items(48);
         Self {
-            input: I::default(),
-            output: O::default(),
+            input,
+            output,
             equalizer: Equalizer::new(),
             state: State::Skip,
             sym_in: [Complex32::new(0.0, 0.0); 64],

@@ -69,9 +69,14 @@ where
     O: CpuBufferWriter<Item = Complex32>,
 {
     pub fn new() -> Self {
+        let mut input = I::default();
+        input.set_min_items(SEARCH_WINDOW + 128);
+        let mut output = O::default();
+        output.set_min_items(128);
+        output.set_min_buffer_size_in_items(128);
         Self {
-            input: I::default(),
-            output: O::default(),
+            input,
+            output,
             corr: Correlator {
                 cor: [Complex32::new(0.0, 0.0); SEARCH_WINDOW],
                 cor_index: Vec::with_capacity(SEARCH_WINDOW),
@@ -106,7 +111,7 @@ where
         let input_len = input.len();
         let (out, mut out_tags) = self.output.slice_with_tags();
 
-        let mut m = std::cmp::min(input.len(), out.len());
+        let mut input_limit = input.len();
 
         // println!("long tags {:?}", &tags);
         if let Some((index, freq)) = in_tags.iter().find_map(|x| match x {
@@ -125,9 +130,9 @@ where
             if *index == 0 {
                 self.state = State::Sync(*freq);
             } else {
-                m = std::cmp::min(m, *index);
-                if m < 80 {
-                    self.input.consume(m);
+                input_limit = std::cmp::min(input_limit, *index);
+                if input_limit < 80 {
+                    self.input.consume(input_limit);
                     return Ok(());
                 }
             }
@@ -135,12 +140,14 @@ where
 
         match self.state {
             State::Broken => {
-                if m > 0 {
-                    panic!("Sync Long is in broken state")
+                // Ignore samples before the first wifi_start tag. This can happen
+                // with chunked WASM buffers and should not stop the flowgraph.
+                if input_limit > 0 {
+                    self.input.consume(input_limit);
                 }
             }
             State::Sync(freq_offset_short) => {
-                if m >= SEARCH_WINDOW + 128 {
+                if input.len() >= SEARCH_WINDOW + 128 && out.len() >= 128 {
                     let (offset, freq_offset) = self.corr.sync(&input[0..SEARCH_WINDOW + 63]);
                     // debug!("long start: offset {}   freq {}", offset, freq_offset);
 
@@ -161,7 +168,7 @@ where
                 }
             }
             State::Copy(n_copied, freq_offset) => {
-                let syms = m / 80;
+                let syms = std::cmp::min(input_limit / 80, out.len() / 64);
                 for i in 0..syms {
                     for k in 0..64 {
                         out[i * 64 + k] = input[i * 80 + 16 + k]
@@ -177,7 +184,7 @@ where
             }
         }
 
-        if self.input.finished() && input_len - m < 80 {
+        if self.input.finished() && input_len - input_limit < 80 {
             io.finished = true;
         }
 

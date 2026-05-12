@@ -10,7 +10,7 @@ nightly toolchain configuration in `.cargo/config.toml` and serve it with the
 COOP/COEP headers from `Trunk.toml`:
 
 ```sh
-RUSTUP_TOOLCHAIN=nightly trunk serve
+trunk serve
 ```
 
 Then open <http://127.0.0.1:8080/> and grant WebUSB permission for the HackRF.

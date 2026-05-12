@@ -31,8 +31,10 @@ where
     I: CpuBufferReader<Item = u8>,
 {
     pub fn new() -> Self {
+        let mut input = I::default();
+        input.set_min_items(48);
         Self {
-            input: I::default(),
+            input,
             frame_complete: true,
             frame_param: FrameParam::new(Mcs::Bpsk_1_2, 0),
             decoder: ViterbiDecoder::new(),
