@@ -33,6 +33,7 @@ use crate::runtime::scheduler::Scheduler;
 static WASM_EXECUTORS: once_cell::sync::Lazy<Mutex<Slab<Arc<WasmExecutor>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(Slab::new()));
 static WASM_THREAD_METADATA_RESET: AtomicBool = AtomicBool::new(false);
+static WASM_BUSY_POLL_BLOCKS: AtomicBool = AtomicBool::new(true);
 
 unsafe extern "C" {
     static __heap_base: u8;
@@ -54,6 +55,10 @@ pub fn set_worker_script(worker_script: impl Into<String>) {
 /// Return the default worker script used by the WASM scheduler and local domains.
 pub fn worker_script() -> String {
     WASM_WORKER_SCRIPT.lock().unwrap().clone()
+}
+
+pub(crate) fn busy_poll_blocks() -> bool {
+    WASM_BUSY_POLL_BLOCKS.load(Ordering::Acquire)
 }
 
 pub(crate) fn reset_wasm_thread_metadata() {
@@ -116,9 +121,10 @@ pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: u
 
 /// WASM scheduler.
 ///
-/// The default scheduler starts one web worker. Use [`WasmScheduler::new`] with
-/// a larger thread count to start a worker pool. On wasm these threads are
-/// backed by web workers when the application is built with wasm thread support.
+/// The default scheduler is single-threaded and runs tasks on the local browser
+/// executor. Use [`WasmScheduler::new`] to start a web-worker-backed scheduler;
+/// passing a larger thread count creates a worker pool when the application is
+/// built with wasm thread support.
 #[derive(Clone, Debug)]
 pub struct WasmScheduler {
     inner: Arc<WasmSchedulerInner>,
@@ -186,6 +192,7 @@ impl WasmScheduler {
             return WasmScheduler::single_threaded();
         }
 
+        WASM_BUSY_POLL_BLOCKS.store(true, Ordering::Release);
         debug!("WASM scheduler started {} web workers", workers.len());
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
@@ -198,9 +205,10 @@ impl WasmScheduler {
 
     /// Create a single-threaded scheduler that runs tasks on the local browser executor.
     ///
-    /// This is mainly a fallback/testing mode. `WasmScheduler::new(1)`
-    /// creates one web worker.
+    /// This scheduler does not require a worker script. `WasmScheduler::new(1)`
+    /// explicitly creates one web worker.
     pub fn single_threaded() -> WasmScheduler {
+        WASM_BUSY_POLL_BLOCKS.store(false, Ordering::Release);
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
                 executor_id: None,
@@ -258,7 +266,7 @@ impl Scheduler for WasmScheduler {
 
 impl Default for WasmScheduler {
     fn default() -> Self {
-        Self::new(1)
+        Self::single_threaded()
     }
 }
 

@@ -95,7 +95,7 @@ impl<S> Drop for Runtime<S> {
 
 #[cfg(target_arch = "wasm32")]
 impl Runtime<DefaultScheduler> {
-    /// Construct a runtime using the WASM scheduler.
+    /// Construct a runtime using the default single-threaded WASM scheduler.
     ///
     /// WASM runtimes do not start a native control-port server.
     pub fn new() -> Self {
