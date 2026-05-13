@@ -26,7 +26,6 @@ use leptos::web_sys::HtmlSelectElement;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
-use wasm_bindgen_futures::JsFuture;
 
 use wlan::Decoder;
 use wlan::FrameEqualizer;
@@ -538,7 +537,7 @@ async fn start_receiver(
     set_frames: WriteSignal<VecDeque<Frame>>,
     set_control: WriteSignal<Option<RunControl>>,
 ) -> anyhow::Result<Receiver> {
-    request_hackrf().await?;
+    HackRf::request_permission().await?;
     futuresdr::tracing::info!(
         "starting WLAN WASM RX: frequency {} Hz, sample rate {} Hz, LNA {} dB, VGA {} dB, amp {}, dc_offset {}",
         config.frequency,
@@ -741,30 +740,6 @@ async fn poll_frames(
         futuresdr::tracing::info!("updating GUI frame list with {} entries", displayed_frames.len());
         set_frames.set(displayed_frames.clone());
     }
-}
-
-async fn request_hackrf() -> anyhow::Result<()> {
-    let window = leptos::web_sys::window().expect("No global `window` exists");
-    let usb = window.navigator().usb();
-
-    let filter = leptos::web_sys::UsbDeviceFilter::new();
-    filter.set_vendor_id(7504);
-    let filters = [filter];
-    let options = leptos::web_sys::UsbDeviceRequestOptions::new(&filters);
-
-    let devices: js_sys::Array<leptos::web_sys::UsbDevice> = JsFuture::from(usb.get_devices())
-        .await
-        .map_err(|e| anyhow::anyhow!("USB get_devices failed: {e:?}"))?;
-
-    futuresdr::tracing::info!("WebUSB paired HackRF devices visible: {}", devices.length());
-    if devices.length() == 0 {
-        futuresdr::tracing::info!("requesting WebUSB HackRF permission");
-        let _ = JsFuture::from(usb.request_device(&options))
-            .await
-            .map_err(|e| anyhow::anyhow!("USB request_device failed: {e:?}"))?;
-    }
-
-    Ok(())
 }
 
 #[derive(Clone, Debug)]

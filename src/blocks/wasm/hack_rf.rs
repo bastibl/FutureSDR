@@ -9,6 +9,7 @@ use crate::runtime::dev::prelude::*;
 const TRANSFER_SIZE: usize = 262144;
 const N_PENDING_TRANSFERS: usize = 8;
 const USB_INIT_TIMEOUT_MS: u32 = 10_000;
+const HACKRF_VENDOR_ID: u16 = 7504;
 
 async fn wait_usb<T>(future: JsFuture<T>, operation: &str) -> Result<T, Error> {
     let future = future.fuse();
@@ -184,6 +185,37 @@ impl HackRf {
             last_backpressure_log_ms: js_sys::Date::now(),
             last_overrun_log_ms: js_sys::Date::now(),
         }
+    }
+
+    /// Request WebUSB permission for a HackRF device from the browser thread.
+    ///
+    /// Worker-side flowgraphs cannot reliably show the browser device chooser,
+    /// so WASM applications should call this from a user gesture before starting
+    /// a flowgraph that contains a [`HackRf`] block.
+    pub async fn request_permission() -> Result<(), Error> {
+        let window = web_sys::window().ok_or_else(|| {
+            Error::BrowserError("no browser window available for WebUSB permission request".into())
+        })?;
+        let usb = window.navigator().usb();
+
+        let devices: js_sys::Array<web_sys::UsbDevice> =
+            wait_usb(JsFuture::from(usb.get_devices()), "USB get devices").await?;
+        for i in 0..devices.length() {
+            let device = devices.get_unchecked(i);
+            if device.vendor_id() == HACKRF_VENDOR_ID {
+                return Ok(());
+            }
+        }
+
+        let filter = web_sys::UsbDeviceFilter::new();
+        filter.set_vendor_id(HACKRF_VENDOR_ID);
+        let filters = [filter];
+        let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
+
+        let _: web_sys::UsbDevice =
+            wait_usb(JsFuture::from(usb.request_device(&filter)), "USB request device").await?;
+
+        Ok(())
     }
 
     /// Set the initial center frequency in Hz.
@@ -678,17 +710,20 @@ impl LocalKernel for HackRf {
         };
 
         let filter = web_sys::UsbDeviceFilter::new();
-        filter.set_vendor_id(7504);
+        filter.set_vendor_id(HACKRF_VENDOR_ID);
         let filters = [filter];
         let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
 
         let devices: js_sys::Array<web_sys::UsbDevice> =
             wait_usb(JsFuture::from(usb.get_devices()), "USB get devices").await?;
+        let paired_hackrf = (0..devices.length())
+            .map(|i| devices.get_unchecked(i))
+            .find(|device| device.vendor_id() == HACKRF_VENDOR_ID);
         // Open radio if one is already paired and plugged. Only the browser
         // thread can reliably show a device chooser, so worker-side blocks rely
         // on the application requesting permission before the flowgraph starts.
-        let device: web_sys::UsbDevice = if devices.length() > 0 {
-            devices.get_unchecked(0)
+        let device: web_sys::UsbDevice = if let Some(device) = paired_hackrf {
+            device
         } else if web_sys::window().is_some() {
             wait_usb(
                 JsFuture::from(usb.request_device(&filter)),

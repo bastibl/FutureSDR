@@ -17,12 +17,10 @@ use leptos::html::Input;
 use leptos::html::Select;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::web_sys;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use wasm_bindgen_futures::JsFuture;
 
 use zigbee::ClockRecoveryMm;
 use zigbee::Decoder;
@@ -296,7 +294,7 @@ async fn start_receiver(
     set_control: WriteSignal<Option<RunControl>>,
     set_status: WriteSignal<String>,
 ) -> Result<Receiver> {
-    request_hackrf().await?;
+    HackRf::request_permission().await?;
     set_status.set("starting flowgraph".to_string());
 
     let rt = Runtime::with_scheduler(WasmScheduler::new(2));
@@ -395,37 +393,6 @@ async fn poll_frames(
         }
         set_frames.set(displayed_frames.clone());
     }
-}
-
-async fn request_hackrf() -> Result<()> {
-    let window = web_sys::window().expect("No global 'window' exists!");
-    let navigator: web_sys::Navigator = window.navigator();
-    let usb = navigator.usb();
-
-    let filter = web_sys::UsbDeviceFilter::new();
-    filter.set_vendor_id(7504);
-    let filters = [filter];
-    let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
-
-    let devices: js_sys::Array<web_sys::UsbDevice> = JsFuture::from(usb.get_devices())
-        .await
-        .map_err(|e| anyhow::anyhow!("USB get_devices failed: {e:?}"))?;
-
-    for i in 0..devices.length() {
-        let d = devices.get_unchecked(i);
-        println!("dev {}   {:?}", i, d);
-    }
-
-    if devices.length() > 0 {
-        info!("device already connected");
-    } else {
-        info!("requesting device: {:?}", &filter);
-        let _: web_sys::UsbDevice = JsFuture::from(usb.request_device(&filter))
-            .await
-            .map_err(|e| anyhow::anyhow!("USB request_device failed: {e:?}"))?;
-    }
-
-    Ok(())
 }
 
 fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p: Pmt) {
