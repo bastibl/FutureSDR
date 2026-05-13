@@ -202,42 +202,45 @@ fn render(
                 gl.viewport(0, 0, display_width as i32, display_height as i32);
             }
 
-            let bytes = &*data.read_untracked();
-            if !bytes.is_empty() {
-                fft_size_val = bytes.len() / 4;
-                if fft_size_val != last_fft_size {
-                    initialize_texture(gl, fft_size_val);
+            if let Some(bytes) = data.try_read_untracked() {
+                if !bytes.is_empty() {
+                    fft_size_val = bytes.len() / 4;
+                    if fft_size_val != last_fft_size {
+                        initialize_texture(gl, fft_size_val);
+                    }
+
+                    let samples = unsafe {
+                        let s = fft_size_val;
+                        let p = bytes.as_ptr();
+                        std::slice::from_raw_parts(p as *const f32, s)
+                    };
+
+                    let view = unsafe { f32::view(samples) };
+                    gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_array_buffer_view_and_src_offset(
+                            GL::TEXTURE_2D,
+                            0,
+                            0,
+                            *texture_offset,
+                            fft_size_val as i32,
+                            1,
+                            GL::RED,
+                            GL::FLOAT,
+                            &view,
+                            0,
+                        )
+                        .unwrap();
+
+                    let loc = gl.get_uniform_location(shader, "yoffset");
+                    gl.uniform1f(loc.as_ref(), *texture_offset as f32 / SHADER_HEIGHT as f32);
+                    *texture_offset = (*texture_offset + 1) % SHADER_HEIGHT as i32;
                 }
-
-                let samples = unsafe {
-                    let s = fft_size_val;
-                    let p = bytes.as_ptr();
-                    std::slice::from_raw_parts(p as *const f32, s)
-                };
-
-                let view = unsafe { f32::view(samples) };
-                gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_array_buffer_view_and_src_offset(
-                        GL::TEXTURE_2D,
-                        0,
-                        0,
-                        *texture_offset,
-                        fft_size_val as i32,
-                        1,
-                        GL::RED,
-                        GL::FLOAT,
-                        &view,
-                        0,
-                    )
-                    .unwrap();
-
-                let loc = gl.get_uniform_location(shader, "yoffset");
-                gl.uniform1f(loc.as_ref(), *texture_offset as f32 / SHADER_HEIGHT as f32);
-                *texture_offset = (*texture_offset + 1) % SHADER_HEIGHT as i32;
             }
 
             gl.draw_elements_with_i32(GL::TRIANGLES, 6, GL::UNSIGNED_SHORT, 0);
         }
-        request_animation_frame(render(state, data, fft_size_val))
+        if !data.is_disposed() {
+            request_animation_frame(render(state, data, fft_size_val));
+        }
     }
 }
 
