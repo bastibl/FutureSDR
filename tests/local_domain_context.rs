@@ -38,18 +38,16 @@ fn connect_macro_works_in_async_local_domain_context() -> Result<()> {
         let local = fg.local_domain();
 
         let snk = fg
-            .domain_run_async(local, |ctx| {
-                Box::pin(async move {
-                    futures::future::ready(()).await;
+            .domain_run_async(local, async |ctx: &LocalDomainContext<'_>| {
+                futures::future::ready(()).await;
 
-                    let src = ctx.add(NullSource::<u8, LocalCpuWriter<u8>>::new());
-                    let head = ctx.add(Head::<u8, LocalCpuReader<u8>, LocalCpuWriter<u8>>::new(10));
-                    let snk = ctx.add(NullSink::<u8, LocalCpuReader<u8>>::new());
+                let src = ctx.add(NullSource::<u8, LocalCpuWriter<u8>>::new());
+                let head = ctx.add(Head::<u8, LocalCpuReader<u8>, LocalCpuWriter<u8>>::new(10));
+                let snk = ctx.add(NullSink::<u8, LocalCpuReader<u8>>::new());
 
-                    connect!(ctx, src ~> head ~> snk);
+                connect!(ctx, src ~> head ~> snk);
 
-                    Ok(snk)
-                })
+                Ok(snk)
             })
             .await?;
 

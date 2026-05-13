@@ -33,16 +33,14 @@ pub async fn run(run: u64, scheduler: String, samples: u64, buffer_size: u64) ->
     let snk = {
         let local = fg.local_domain();
         let input = orig.clone();
-        fg.domain_run_async(local, move |ctx| {
-            Box::pin(async move {
-                let src = ctx.add(VectorSource::<f32, H2DWriter<f32>>::new(input));
-                let instance = wgpu::Instance::new().await;
-                let mul = ctx.add(Wgpu::new(instance, buffer_size / 4, 4, 4));
-                let snk = ctx.add(VectorSink::<f32, D2HReader<f32>>::new(1024));
+        fg.domain_run_async(local, async move |ctx: &LocalDomainContext<'_>| {
+            let src = ctx.add(VectorSource::<f32, H2DWriter<f32>>::new(input));
+            let instance = wgpu::Instance::new().await;
+            let mul = ctx.add(Wgpu::new(instance, buffer_size / 4, 4, 4));
+            let snk = ctx.add(VectorSink::<f32, D2HReader<f32>>::new(1024));
 
-                connect!(ctx, src ~> mul ~> snk);
-                Ok(snk)
-            })
+            connect!(ctx, src ~> mul ~> snk);
+            Ok(snk)
         })
         .await?
     };

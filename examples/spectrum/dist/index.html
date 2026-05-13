@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FutureSDR :: Prophecy GUI</title>
 
-    <link rel="icon" href="/favicon-baad1291935ce574.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
-    <link rel="stylesheet" href="/style-6147ebe95af3b91e.css" integrity="sha384-RmKhminzy0ZLqtljLsWbjXatmJhRY0q2z9aydjgkwsex5/mPKjUxBRyi2IG20SoL"/>
+    <link rel="icon" href="/favicon.ico" integrity="sha384-dFl6ag/qXmQ5UAh+4iLD+ODkQW60lrE2V6Ue2SOAPXWQWTpzhlbvj5pxMA3aNUJS"/>
+    <link rel="stylesheet" href="/style.css" integrity="sha384-RmKhminzy0ZLqtljLsWbjXatmJhRY0q2z9aydjgkwsex5/mPKjUxBRyi2IG20SoL"/>
     
 <script type="module">
-import init, * as bindings from '/frontend-97567dcfcc146aea.js';
-const wasm = await init({ module_or_path: '/frontend-97567dcfcc146aea_bg.wasm' });
+import init, * as bindings from '/frontend.js';
+const wasm = await init({ module_or_path: '/frontend_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -20,7 +20,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
     <base href="/" />
-  <link rel="modulepreload" href="/frontend-97567dcfcc146aea.js" crossorigin="anonymous" integrity="sha384-/bI+Fvv3B13+IVstInV4xThtTtP9GlfaPQyvycSitna2UHy4zySyGMR12chaHk3T"><link rel="preload" href="/frontend-97567dcfcc146aea_bg.wasm" crossorigin="anonymous" integrity="sha384-FB/3ltTzg9++N+VHHFY2hC5ZSM2oVPd4W4tmZbHG0emUMxtS6ZyddOkP4ZF3/ptO" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/frontend.js" crossorigin="anonymous" integrity="sha384-enTqS9ODMjS5RlD9QOiCabZs3kobWMo2UvL1njhGdTEIiAzshUL42Gvh50sgyM8o"><link rel="preload" href="/frontend_bg.wasm" crossorigin="anonymous" integrity="sha384-SJT5WIdyFWkzo6TZk6P8jx6t1R9AiAbMF9qTpwa4r4RyhxT3VG5wQ+J5hLrEoCFo" as="fetch" type="application/wasm"></head>
   <body class="bg-slate-900">
   </body>
 </html>

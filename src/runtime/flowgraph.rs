@@ -1,11 +1,9 @@
-use futures::Future;
 use futures::channel::oneshot;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -828,17 +826,12 @@ impl Flowgraph {
     /// This is the async counterpart of [`Flowgraph::domain_run`]. The future
     /// is created and awaited inside the local domain, so it may hold non-`Send`
     /// state across await points as long as that state is constructed there.
-    pub async fn domain_run_async<R>(
-        &mut self,
-        domain: LocalDomain,
-        f: impl for<'a> FnOnce(
-            &'a LocalDomainContext<'a>,
-        ) -> Pin<Box<dyn Future<Output = Result<R, Error>> + 'a>>
-        + Send
-        + 'static,
-    ) -> Result<R, Error>
+    pub async fn domain_run_async<R, F>(&mut self, domain: LocalDomain, f: F) -> Result<R, Error>
     where
         R: Send + 'static,
+        F: for<'a> std::ops::AsyncFnOnce(&'a LocalDomainContext<'a>) -> Result<R, Error>
+            + Send
+            + 'static,
     {
         let domain_id = self.validate_local_domain(domain)?;
         if self.local_domains[domain_id].is_running() {
@@ -2062,6 +2055,7 @@ impl Flowgraph {
         Ok((inboxes, ids))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn startup_snapshot(&self) -> Result<StartupSnapshot, Error> {
         let (inboxes, ids) = self.inboxes()?;
         let mut stream_edges = self.stream_edge_endpoints();
@@ -2074,6 +2068,36 @@ impl Flowgraph {
         }
 
         Ok((inboxes, ids, stream_edges, message_edges))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn startup_snapshot(
+        &self,
+    ) -> impl std::future::Future<Output = Result<StartupSnapshot, Error>> + Send + 'static {
+        let base = self.inboxes().map(|(inboxes, ids)| {
+            (
+                inboxes,
+                ids,
+                self.stream_edge_endpoints(),
+                self.message_edges.clone(),
+                self.local_domains
+                    .iter()
+                    .map(LocalDomainRuntime::topology)
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+        async move {
+            let (inboxes, ids, mut stream_edges, mut message_edges, domain_topologies) = base?;
+
+            for topology in domain_topologies {
+                let (domain_stream_edges, domain_message_edges) = topology.await?;
+                stream_edges.extend(domain_stream_edges);
+                message_edges.extend(domain_message_edges);
+            }
+
+            Ok((inboxes, ids, stream_edges, message_edges))
+        }
     }
 
     pub(crate) fn run_local_domains(
