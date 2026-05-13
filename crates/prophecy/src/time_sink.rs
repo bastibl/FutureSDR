@@ -6,8 +6,12 @@ use leptos::logging::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::wasm_bindgen::JsCast;
+use leptos::wasm_bindgen::closure::Closure;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use web_sys::HtmlCanvasElement;
 use web_sys::WebGl2RenderingContext as GL;
 use web_sys::WebGlProgram;
@@ -150,77 +154,112 @@ pub fn TimeSink(
                 shader,
                 vertex_len: 0,
             }));
-            request_animation_frame(render(state, data, min, max))
+            start_render_loop(state, data, min, max);
         }
     });
 
     view! { <canvas node_ref=canvas_ref style="width: 100%; height: 100%" /> }
 }
 
-fn render(
+fn start_render_loop(
     state: Rc<RefCell<RenderState>>,
     data: ReadSignal<Vec<u8>>,
     min: Signal<f32>,
     max: Signal<f32>,
-) -> impl FnOnce() + 'static {
-    move || {
-        {
-            let RenderState {
-                canvas,
-                gl,
-                shader,
-                vertex_len,
-            } = &mut (*state.borrow_mut());
+) {
+    let alive = Arc::new(AtomicBool::new(true));
+    let callback = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
 
-            let display_width = canvas.client_width() as u32;
-            let display_height = canvas.client_height() as u32;
+    on_cleanup({
+        let alive = alive.clone();
+        move || alive.store(false, Ordering::Relaxed)
+    });
 
-            let need_resize = canvas.width() != display_width || canvas.height() != display_height;
-
-            if need_resize {
-                canvas.set_width(display_width);
-                canvas.set_height(display_height);
-                gl.viewport(0, 0, display_width as i32, display_height as i32);
+    *callback.borrow_mut() = Some(Closure::wrap(Box::new({
+        let alive = alive.clone();
+        let callback = callback.clone();
+        move || {
+            if !alive.load(Ordering::Relaxed) || data.is_disposed() {
+                callback.borrow_mut().take();
+                return;
             }
 
-            if let Some(bytes) = data.try_read_untracked() {
-                if !bytes.is_empty() {
-                    let samples = unsafe {
-                        let s = std::cmp::min(bytes.len() / 4, MAX_SAMPLES);
-                        let p = bytes.as_ptr();
-                        std::slice::from_raw_parts(p as *const f32, s)
-                    };
+            render_frame(&state, data, min, max);
 
-                    let l = samples.len();
-                    let vertices: Vec<f32> = samples
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(i, v)| vec![i as f32, *v])
-                        .collect();
-
-                    let view = unsafe { f32::view(&vertices) };
-                    gl.buffer_sub_data_with_i32_and_array_buffer_view(GL::ARRAY_BUFFER, 0, &view);
-
-                    gl.use_program(Some(shader));
-                    if let Some(min) = min.try_get_untracked() {
-                        let u_min = gl.get_uniform_location(shader, "u_min");
-                        gl.uniform1f(u_min.as_ref(), min);
-                    }
-                    if let Some(max) = max.try_get_untracked() {
-                        let u_max = gl.get_uniform_location(shader, "u_max");
-                        gl.uniform1f(u_max.as_ref(), max);
-                    }
-                    let u_nsamples = gl.get_uniform_location(shader, "u_nsamples");
-                    gl.uniform1f(u_nsamples.as_ref(), l as f32);
-
-                    *vertex_len = l as i32;
-
-                    gl.draw_arrays(GL::LINE_STRIP, 0, *vertex_len);
+            if alive.load(Ordering::Relaxed) && !data.is_disposed() {
+                if let (Some(window), Some(callback)) =
+                    (web_sys::window(), callback.borrow().as_ref())
+                {
+                    let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
                 }
+            } else {
+                callback.borrow_mut().take();
             }
         }
-        if !data.is_disposed() {
-            request_animation_frame(render(state, data, min, max));
+    }) as Box<dyn FnMut()>));
+
+    if let (Some(window), Some(callback)) = (web_sys::window(), callback.borrow().as_ref()) {
+        let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    }
+}
+
+fn render_frame(
+    state: &Rc<RefCell<RenderState>>,
+    data: ReadSignal<Vec<u8>>,
+    min: Signal<f32>,
+    max: Signal<f32>,
+) {
+    let RenderState {
+        canvas,
+        gl,
+        shader,
+        vertex_len,
+    } = &mut (*state.borrow_mut());
+
+    let display_width = canvas.client_width() as u32;
+    let display_height = canvas.client_height() as u32;
+
+    let need_resize = canvas.width() != display_width || canvas.height() != display_height;
+
+    if need_resize {
+        canvas.set_width(display_width);
+        canvas.set_height(display_height);
+        gl.viewport(0, 0, display_width as i32, display_height as i32);
+    }
+
+    if let Some(bytes) = data.try_read_untracked() {
+        if !bytes.is_empty() {
+            let samples = unsafe {
+                let s = std::cmp::min(bytes.len() / 4, MAX_SAMPLES);
+                let p = bytes.as_ptr();
+                std::slice::from_raw_parts(p as *const f32, s)
+            };
+
+            let l = samples.len();
+            let vertices: Vec<f32> = samples
+                .iter()
+                .enumerate()
+                .flat_map(|(i, v)| vec![i as f32, *v])
+                .collect();
+
+            let view = unsafe { f32::view(&vertices) };
+            gl.buffer_sub_data_with_i32_and_array_buffer_view(GL::ARRAY_BUFFER, 0, &view);
+
+            gl.use_program(Some(shader));
+            if let Some(min) = min.try_get_untracked() {
+                let u_min = gl.get_uniform_location(shader, "u_min");
+                gl.uniform1f(u_min.as_ref(), min);
+            }
+            if let Some(max) = max.try_get_untracked() {
+                let u_max = gl.get_uniform_location(shader, "u_max");
+                gl.uniform1f(u_max.as_ref(), max);
+            }
+            let u_nsamples = gl.get_uniform_location(shader, "u_nsamples");
+            gl.uniform1f(u_nsamples.as_ref(), l as f32);
+
+            *vertex_len = l as i32;
+
+            gl.draw_arrays(GL::LINE_STRIP, 0, *vertex_len);
         }
     }
 }

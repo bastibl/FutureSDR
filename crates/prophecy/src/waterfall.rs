@@ -6,8 +6,12 @@ use leptos::logging::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::wasm_bindgen::JsCast;
+use leptos::wasm_bindgen::closure::Closure;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use web_sys::HtmlCanvasElement;
 use web_sys::WebGl2RenderingContext as GL;
 use web_sys::WebGlProgram;
@@ -161,103 +165,136 @@ pub fn Waterfall(
                 gl.uniform1f(u_max.as_ref(), max);
             }
 
-            let state = RenderState {
+            let state = Rc::new(RefCell::new(RenderState {
                 canvas,
                 gl,
                 shader,
                 texture_offset: 0,
-            };
-            request_animation_frame(render(
-                Rc::new(RefCell::new(state)),
-                data,
-                fft_size,
-                min,
-                max,
-            ))
+            }));
+            start_render_loop(state, data, fft_size, min, max);
         }
     });
 
     view! { <canvas node_ref=canvas_ref style="width: 100%; height: 100%" /> }
 }
 
-fn render(
+fn start_render_loop(
     state: Rc<RefCell<RenderState>>,
+    data: ReadSignal<Vec<u8>>,
+    fft_size: usize,
+    min: Signal<f32>,
+    max: Signal<f32>,
+) {
+    let alive = Arc::new(AtomicBool::new(true));
+    let callback = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
+
+    on_cleanup({
+        let alive = alive.clone();
+        move || alive.store(false, Ordering::Relaxed)
+    });
+
+    let mut last_fft_size = fft_size;
+    *callback.borrow_mut() = Some(Closure::wrap(Box::new({
+        let alive = alive.clone();
+        let callback = callback.clone();
+        move || {
+            if !alive.load(Ordering::Relaxed) || data.is_disposed() {
+                callback.borrow_mut().take();
+                return;
+            }
+
+            last_fft_size = render_frame(&state, data, last_fft_size, min, max);
+
+            if alive.load(Ordering::Relaxed) && !data.is_disposed() {
+                if let (Some(window), Some(callback)) =
+                    (web_sys::window(), callback.borrow().as_ref())
+                {
+                    let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+                }
+            } else {
+                callback.borrow_mut().take();
+            }
+        }
+    }) as Box<dyn FnMut()>));
+
+    if let (Some(window), Some(callback)) = (web_sys::window(), callback.borrow().as_ref()) {
+        let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    }
+}
+
+fn render_frame(
+    state: &Rc<RefCell<RenderState>>,
     data: ReadSignal<Vec<u8>>,
     last_fft_size: usize,
     min: Signal<f32>,
     max: Signal<f32>,
-) -> impl FnOnce() + 'static {
-    move || {
-        let mut fft_size_val = last_fft_size;
-        {
-            let RenderState {
-                canvas,
-                gl,
-                shader,
-                texture_offset,
-            } = &mut (*state.borrow_mut());
+) -> usize {
+    let mut fft_size_val = last_fft_size;
+    let RenderState {
+        canvas,
+        gl,
+        shader,
+        texture_offset,
+    } = &mut (*state.borrow_mut());
 
-            let display_width = canvas.client_width() as u32;
-            let display_height = canvas.client_height() as u32;
+    let display_width = canvas.client_width() as u32;
+    let display_height = canvas.client_height() as u32;
 
-            let need_resize = canvas.width() != display_width || canvas.height() != display_height;
+    let need_resize = canvas.width() != display_width || canvas.height() != display_height;
 
-            if need_resize {
-                canvas.set_width(display_width);
-                canvas.set_height(display_height);
-                gl.viewport(0, 0, display_width as i32, display_height as i32);
+    if need_resize {
+        canvas.set_width(display_width);
+        canvas.set_height(display_height);
+        gl.viewport(0, 0, display_width as i32, display_height as i32);
+    }
+
+    if let Some(bytes) = data.try_read_untracked() {
+        if !bytes.is_empty() {
+            fft_size_val = bytes.len() / 4;
+            if fft_size_val != last_fft_size {
+                initialize_texture(gl, fft_size_val);
             }
 
-            if let Some(bytes) = data.try_read_untracked() {
-                if !bytes.is_empty() {
-                    fft_size_val = bytes.len() / 4;
-                    if fft_size_val != last_fft_size {
-                        initialize_texture(gl, fft_size_val);
-                    }
+            let samples = unsafe {
+                let s = fft_size_val;
+                let p = bytes.as_ptr();
+                std::slice::from_raw_parts(p as *const f32, s)
+            };
 
-                    let samples = unsafe {
-                        let s = fft_size_val;
-                        let p = bytes.as_ptr();
-                        std::slice::from_raw_parts(p as *const f32, s)
-                    };
-
-                    let view = unsafe { f32::view(samples) };
-                    gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_array_buffer_view_and_src_offset(
-                            GL::TEXTURE_2D,
-                            0,
-                            0,
-                            *texture_offset,
-                            fft_size_val as i32,
-                            1,
-                            GL::RED,
-                            GL::FLOAT,
-                            &view,
-                            0,
-                        )
-                        .unwrap();
-
-                    gl.use_program(Some(shader));
-                    if let Some(min) = min.try_get_untracked() {
-                        let u_min = gl.get_uniform_location(shader, "u_min");
-                        gl.uniform1f(u_min.as_ref(), min);
-                    }
-                    if let Some(max) = max.try_get_untracked() {
-                        let u_max = gl.get_uniform_location(shader, "u_max");
-                        gl.uniform1f(u_max.as_ref(), max);
-                    }
-                    let loc = gl.get_uniform_location(shader, "yoffset");
-                    gl.uniform1f(loc.as_ref(), *texture_offset as f32 / SHADER_HEIGHT as f32);
-                    *texture_offset = (*texture_offset + 1) % SHADER_HEIGHT as i32;
-                }
-            }
+            let view = unsafe { f32::view(samples) };
+            gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_array_buffer_view_and_src_offset(
+                    GL::TEXTURE_2D,
+                    0,
+                    0,
+                    *texture_offset,
+                    fft_size_val as i32,
+                    1,
+                    GL::RED,
+                    GL::FLOAT,
+                    &view,
+                    0,
+                )
+                .unwrap();
 
             gl.use_program(Some(shader));
-            gl.draw_elements_with_i32(GL::TRIANGLES, 6, GL::UNSIGNED_SHORT, 0);
-        }
-        if !data.is_disposed() {
-            request_animation_frame(render(state, data, fft_size_val, min, max));
+            if let Some(min) = min.try_get_untracked() {
+                let u_min = gl.get_uniform_location(shader, "u_min");
+                gl.uniform1f(u_min.as_ref(), min);
+            }
+            if let Some(max) = max.try_get_untracked() {
+                let u_max = gl.get_uniform_location(shader, "u_max");
+                gl.uniform1f(u_max.as_ref(), max);
+            }
+            let loc = gl.get_uniform_location(shader, "yoffset");
+            gl.uniform1f(loc.as_ref(), *texture_offset as f32 / SHADER_HEIGHT as f32);
+            *texture_offset = (*texture_offset + 1) % SHADER_HEIGHT as i32;
         }
     }
+
+    gl.use_program(Some(shader));
+    gl.draw_elements_with_i32(GL::TRIANGLES, 6, GL::UNSIGNED_SHORT, 0);
+
+    fft_size_val
 }
 
 fn initialize_texture(gl: &GL, fft_size: usize) {
