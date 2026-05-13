@@ -152,15 +152,13 @@ pub fn Waterfall(
             gl.enable_vertex_attrib_array(loc);
             gl.vertex_attrib_pointer_with_i32(loc, 2, GL::FLOAT, false, 0, 0);
 
-            {
-                let gl = gl.clone();
-                let shader = shader.clone();
-                let _ = RenderEffect::new(move |_| {
-                    let u_min = gl.get_uniform_location(&shader, "u_min");
-                    gl.uniform1f(u_min.as_ref(), min.get());
-                    let u_max = gl.get_uniform_location(&shader, "u_max");
-                    gl.uniform1f(u_max.as_ref(), max.get());
-                });
+            if let Some(min) = min.try_get_untracked() {
+                let u_min = gl.get_uniform_location(&shader, "u_min");
+                gl.uniform1f(u_min.as_ref(), min);
+            }
+            if let Some(max) = max.try_get_untracked() {
+                let u_max = gl.get_uniform_location(&shader, "u_max");
+                gl.uniform1f(u_max.as_ref(), max);
             }
 
             let state = RenderState {
@@ -169,7 +167,13 @@ pub fn Waterfall(
                 shader,
                 texture_offset: 0,
             };
-            request_animation_frame(render(Rc::new(RefCell::new(state)), data, fft_size))
+            request_animation_frame(render(
+                Rc::new(RefCell::new(state)),
+                data,
+                fft_size,
+                min,
+                max,
+            ))
         }
     });
 
@@ -180,6 +184,8 @@ fn render(
     state: Rc<RefCell<RenderState>>,
     data: ReadSignal<Vec<u8>>,
     last_fft_size: usize,
+    min: Signal<f32>,
+    max: Signal<f32>,
 ) -> impl FnOnce() + 'static {
     move || {
         let mut fft_size_val = last_fft_size;
@@ -230,16 +236,26 @@ fn render(
                         )
                         .unwrap();
 
+                    gl.use_program(Some(shader));
+                    if let Some(min) = min.try_get_untracked() {
+                        let u_min = gl.get_uniform_location(shader, "u_min");
+                        gl.uniform1f(u_min.as_ref(), min);
+                    }
+                    if let Some(max) = max.try_get_untracked() {
+                        let u_max = gl.get_uniform_location(shader, "u_max");
+                        gl.uniform1f(u_max.as_ref(), max);
+                    }
                     let loc = gl.get_uniform_location(shader, "yoffset");
                     gl.uniform1f(loc.as_ref(), *texture_offset as f32 / SHADER_HEIGHT as f32);
                     *texture_offset = (*texture_offset + 1) % SHADER_HEIGHT as i32;
                 }
             }
 
+            gl.use_program(Some(shader));
             gl.draw_elements_with_i32(GL::TRIANGLES, 6, GL::UNSIGNED_SHORT, 0);
         }
         if !data.is_disposed() {
-            request_animation_frame(render(state, data, fft_size_val));
+            request_animation_frame(render(state, data, fft_size_val, min, max));
         }
     }
 }

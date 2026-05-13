@@ -125,10 +125,14 @@ pub fn TimeSink(
             gl.link_program(&shader);
             gl.use_program(Some(&shader));
 
-            let u_min = gl.get_uniform_location(&shader, "u_min");
-            gl.uniform1f(u_min.as_ref(), min.get());
-            let u_max = gl.get_uniform_location(&shader, "u_max");
-            gl.uniform1f(u_max.as_ref(), max.get());
+            if let Some(min) = min.try_get_untracked() {
+                let u_min = gl.get_uniform_location(&shader, "u_min");
+                gl.uniform1f(u_min.as_ref(), min);
+            }
+            if let Some(max) = max.try_get_untracked() {
+                let u_max = gl.get_uniform_location(&shader, "u_max");
+                gl.uniform1f(u_max.as_ref(), max);
+            }
 
             let vertex_buffer = gl.create_buffer().unwrap();
             let init_data = [0.0f32; MAX_SAMPLES * 2];
@@ -146,14 +150,19 @@ pub fn TimeSink(
                 shader,
                 vertex_len: 0,
             }));
-            request_animation_frame(render(state, data))
+            request_animation_frame(render(state, data, min, max))
         }
     });
 
     view! { <canvas node_ref=canvas_ref style="width: 100%; height: 100%" /> }
 }
 
-fn render(state: Rc<RefCell<RenderState>>, data: ReadSignal<Vec<u8>>) -> impl FnOnce() + 'static {
+fn render(
+    state: Rc<RefCell<RenderState>>,
+    data: ReadSignal<Vec<u8>>,
+    min: Signal<f32>,
+    max: Signal<f32>,
+) -> impl FnOnce() + 'static {
     move || {
         {
             let RenderState {
@@ -192,6 +201,15 @@ fn render(state: Rc<RefCell<RenderState>>, data: ReadSignal<Vec<u8>>) -> impl Fn
                     let view = unsafe { f32::view(&vertices) };
                     gl.buffer_sub_data_with_i32_and_array_buffer_view(GL::ARRAY_BUFFER, 0, &view);
 
+                    gl.use_program(Some(shader));
+                    if let Some(min) = min.try_get_untracked() {
+                        let u_min = gl.get_uniform_location(shader, "u_min");
+                        gl.uniform1f(u_min.as_ref(), min);
+                    }
+                    if let Some(max) = max.try_get_untracked() {
+                        let u_max = gl.get_uniform_location(shader, "u_max");
+                        gl.uniform1f(u_max.as_ref(), max);
+                    }
                     let u_nsamples = gl.get_uniform_location(shader, "u_nsamples");
                     gl.uniform1f(u_nsamples.as_ref(), l as f32);
 
@@ -202,7 +220,7 @@ fn render(state: Rc<RefCell<RenderState>>, data: ReadSignal<Vec<u8>>) -> impl Fn
             }
         }
         if !data.is_disposed() {
-            request_animation_frame(render(state, data));
+            request_animation_frame(render(state, data, min, max));
         }
     }
 }
