@@ -219,10 +219,6 @@ impl LocalDomainRuntime {
         self.controller.exec_async(f).await
     }
 
-    pub(crate) fn topology(&self) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
-        self.exec(|state| Ok(state.topology()))
-    }
-
     pub(crate) fn run_if_needed(
         &mut self,
         main_channel: Sender<FlowgraphMessage>,
@@ -269,6 +265,13 @@ impl LocalDomainHandle {
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
         async_io::block_on(rx)
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
+    }
+
+    pub(crate) async fn topology_async(
+        &self,
+    ) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
+        self.exec_async(|state| Box::pin(async move { Ok(state.topology()) }))
+            .await
     }
 
     pub(crate) async fn exec_async<R>(

@@ -2704,18 +2704,30 @@ impl Flowgraph {
         Ok((inboxes, ids))
     }
 
-    pub(crate) fn startup_snapshot(&self) -> Result<StartupSnapshot, Error> {
+    pub(crate) fn startup_snapshot(
+        &self,
+    ) -> Result<
+        impl std::future::Future<Output = Result<StartupSnapshot, Error>> + Send + 'static,
+        Error,
+    > {
         let (inboxes, ids) = self.inboxes()?;
         let mut stream_edges = self.stream_edge_endpoints();
         let mut message_edges = self.message_edges.clone();
+        let domain_handles = self
+            .local_domains
+            .iter()
+            .map(LocalDomainRuntime::handle)
+            .collect::<Vec<_>>();
 
-        for domain in self.local_domains.iter() {
-            let (domain_stream_edges, domain_message_edges) = domain.topology()?;
-            stream_edges.extend(domain_stream_edges);
-            message_edges.extend(domain_message_edges);
-        }
+        Ok(async move {
+            for domain in domain_handles {
+                let (domain_stream_edges, domain_message_edges) = domain.topology_async().await?;
+                stream_edges.extend(domain_stream_edges);
+                message_edges.extend(domain_message_edges);
+            }
 
-        Ok((inboxes, ids, stream_edges, message_edges))
+            Ok((inboxes, ids, stream_edges, message_edges))
+        })
     }
 
     pub(crate) fn run_local_domains(
