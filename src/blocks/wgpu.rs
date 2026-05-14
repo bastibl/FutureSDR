@@ -120,7 +120,7 @@ impl Kernel for Wgpu {
                 label: Some("wgpu_h2d_input_staging"),
                 size: self.buffer_items * 4,
                 usage: BufferUsages::MAP_WRITE | BufferUsages::COPY_SRC,
-                mapped_at_creation: true,
+                mapped_at_creation: false,
             });
             let input_buffer = wgpu::InputBufferEmpty {
                 buffer: input_buffer,

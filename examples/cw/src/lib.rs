@@ -115,7 +115,7 @@ pub async fn run_fg(msg: String) -> Result<()> {
     let sidetone_src = SignalSourceBuilder::<f32>::sin(SIDETONE_FREQ, SAMPLE_RATE as f32, 0.5, 0.0);
     let switch_sidetone = Combine::new(|a: &f32, b: &f32| -> f32 { *a * *b });
 
-    connect!(fg, src > morse > switch_command > in0.switch_sidetone;
+    connect_async!(fg, src > morse > switch_command > in0.switch_sidetone;
         sidetone_src > in1.switch_sidetone.output > audio_snk);
 
     Runtime::new().run_async(fg).await?;

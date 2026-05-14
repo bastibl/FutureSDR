@@ -31,7 +31,7 @@ use crate::runtime::scheduler::Scheduler;
 use crate::runtime::scheduler::SmolScheduler;
 use crate::runtime::scheduler::Task;
 #[cfg(target_arch = "wasm32")]
-use crate::runtime::scheduler::WasmScheduler;
+use crate::runtime::scheduler::WasmMainScheduler;
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Default scheduler used by [`Runtime`] and [`RuntimeHandle`] on native targets.
@@ -39,7 +39,7 @@ pub type DefaultScheduler = SmolScheduler;
 
 #[cfg(target_arch = "wasm32")]
 /// Default scheduler used by [`Runtime`] and [`RuntimeHandle`] on WASM targets.
-pub type DefaultScheduler = WasmScheduler;
+pub type DefaultScheduler = WasmMainScheduler;
 
 /// Executor and control-plane owner for [`Flowgraph`]s and async tasks.
 ///
@@ -95,9 +95,11 @@ impl<S> Drop for Runtime<S> {
 
 #[cfg(target_arch = "wasm32")]
 impl Runtime<DefaultScheduler> {
-    /// Construct a runtime using the default web-worker-backed WASM scheduler.
+    /// Construct a runtime using the default main-thread WASM scheduler.
     ///
-    /// WASM runtimes do not start a native control-port server.
+    /// WASM runtimes do not start a native control-port server. Use
+    /// [`WasmScheduler`](crate::runtime::scheduler::WasmScheduler) explicitly
+    /// with [`Runtime::with_scheduler`] when worker-backed execution is desired.
     pub fn new() -> Self {
         Self::with_scheduler(DefaultScheduler::default())
     }

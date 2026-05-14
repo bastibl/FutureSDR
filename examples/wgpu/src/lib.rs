@@ -6,6 +6,8 @@ use futuresdr::prelude::*;
 use futuresdr::runtime::buffer::wgpu;
 use futuresdr::runtime::buffer::wgpu::D2HReader;
 use futuresdr::runtime::buffer::wgpu::H2DWriter;
+#[cfg(target_arch = "wasm32")]
+use futuresdr::runtime::scheduler::WasmScheduler;
 use std::iter::repeat_with;
 
 pub async fn run() {
@@ -27,10 +29,14 @@ async fn run_inner() -> Result<()> {
     let snk = build_flowgraph(&mut fg, orig.clone()).await?;
 
     info!("start flowgraph");
+    #[cfg(target_arch = "wasm32")]
+    let fg = Runtime::with_scheduler(WasmScheduler::new(1))
+        .run_async(fg)
+        .await?;
+    #[cfg(not(target_arch = "wasm32"))]
     let fg = Runtime::new().run_async(fg).await?;
 
-    let snk = fg.block(&snk)?;
-    let v = snk.items();
+    let v = snk.with_async(&fg, |snk| snk.items().clone()).await?;
 
     assert_eq!(v.len(), n_items);
     for i in 0..v.len() {
@@ -69,7 +75,7 @@ async fn build_flowgraph(
             let mul = ctx.add(Wgpu::new(instance, 4096, 4, 4));
             let snk = ctx.add(VectorSink::<f32, D2HReader<f32>>::new(1024));
 
-            connect!(ctx, src ~> mul ~> snk);
+            connect_async!(ctx, src ~> mul ~> snk);
 
             Ok(snk)
         })

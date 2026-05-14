@@ -658,6 +658,52 @@ impl<K: 'static> BlockRef<K> {
         }
     }
 
+    /// Asynchronously access the typed block through the given [`Flowgraph`].
+    ///
+    /// This is the async counterpart of [`BlockRef::with`]. It is required on
+    /// WASM when accessing local-domain blocks from the browser thread, because
+    /// the block state lives in a worker and cannot be synchronously borrowed.
+    pub async fn with_async<R>(
+        &self,
+        fg: &Flowgraph,
+        f: impl FnOnce(&K) -> R + Send + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        fg.validate_block_ref(self)?;
+        match self.placement {
+            BlockPlacement::Normal => {
+                let block = fg.block(self)?;
+                Ok(f(&block))
+            }
+            BlockPlacement::Local {
+                domain_id,
+                local_id,
+                kind,
+                ..
+            } => {
+                let domain = fg
+                    .local_domains
+                    .get(domain_id)
+                    .ok_or(Error::InvalidBlock(self.id))?;
+                if domain.is_running() {
+                    return Err(Error::LockError);
+                }
+                let block_id = self.id;
+                domain
+                    .exec_async(move |state| {
+                        Box::pin(async move {
+                            Ok(f(Flowgraph::local_state_kernel_ref(
+                                state, local_id, block_id, kind,
+                            )?))
+                        })
+                    })
+                    .await
+            }
+        }
+    }
+
     /// Mutably access the typed block through the given [`Flowgraph`].
     ///
     /// Local-domain blocks are accessed by running the closure in the local
@@ -696,6 +742,51 @@ impl<K: 'static> BlockRef<K> {
                         state, local_id, block_id, kind,
                     )?))
                 })
+            }
+        }
+    }
+
+    /// Asynchronously mutably access the typed block through the given [`Flowgraph`].
+    ///
+    /// This is the async counterpart of [`BlockRef::with_mut`] and is required
+    /// on WASM when mutating local-domain blocks from the browser thread.
+    pub async fn with_mut_async<R>(
+        &self,
+        fg: &mut Flowgraph,
+        f: impl FnOnce(&mut K) -> R + Send + 'static,
+    ) -> Result<R, Error>
+    where
+        R: Send + 'static,
+    {
+        fg.validate_block_ref(self)?;
+        match self.placement {
+            BlockPlacement::Normal => {
+                let mut block = fg.block_mut(self)?;
+                Ok(f(&mut block))
+            }
+            BlockPlacement::Local {
+                domain_id,
+                local_id,
+                kind,
+                ..
+            } => {
+                let domain = fg
+                    .local_domains
+                    .get(domain_id)
+                    .ok_or(Error::InvalidBlock(self.id))?;
+                if domain.is_running() {
+                    return Err(Error::LockError);
+                }
+                let block_id = self.id;
+                domain
+                    .exec_async(move |state| {
+                        Box::pin(async move {
+                            Ok(f(Flowgraph::local_state_kernel_mut(
+                                state, local_id, block_id, kind,
+                            )?))
+                        })
+                    })
+                    .await
             }
         }
     }

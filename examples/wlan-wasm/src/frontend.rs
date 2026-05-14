@@ -121,7 +121,7 @@ struct RunControl {
 }
 
 struct Receiver {
-    _runtime: Runtime,
+    _runtime: Runtime<WasmScheduler>,
 }
 
 #[derive(Clone, Copy)]
@@ -342,7 +342,7 @@ pub fn Gui() -> impl IntoView {
             <header class="bg-slate-800 border-b border-slate-700 shadow-lg">
                 <div class="flex items-center gap-3 px-4 py-3">
                     <div class="text-white font-semibold tracking-tight text-base">"FutureSDR WLAN RX"</div>
-                    <div class="text-xs text-slate-400">"HackRF local domain + 5 WASM scheduler workers, 20 MHz, DC correction"</div>
+                    <div class="text-xs text-slate-400">"HackRF local domain + 10 WASM scheduler workers, 20 MHz, DC correction"</div>
                 </div>
             </header>
 

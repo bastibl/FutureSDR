@@ -58,7 +58,7 @@ struct RunControl {
 }
 
 struct Receiver {
-    _runtime: Runtime,
+    _runtime: Runtime<WasmScheduler>,
 }
 
 #[derive(Block)]
