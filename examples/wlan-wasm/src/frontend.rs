@@ -342,7 +342,7 @@ pub fn Gui() -> impl IntoView {
             <header class="bg-slate-800 border-b border-slate-700 shadow-lg">
                 <div class="flex items-center gap-3 px-4 py-3">
                     <div class="text-white font-semibold tracking-tight text-base">"FutureSDR WLAN RX"</div>
-                    <div class="text-xs text-slate-400">"HackRF local domain + 10 WASM scheduler workers, 20 MHz, DC correction"</div>
+                    <div class="text-xs text-slate-400">"HackRF local domain + 4 WASM scheduler workers, 20 MHz, DC correction"</div>
                 </div>
             </header>
 
@@ -549,7 +549,7 @@ async fn start_receiver(
     );
     set_status.set("starting flowgraph".to_string());
 
-    let rt = Runtime::with_scheduler(WasmScheduler::new(10));
+    let rt = Runtime::with_scheduler(WasmScheduler::new(4));
     let rt_handle = rt.handle();
     let (frame_tx, frames) = mpsc::channel::<Vec<u8>>(FRAME_QUEUE_LIMIT);
     let frames_for_pipe = frame_tx.clone();
