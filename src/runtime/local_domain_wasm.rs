@@ -301,16 +301,8 @@ impl LocalDomainRuntime {
         self.controller.exec_async(f).await
     }
 
-    pub(crate) fn topology(
-        &self,
-    ) -> impl Future<Output = Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error>> + Send + 'static
-    {
-        let handle = self.handle();
-        async move {
-            handle
-                .exec_async(|state| Box::pin(async move { Ok(state.topology()) }))
-                .await
-        }
+    pub(crate) fn topology(&self) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
+        self.exec(|state| Ok(state.topology()))
     }
 
     pub(crate) fn run_if_needed(

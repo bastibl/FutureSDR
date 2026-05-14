@@ -2,7 +2,6 @@
 
 use async_task::Runnable;
 use concurrent_queue::ConcurrentQueue;
-use futures::channel::oneshot;
 use futures::future::Future;
 use gloo_timers::future::TimeoutFuture;
 use slab::Slab;
@@ -33,7 +32,6 @@ use crate::runtime::scheduler::Scheduler;
 static WASM_EXECUTORS: once_cell::sync::Lazy<Mutex<Slab<Arc<WasmExecutor>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(Slab::new()));
 static WASM_THREAD_METADATA_RESET: AtomicBool = AtomicBool::new(false);
-static WASM_BUSY_POLL_BLOCKS: AtomicBool = AtomicBool::new(true);
 
 unsafe extern "C" {
     static __heap_base: u8;
@@ -55,10 +53,6 @@ pub fn set_worker_script(worker_script: impl Into<String>) {
 /// Return the default worker script used by the WASM scheduler and local domains.
 pub fn worker_script() -> String {
     WASM_WORKER_SCRIPT.lock().unwrap().clone()
-}
-
-pub(crate) fn busy_poll_blocks() -> bool {
-    WASM_BUSY_POLL_BLOCKS.load(Ordering::Acquire)
 }
 
 pub(crate) fn reset_wasm_thread_metadata() {
@@ -119,20 +113,19 @@ pub fn futuresdr_wasm_scheduler_worker_entry(executor_id: usize, worker_index: u
     }
 }
 
-/// WASM scheduler.
+/// Web-worker-backed WASM scheduler.
 ///
-/// The default scheduler is single-threaded and runs tasks on the local browser
-/// executor. Use [`WasmScheduler::new`] to start a web-worker-backed scheduler;
-/// passing a larger thread count creates a worker pool when the application is
-/// built with wasm thread support.
+/// The scheduler always runs tasks on web workers, including the default and
+/// `WasmScheduler::new(1)` cases. The browser GUI thread is only used by the
+/// application code that creates and drives the runtime handles.
 #[derive(Clone, Debug)]
 pub struct WasmScheduler {
     inner: Arc<WasmSchedulerInner>,
 }
 
 struct WasmSchedulerInner {
-    executor_id: Option<usize>,
-    executor: Option<Arc<WasmExecutor>>,
+    executor_id: usize,
+    executor: Arc<WasmExecutor>,
     workers: Vec<WasmWorker>,
 }
 
@@ -146,17 +139,13 @@ impl fmt::Debug for WasmSchedulerInner {
 
 impl Drop for WasmSchedulerInner {
     fn drop(&mut self) {
-        if let Some(executor) = &self.executor {
-            executor.shutdown();
-        }
+        self.executor.shutdown();
 
         for worker in self.workers.drain(..) {
             worker.terminate();
         }
 
-        if let Some(id) = self.executor_id.take() {
-            let _ = WASM_EXECUTORS.lock().unwrap().try_remove(id);
-        }
+        let _ = WASM_EXECUTORS.lock().unwrap().try_remove(self.executor_id);
     }
 }
 
@@ -181,46 +170,33 @@ impl WasmScheduler {
             match spawn_worker(&worker_script, executor_id, worker_index) {
                 Ok(worker) => workers.push(worker),
                 Err(e) => {
-                    warn!("failed to spawn WASM scheduler web worker: {:?}", e);
-                    break;
+                    for worker in workers.drain(..) {
+                        worker.terminate();
+                    }
+                    let _ = WASM_EXECUTORS.lock().unwrap().try_remove(executor_id);
+                    panic!(
+                        "failed to spawn WASM scheduler web worker from {worker_script:?}: {e:?}. \
+                         Serve a worker script that dispatches FutureSDR scheduler/local-domain \
+                         init messages, or configure it with \
+                         futuresdr::runtime::scheduler::wasm::set_worker_script(path)."
+                    );
                 }
             }
         }
 
-        if workers.is_empty() {
-            let _ = WASM_EXECUTORS.lock().unwrap().try_remove(executor_id);
-            return WasmScheduler::single_threaded();
-        }
-
-        WASM_BUSY_POLL_BLOCKS.store(true, Ordering::Release);
         debug!("WASM scheduler started {} web workers", workers.len());
         WasmScheduler {
             inner: Arc::new(WasmSchedulerInner {
-                executor_id: Some(executor_id),
-                executor: Some(executor),
+                executor_id,
+                executor,
                 workers,
-            }),
-        }
-    }
-
-    /// Create a single-threaded scheduler that runs tasks on the local browser executor.
-    ///
-    /// This scheduler does not require a worker script. `WasmScheduler::new(1)`
-    /// explicitly creates one web worker.
-    pub fn single_threaded() -> WasmScheduler {
-        WASM_BUSY_POLL_BLOCKS.store(false, Ordering::Release);
-        WasmScheduler {
-            inner: Arc::new(WasmSchedulerInner {
-                executor_id: None,
-                executor: None,
-                workers: Vec::new(),
             }),
         }
     }
 
     /// Return the number of worker threads used by this scheduler.
     pub fn n_threads(&self) -> usize {
-        self.inner.workers.len().max(1)
+        self.inner.workers.len()
     }
 }
 
@@ -240,9 +216,9 @@ impl Scheduler for WasmScheduler {
                 "blocking blocks must remain on the local runtime path"
             );
             let main_channel = main_channel.clone();
-            let worker_index = (n_threads > 0).then(|| block_index * n_threads / n_blocks);
+            let worker_index = block_index * n_threads / n_blocks;
             tasks.push(spawn_wasm_block(
-                self.inner.executor.as_deref(),
+                &self.inner.executor,
                 block,
                 main_channel,
                 worker_index,
@@ -256,17 +232,13 @@ impl Scheduler for WasmScheduler {
         &self,
         future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
-        if let Some(executor) = &self.inner.executor {
-            Task::executor(executor.spawn(future))
-        } else {
-            Task::spawn_local(future)
-        }
+        Task::new(self.inner.executor.spawn(future))
     }
 }
 
 impl Default for WasmScheduler {
     fn default() -> Self {
-        Self::single_threaded()
+        Self::new(1)
     }
 }
 
@@ -306,10 +278,10 @@ fn spawn_worker(
 }
 
 fn spawn_wasm_block(
-    executor: Option<&WasmExecutor>,
+    executor: &WasmExecutor,
     block: Box<dyn Block>,
     main_channel: Sender<FlowgraphMessage>,
-    queue_index: Option<usize>,
+    queue_index: usize,
 ) -> Task<(BlockId, Box<dyn Block>)> {
     let future = async move {
         let mut block = block;
@@ -318,45 +290,20 @@ fn spawn_wasm_block(
         (id, block)
     };
 
-    if let (Some(executor), Some(queue_index)) = (executor, queue_index) {
-        Task::executor(executor.spawn_executor(future, queue_index))
-    } else {
-        Task::spawn_local(future)
-    }
+    Task::new(executor.spawn_executor(future, queue_index))
 }
 
 /// WASM async task.
-pub struct Task<T>(TaskInner<T>);
-
-enum TaskInner<T> {
-    Executor(async_task::Task<T>),
-    Local(oneshot::Receiver<T>),
-}
-
-impl<T: 'static> Task<T> {
-    fn executor(task: async_task::Task<T>) -> Self {
-        Task(TaskInner::Executor(task))
-    }
-
-    pub(crate) fn spawn_local(future: impl Future<Output = T> + 'static) -> Self {
-        let (tx, rx) = oneshot::channel::<T>();
-        wasm_bindgen_futures::spawn_local(async move {
-            let t = future.await;
-            if tx.send(t).is_err() {
-                debug!("task cannot deliver final result");
-            }
-        });
-
-        Task(TaskInner::Local(rx))
-    }
-}
+pub struct Task<T>(async_task::Task<T>);
 
 impl<T> Task<T> {
+    fn new(task: async_task::Task<T>) -> Self {
+        Task(task)
+    }
+
     /// Detach from task.
     pub fn detach(self) {
-        if let TaskInner::Executor(task) = self.0 {
-            task.detach();
-        }
+        self.0.detach();
     }
 }
 
@@ -364,14 +311,7 @@ impl<T> std::future::Future for Task<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match &mut self.get_mut().0 {
-            TaskInner::Executor(task) => Pin::new(task).poll(cx),
-            TaskInner::Local(rx) => match Pin::new(rx).poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok(v)) => Poll::Ready(v),
-                Poll::Ready(Err(_)) => panic!("Task canceled"),
-            },
-        }
+        Pin::new(&mut self.get_mut().0).poll(cx)
     }
 }
 

@@ -2055,7 +2055,6 @@ impl Flowgraph {
         Ok((inboxes, ids))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn startup_snapshot(&self) -> Result<StartupSnapshot, Error> {
         let (inboxes, ids) = self.inboxes()?;
         let mut stream_edges = self.stream_edge_endpoints();
@@ -2068,36 +2067,6 @@ impl Flowgraph {
         }
 
         Ok((inboxes, ids, stream_edges, message_edges))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn startup_snapshot(
-        &self,
-    ) -> impl std::future::Future<Output = Result<StartupSnapshot, Error>> + Send + 'static {
-        let base = self.inboxes().map(|(inboxes, ids)| {
-            (
-                inboxes,
-                ids,
-                self.stream_edge_endpoints(),
-                self.message_edges.clone(),
-                self.local_domains
-                    .iter()
-                    .map(LocalDomainRuntime::topology)
-                    .collect::<Vec<_>>(),
-            )
-        });
-
-        async move {
-            let (inboxes, ids, mut stream_edges, mut message_edges, domain_topologies) = base?;
-
-            for topology in domain_topologies {
-                let (domain_stream_edges, domain_message_edges) = topology.await?;
-                stream_edges.extend(domain_stream_edges);
-                message_edges.extend(domain_message_edges);
-            }
-
-            Ok((inboxes, ids, stream_edges, message_edges))
-        }
     }
 
     pub(crate) fn run_local_domains(

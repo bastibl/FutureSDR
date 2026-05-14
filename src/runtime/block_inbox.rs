@@ -178,13 +178,7 @@ impl BlockInboxReader {
             match self.control.try_recv() {
                 Ok(msg) => return Some(msg),
                 Err(mpsc::TryRecvError::Disconnected) => return None,
-                Err(mpsc::TryRecvError::Empty) => {
-                    if crate::runtime::scheduler::wasm::busy_poll_blocks() {
-                        crate::runtime::yield_now().await;
-                    } else {
-                        self.notifier.notified().await;
-                    }
-                }
+                Err(mpsc::TryRecvError::Empty) => crate::runtime::yield_now().await,
             }
         }
     }

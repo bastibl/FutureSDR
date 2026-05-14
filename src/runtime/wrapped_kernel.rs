@@ -85,37 +85,22 @@ where
 
     #[cfg(target_arch = "wasm32")]
     {
-        if crate::runtime::scheduler::wasm::busy_poll_blocks() {
-            // A local WASM block can be woken from another web worker. Polling here
-            // avoids relying on a browser-local JS waker from the wrong worker.
-            match block_on.take() {
-                Some(mut f) => loop {
-                    if inbox.take_pending() {
-                        *block_on = Some(f);
-                        break;
-                    }
-                    match futures::future::select(f, crate::runtime::yield_now()).await {
-                        Either::Left((_done, _yield)) => break,
-                        Either::Right((_yield, pending)) => f = pending,
-                    }
-                },
-                _ => {
-                    while !inbox.take_pending() {
-                        crate::runtime::yield_now().await;
-                    }
+        // WASM blocks run on web workers and can be woken from another worker.
+        // Polling avoids relying on a browser-local JS waker from the wrong worker.
+        match block_on.take() {
+            Some(mut f) => loop {
+                if inbox.take_pending() {
+                    *block_on = Some(f);
+                    break;
                 }
-            }
-        } else {
-            match block_on.take() {
-                Some(f) => {
-                    if let Either::Right((_, f)) =
-                        futures::future::select(f, inbox.notified()).await
-                    {
-                        *block_on = Some(f);
-                    }
+                match futures::future::select(f, crate::runtime::yield_now()).await {
+                    Either::Left((_done, _yield)) => break,
+                    Either::Right((_yield, pending)) => f = pending,
                 }
-                _ => {
-                    inbox.notified().await;
+            },
+            _ => {
+                while !inbox.take_pending() {
+                    crate::runtime::yield_now().await;
                 }
             }
         }
