@@ -212,8 +212,11 @@ impl HackRf {
         let filters = [filter];
         let filter = web_sys::UsbDeviceRequestOptions::new(&filters);
 
-        let _: web_sys::UsbDevice =
-            wait_usb(JsFuture::from(usb.request_device(&filter)), "USB request device").await?;
+        let _: web_sys::UsbDevice = wait_usb(
+            JsFuture::from(usb.request_device(&filter)),
+            "USB request device",
+        )
+        .await?;
 
         Ok(())
     }

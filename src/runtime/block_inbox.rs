@@ -168,19 +168,7 @@ impl BlockInboxReader {
 
     /// Wait for the next queued block message.
     pub async fn recv(&mut self) -> Option<BlockMessage> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.control.recv().await
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        loop {
-            match self.control.try_recv() {
-                Ok(msg) => return Some(msg),
-                Err(mpsc::TryRecvError::Disconnected) => return None,
-                Err(mpsc::TryRecvError::Empty) => crate::runtime::yield_now().await,
-            }
-        }
+        self.control.recv().await
     }
 
     /// Consume a pending wakeup notification bit.

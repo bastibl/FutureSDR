@@ -1,6 +1,8 @@
+use async_task::Runnable;
+use concurrent_queue::ConcurrentQueue;
 use futures::Future;
+use futures::FutureExt;
 use futures::channel::oneshot;
-use futures::future::Either;
 use slab::Slab;
 use std::cell::UnsafeCell;
 use std::pin::Pin;
@@ -598,11 +600,46 @@ async fn run_domain_worker(init: WasmLocalDomainInit) {
     }
 }
 
+struct LocalExecutor {
+    queue: Arc<ConcurrentQueue<Runnable>>,
+}
+
+impl LocalExecutor {
+    fn new() -> Self {
+        Self {
+            queue: Arc::new(ConcurrentQueue::unbounded()),
+        }
+    }
+
+    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> async_task::Task<T> {
+        let queue = self.queue.clone();
+        let schedule = move |runnable| {
+            queue.push(runnable).unwrap();
+        };
+        let (runnable, task) = async_task::spawn_local(future, schedule);
+        runnable.schedule();
+        task
+    }
+
+    fn run_available(&self) -> bool {
+        let mut ran = false;
+        for _ in 0..200 {
+            let Ok(runnable) = self.queue.pop() else {
+                break;
+            };
+            runnable.run();
+            ran = true;
+        }
+        ran
+    }
+}
+
 async fn run_local_domain(
     state: &mut LocalDomainState,
     main_channel: Sender<FlowgraphMessage>,
     terminate: Arc<AtomicBool>,
 ) -> Result<(), Error> {
+    let executor = LocalExecutor::new();
     let mut tasks = Vec::new();
     let mut inboxes = Vec::new();
 
@@ -610,45 +647,49 @@ async fn run_local_domain(
         if let Some(block) = slot.take() {
             inboxes.push(block.as_ref().inbox());
             let main_channel = main_channel.clone();
-            let (tx, rx) = oneshot::channel();
-            wasm_bindgen_futures::spawn_local(async move {
+            tasks.push(Box::pin(executor.spawn(async move {
                 let mut block = block;
                 block.as_mut().run(main_channel).await;
-                let _ = tx.send((local_id, block));
-            });
-            tasks.push(rx);
+                (local_id, block)
+            })));
         }
     }
 
-    let run_tasks = async move {
-        let mut finished = Vec::with_capacity(tasks.len());
-        for task in tasks {
-            finished.push(
-                task.await
-                    .map_err(|_| Error::RuntimeError("local block task canceled".to_string()))?,
-            );
-        }
-        Ok::<_, Error>(finished)
-    };
-    let terminate_task = async {
-        while !terminate.load(Ordering::Acquire) {
-            gloo_timers::future::TimeoutFuture::new(1).await;
-        }
-    };
-    futures::pin_mut!(run_tasks);
-    futures::pin_mut!(terminate_task);
+    let mut finished = Vec::with_capacity(tasks.len());
+    let mut terminating = false;
 
-    let finished = match futures::future::select(run_tasks, terminate_task).await {
-        Either::Left((finished, _)) => finished?,
-        Either::Right((_, run_tasks)) => {
-            for inbox in inboxes {
+    while !tasks.is_empty() {
+        let ran = executor.run_available();
+
+        let mut i = 0;
+        while i < tasks.len() {
+            if let Some(result) = tasks[i].as_mut().now_or_never() {
+                finished.push(result);
+                drop(tasks.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+
+        if !terminating && terminate.load(Ordering::Acquire) {
+            for inbox in inboxes.iter() {
                 if inbox.send(BlockMessage::Terminate).await.is_err() {
                     debug!("local domain tried to terminate block that was already terminated");
                 }
             }
-            run_tasks.await?
+            terminating = true;
         }
-    };
+
+        if tasks.is_empty() {
+            continue;
+        }
+
+        if ran {
+            crate::runtime::yield_now().await;
+        } else {
+            gloo_timers::future::TimeoutFuture::new(1).await;
+        }
+    }
 
     finished
         .into_iter()

@@ -78,8 +78,11 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
             while let Some(msg) = ws.next().await {
                 match msg {
                     Ok(Message::Bytes(b)) => {
-                        set_time_data(b.clone());
-                        set_waterfall_data(b);
+                        let time_disposed = set_time_data.try_set(b.clone()).is_some();
+                        let waterfall_disposed = set_waterfall_data.try_set(b).is_some();
+                        if time_disposed && waterfall_disposed {
+                            break;
+                        }
                     }
                     _ => {
                         log!("Spectrum WebSocket {:?}", msg);
@@ -107,8 +110,8 @@ pub fn Spectrum(fg_handle: FlowgraphHandle) -> impl IntoView {
     let (submitting, set_submitting) = signal(false);
     let _esc_listener =
         window_event_listener(prophecy::leptos::ev::keydown, move |ev: KeyboardEvent| {
-            if ev.key() == "Escape" && target.get_untracked().is_some() {
-                set_target(None);
+            if ev.key() == "Escape" && target.try_get_untracked().flatten().is_some() {
+                let _ = set_target.try_set(None);
             }
         });
     let on_canvas_message_input_click = Callback::new(move |(block_id, block_name, handler)| {

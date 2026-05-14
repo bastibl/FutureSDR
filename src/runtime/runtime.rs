@@ -328,12 +328,34 @@ async fn start_flowgraph<S: Scheduler>(
     let (tx, rx) = oneshot::channel::<Result<(), Error>>();
     let task = spawn_run_flowgraph(scheduler, fg, fg_inbox.clone(), fg_inbox_rx, tx);
 
-    runtime::await_oneshot(rx)
+    await_flowgraph_startup(rx)
         .await
         .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
 
     let handle = FlowgraphHandle::new(fg_inbox);
     Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn await_flowgraph_startup(
+    rx: oneshot::Receiver<Result<(), Error>>,
+) -> std::result::Result<Result<(), Error>, oneshot::Canceled> {
+    runtime::await_oneshot(rx).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn await_flowgraph_startup(
+    rx: oneshot::Receiver<Result<(), Error>>,
+) -> std::result::Result<Result<(), Error>, oneshot::Canceled> {
+    use futures::FutureExt;
+
+    let mut rx = Box::pin(rx);
+    loop {
+        if let Some(result) = rx.as_mut().now_or_never() {
+            return result;
+        }
+        gloo_timers::future::TimeoutFuture::new(1).await;
+    }
 }
 
 fn spawn_run_flowgraph<S: Scheduler>(

@@ -150,8 +150,8 @@ pub fn Spectrum(
     let (submit_error, set_submit_error) = signal(None::<String>);
     let (submitting, set_submitting) = signal(false);
     let _esc_listener = window_event_listener(leptos::ev::keydown, move |ev: KeyboardEvent| {
-        if ev.key() == "Escape" && target.get_untracked().is_some() {
-            set_target(None);
+        if ev.key() == "Escape" && target.try_get_untracked().flatten().is_some() {
+            let _ = set_target.try_set(None);
         }
     });
     let on_canvas_message_input_click = Callback::new(move |(block_id, block_name, handler)| {
@@ -386,7 +386,7 @@ pub fn Gui() -> impl IntoView {
                                             )
                                             .await
                                             {
-                                                set_start_error(Some(format!("failed to start flowgraph: {e}")));
+                                                let _ = set_start_error.try_set(Some(format!("failed to start flowgraph: {e}")));
                                             }
                                         }
                                     });
@@ -456,8 +456,12 @@ impl Kernel for Sink {
                     std::slice::from_raw_parts(p as *const u8, l)
                 };
                 let bytes = Vec::from(bytes);
-                self.time_data.set(bytes.clone());
-                self.waterfall_data.set(bytes);
+                let time_disposed = self.time_data.try_set(bytes.clone()).is_some();
+                let waterfall_disposed = self.waterfall_data.try_set(bytes).is_some();
+                if time_disposed && waterfall_disposed {
+                    io.finished = true;
+                    return Ok(());
+                }
                 self.last_update_ms = now_ms;
             }
             self.input.consume(n_frames * FFT_SIZE);
@@ -501,14 +505,13 @@ async fn run(
             Ok(hackrf_block_id)
         })
         .await?;
-    set_hackrf_block_id(Some(hackrf_block_id));
+    let _ = set_hackrf_block_id.try_set(Some(hackrf_block_id));
 
     let rt = Runtime::new();
     let running = rt.start_async(fg).await?;
-    set_handle.set(Some(running.handle()));
+    let _ = set_handle.try_set(Some(running.handle()));
 
     let _ = running.wait_async().await;
 
     Ok(())
 }
-

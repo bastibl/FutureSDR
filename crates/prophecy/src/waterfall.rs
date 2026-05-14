@@ -54,14 +54,16 @@ pub fn Waterfall(
                 while let Some(msg) = ws.next().await {
                     match msg {
                         Ok(Message::Bytes(b)) => {
-                            set_data.set(b);
+                            if set_data.try_set(b).is_some() {
+                                break;
+                            }
                         }
                         _ => {
-                            log!("TimeSink: WebSocket {:?}", msg);
+                            log!("Waterfall: WebSocket {:?}", msg);
                         }
                     }
                 }
-                log!("TimeSink: WebSocket Closed");
+                log!("Waterfall: WebSocket Closed");
             });
             data
         }

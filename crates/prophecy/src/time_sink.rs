@@ -49,22 +49,22 @@ pub fn TimeSink(
         TimeSinkMode::Data(d) => d,
         TimeSinkMode::Websocket(s) => {
             let (data, set_data) = signal(vec![]);
-            {
-                spawn_local(async move {
-                    let mut ws = WebSocket::open(&s).unwrap();
-                    while let Some(msg) = ws.next().await {
-                        match msg {
-                            Ok(Message::Bytes(b)) => {
-                                set_data(b);
-                            }
-                            _ => {
-                                log!("TimeSink: WebSocket {:?}", msg);
+            spawn_local(async move {
+                let mut ws = WebSocket::open(&s).unwrap();
+                while let Some(msg) = ws.next().await {
+                    match msg {
+                        Ok(Message::Bytes(b)) => {
+                            if set_data.try_set(b).is_some() {
+                                break;
                             }
                         }
+                        _ => {
+                            log!("TimeSink: WebSocket {:?}", msg);
+                        }
                     }
-                    log!("TimeSink: WebSocket Closed");
-                });
-            }
+                }
+                log!("TimeSink: WebSocket Closed");
+            });
             data
         }
     };
