@@ -242,6 +242,43 @@ impl Default for WasmScheduler {
     }
 }
 
+/// Main-thread WASM scheduler.
+///
+/// This scheduler runs the runtime and all normal blocks on the browser main
+/// thread instead of FutureSDR scheduler web workers. It is useful for blocks
+/// that must create or own browser-main-thread APIs such as Web Audio through
+/// CPAL's WebAudio backend. CPU-heavy flowgraphs should prefer
+/// [`WasmScheduler`] to avoid blocking the UI thread.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WasmMainScheduler;
+
+impl WasmMainScheduler {
+    /// Create a main-thread WASM scheduler.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Scheduler for WasmMainScheduler {
+    fn run_domain(
+        &self,
+        blocks: Vec<Box<dyn Block>>,
+        main_channel: &Sender<FlowgraphMessage>,
+    ) -> Vec<Task<(BlockId, Box<dyn Block>)>> {
+        blocks
+            .into_iter()
+            .map(|block| spawn_wasm_main_block(block, main_channel.clone()))
+            .collect()
+    }
+
+    fn spawn<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        Task::new(spawn_main(future))
+    }
+}
+
 fn spawn_worker(
     worker_script: &str,
     executor_id: usize,
@@ -291,6 +328,33 @@ fn spawn_wasm_block(
     };
 
     Task::new(executor.spawn_executor(future, queue_index))
+}
+
+fn spawn_wasm_main_block(
+    block: Box<dyn Block>,
+    main_channel: Sender<FlowgraphMessage>,
+) -> Task<(BlockId, Box<dyn Block>)> {
+    let future = async move {
+        let mut block = block;
+        let id = block.id();
+        block.run(main_channel).await;
+        (id, block)
+    };
+
+    Task::new(spawn_main(future))
+}
+
+fn spawn_main<T: Send + 'static>(
+    future: impl Future<Output = T> + Send + 'static,
+) -> async_task::Task<T> {
+    let schedule = |runnable: Runnable| {
+        wasm_bindgen_futures::spawn_local(async move {
+            runnable.run();
+        });
+    };
+    let (runnable, task) = async_task::spawn(future, schedule);
+    runnable.schedule();
+    task
 }
 
 /// WASM async task.

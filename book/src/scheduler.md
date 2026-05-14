@@ -98,7 +98,9 @@ Benchmark before switching to the Flow Scheduler. Its deterministic mapping can 
 
 ## WebAssembly
 
-`WasmScheduler` is the only scheduler on WebAssembly targets. It is selected by `Runtime::new()` automatically when compiling for `wasm32` and starts one web worker by default. Use `WasmScheduler::new(n)` to run normal blocks on a worker pool.
+`WasmScheduler` is selected by `Runtime::new()` automatically when compiling for `wasm32` and starts one web worker by default. Use `WasmScheduler::new(n)` to run normal blocks on a worker pool.
+
+Some browser APIs, including CPAL's WebAudio output backend, must be created and owned on the browser main thread. For those cases, use `Runtime::with_scheduler(futuresdr::runtime::scheduler::wasm::WasmMainScheduler::new())`. This keeps the flowgraph in FutureSDR but runs normal blocks on the UI thread, so it should only be used for light flowgraphs or main-thread-only browser APIs.
 
 Local domains are available on WASM as well. A local domain creates a dedicated web worker and receives the closure that instantiates each local block, mirroring the native local-domain model. FutureSDR uses one worker script path for both scheduler workers and local-domain workers. The default is `./futuresdr-wasm-scheduler-worker.js`; configure a different path with `futuresdr::runtime::scheduler::wasm::set_worker_script(path)` before creating schedulers or local domains.
 

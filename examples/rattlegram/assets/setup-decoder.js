@@ -1,5 +1,3 @@
-import DecoderNode from "../../../decoder-node.js";
-
 async function getWebAudioMediaStream() {
   if (!window.navigator.mediaDevices) {
     throw new Error(
@@ -38,9 +36,14 @@ export async function setupAudio(messageSetter) {
   const context = new window.AudioContext();
   const audioSource = context.createMediaStreamSource(mediaStream);
 
+  if (!window.AudioWorkletNode || !context.audioWorklet) {
+    throw new Error("This browser does not support AudioWorklet.");
+  }
+
   let node;
 
   try {
+    const { default: DecoderNode } = await import("../../../decoder-node.js");
     const response = await window.fetch("wasm-decoder_bg.wasm");
     const wasmBytes = await response.arrayBuffer();
 

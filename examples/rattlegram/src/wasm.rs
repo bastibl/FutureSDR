@@ -2,6 +2,7 @@ use anyhow::Result;
 use futuresdr::blocks::ChannelSource;
 use futuresdr::blocks::audio::AudioSink;
 use futuresdr::prelude::*;
+use futuresdr::runtime::scheduler::wasm::WasmMainScheduler;
 use futuresdr::tracing::warn;
 use gloo_timers::future::TimeoutFuture;
 use leptos::html::Input;
@@ -95,6 +96,7 @@ fn Gui() -> impl IntoView {
         </div>
     }
 }
+
 async fn run_fg(set_tx: WriteSignal<Option<mpsc::Sender<Box<[f32]>>>>) {
     let res = run_fg_inner(set_tx).await;
     warn!("fg terminated {:?}", res);
@@ -133,6 +135,9 @@ async fn run_fg_inner(set_tx: WriteSignal<Option<mpsc::Sender<Box<[f32]>>>>) -> 
     connect_async!(fg, src > snk);
 
     set_tx(Some(tx));
-    Runtime::new().run_async(fg).await?;
+    Runtime::with_scheduler(WasmMainScheduler::new())
+        .run_async(fg)
+        .await?;
     Ok(())
 }
+

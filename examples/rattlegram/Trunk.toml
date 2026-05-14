@@ -1,4 +1,9 @@
 [build]
 target = "index.html"
 dist = "dist"
+filehash = false
 # public_url = "/rattle/"
+
+[serve.headers]
+"Cross-Origin-Opener-Policy" = "same-origin"
+"Cross-Origin-Embedder-Policy" = "require-corp"
