@@ -71,6 +71,7 @@ pub mod macros {
     pub use futuresdr_macros::Block;
     pub use futuresdr_macros::LocalBlock;
     pub use futuresdr_macros::connect;
+    pub use futuresdr_macros::connect_async;
 }
 
 pub use flowgraph::BlockRef;
@@ -100,6 +101,11 @@ pub use futuresdr_types::PortId;
 pub mod __private {
     pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        async_io::block_on(future)
+    }
     pub use super::kernel_interface::KernelInterface;
     pub use super::kernel_interface::LocalKernelInterface;
     pub use super::kernel_interface::SendKernelInterface;

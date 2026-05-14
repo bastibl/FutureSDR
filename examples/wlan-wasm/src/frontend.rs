@@ -581,9 +581,9 @@ async fn start_receiver(
     futuresdr::tracing::debug!("WLAN receiver control inbox installed");
 
     let failure_for_task = failure.clone();
-    let start = rt.spawn(async move {
+    spawn_local(async move {
         let result = async move {
-            build_rx_flowgraph(&mut fg, src, frames_for_pipe, config.dc_offset)?;
+            build_rx_flowgraph(&mut fg, src, frames_for_pipe, config.dc_offset).await?;
             futuresdr::tracing::debug!("starting WLAN WASM flowgraph");
             let running = rt_handle.start(fg).await?;
             futuresdr::tracing::debug!("WLAN WASM flowgraph started; detaching runtime task");
@@ -598,12 +598,11 @@ async fn start_receiver(
             *failure = Some(format!("{e:?}"));
         }
     });
-    start.detach();
 
     Ok(Receiver { _runtime: rt })
 }
 
-fn build_rx_flowgraph(
+async fn build_rx_flowgraph(
     fg: &mut Flowgraph,
     src: BlockRef<HackRf>,
     frames: FrameSender,
@@ -619,7 +618,7 @@ fn build_rx_flowgraph(
             Complex32::new(c.re - avg_real, c.im - avg_img)
         });
 
-        connect!(fg, src > dc);
+        connect_async!(fg, src > dc);
         (dc.into(), "output")
     } else {
         (src.into(), "output")
@@ -633,29 +632,33 @@ fn build_rx_flowgraph(
         DC_OFFSET_WARMUP_SAMPLES
     );
     let dc_warmup = fg.add(Delay::<Complex32>::new(-(DC_OFFSET_WARMUP_SAMPLES as isize)));
-    fg.stream_dyn(prev, output, dc_warmup, "input")?;
+    fg.stream_dyn_async(prev, output, dc_warmup, "input").await?;
 
     // WASM slab buffers support one reader per output. Explicitly duplicate
     // streams whenever one output feeds multiple downstream blocks.
     let input_dup = fg.add(StreamDuplicator::<Complex32, 4>::new());
-    connect!(fg, dc_warmup > input_dup);
+    connect_async!(fg, dc_warmup > input_dup);
 
     let sample_stats = fg.add(SampleStats::new("WLAN RX samples after DC correction"));
     let delay = fg.add(Delay::<Complex32>::new(16));
     let complex_to_mag_2 = fg.add(Apply::new(|i: &Complex32| i.norm_sqr()));
     let mult_conj = fg.add(Combine::new(|a: &Complex32, b: &Complex32| a * b.conj()));
 
-    fg.stream_dyn(input_dup, "outputs[0]", sample_stats, "input")?;
-    fg.stream_dyn(input_dup, "outputs[1]", delay, "input")?;
-    fg.stream_dyn(input_dup, "outputs[2]", complex_to_mag_2, "input")?;
-    fg.stream_dyn(input_dup, "outputs[3]", mult_conj, "in0")?;
+    fg.stream_dyn_async(input_dup, "outputs[0]", sample_stats, "input")
+        .await?;
+    fg.stream_dyn_async(input_dup, "outputs[1]", delay, "input")
+        .await?;
+    fg.stream_dyn_async(input_dup, "outputs[2]", complex_to_mag_2, "input")
+        .await?;
+    fg.stream_dyn_async(input_dup, "outputs[3]", mult_conj, "in0")
+        .await?;
 
     let float_avg = MovingAverage::<f32>::new(64);
-    connect!(fg, complex_to_mag_2 > float_avg);
+    connect_async!(fg, complex_to_mag_2 > float_avg);
 
     let delay_dup = StreamDuplicator::<Complex32, 2>::new();
     let complex_avg = MovingAverage::<Complex32>::new(48);
-    connect!(fg, delay > delay_dup;
+    connect_async!(fg, delay > delay_dup;
                  delay_dup.outputs[0] > in1.mult_conj;
                  mult_conj > complex_avg);
 
@@ -663,12 +666,12 @@ fn build_rx_flowgraph(
     let divide_mag = Combine::new(|a: &Complex32, b: &f32| {
         if *b > 1.0e-12 { a.norm() / b } else { 0.0 }
     });
-    connect!(fg, complex_avg > complex_avg_dup;
+    connect_async!(fg, complex_avg > complex_avg_dup;
                  complex_avg_dup.outputs[0] > in0.divide_mag;
                  float_avg > in1.divide_mag);
 
     let sync_short: SyncShort = SyncShort::new();
-    connect!(fg, delay_dup.outputs[1] > in_sig.sync_short;
+    connect_async!(fg, delay_dup.outputs[1] > in_sig.sync_short;
                  complex_avg_dup.outputs[1] > in_abs.sync_short;
                  divide_mag > in_cor.sync_short);
 
@@ -682,7 +685,7 @@ fn build_rx_flowgraph(
     let decoder: Decoder = Decoder::new();
     let frame_pipe = FramePipe::new(frames);
 
-    connect!(fg, sync_short > sync_long > sync_long_dup;
+    connect_async!(fg, sync_short > sync_long > sync_long_dup;
                  sync_long_dup.outputs[0] > sync_long_stats;
                  sync_long_dup.outputs[1] > fft > fft_dup;
                  fft_dup.outputs[0] > fft_stats;

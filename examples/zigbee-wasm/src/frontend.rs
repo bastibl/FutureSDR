@@ -311,7 +311,7 @@ async fn start_receiver(
         source: source_inbox,
     }));
 
-    let start = rt.spawn(async move {
+    spawn_local(async move {
         let result = async move {
             let mut last: Complex32 = Complex32::new(0.0, 0.0);
             let mut iir: f32 = 0.0;
@@ -329,7 +329,7 @@ async fn start_receiver(
             let snk = NullSink::<u8>::new();
             let frame_pipe = FramePipe::new(frames_for_pipe);
 
-            connect!(fg, src > avg > mm > decoder;
+            connect_async!(fg, src > avg > mm > decoder;
                          mac > snk;
                          decoder | rx.mac;
                          mac.rxed | frame_pipe);
@@ -344,7 +344,6 @@ async fn start_receiver(
             info!("ZigBee flowgraph failed: {:?}", e);
         }
     });
-    start.detach();
 
     Ok(Receiver { _runtime: rt })
 }

@@ -500,7 +500,7 @@ async fn run(
             let keep = ctx.add(MovingAvg::<FFT_SIZE>::new(0.1, 3));
             let snk = ctx.add(Sink::new(set_time_data, set_waterfall_data));
 
-            connect!(ctx, src ~> fft ~> mag_sqr ~> keep ~> snk);
+            connect_async!(ctx, src ~> fft ~> mag_sqr ~> keep ~> snk);
 
             Ok(hackrf_block_id)
         })

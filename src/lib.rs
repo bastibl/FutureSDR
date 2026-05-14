@@ -88,6 +88,7 @@ pub mod prelude {
     pub use futuresdr::runtime::Timer;
     pub use futuresdr::runtime::channel::mpsc;
     pub use futuresdr::runtime::macros::connect;
+    pub use futuresdr::runtime::macros::connect_async;
     pub use futuresdr::tracing::debug;
     pub use futuresdr::tracing::error;
     pub use futuresdr::tracing::info;

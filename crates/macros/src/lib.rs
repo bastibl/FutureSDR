@@ -102,6 +102,26 @@ use syn::token;
 #[proc_macro]
 pub fn connect(input: TokenStream) -> TokenStream {
     let connect_input = parse_macro_input!(input as ConnectInput);
+    generate_connect(connect_input, ConnectMode::BlockingNative).into()
+}
+
+/// Async counterpart to [`connect!`].
+///
+/// This macro emits `.await` points for the generated connection operations and
+/// is the required flowgraph-construction macro on WASM targets.
+#[proc_macro]
+pub fn connect_async(input: TokenStream) -> TokenStream {
+    let connect_input = parse_macro_input!(input as ConnectInput);
+    generate_connect(connect_input, ConnectMode::Async).into()
+}
+
+#[derive(Clone, Copy)]
+enum ConnectMode {
+    Async,
+    BlockingNative,
+}
+
+fn generate_connect(connect_input: ConnectInput, mode: ConnectMode) -> proc_macro2::TokenStream {
     // dbg!(&connect_input);
     let fg = connect_input.flowgraph;
 
@@ -121,38 +141,12 @@ pub fn connect(input: TokenStream) -> TokenStream {
 
             let out = match connection_type {
                 ConnectionType::Stream | ConnectionType::LocalStream => {
-                    let src_port = match src_port {
-                        Some(Port { name, index: None }) => {
-                            quote! { #name() }
-                        }
-                        Some(Port {
-                            name,
-                            index: Some(i),
-                        }) => {
-                            quote! { #name().get_mut(#i).unwrap() }
-                        }
-                        None => {
-                            quote!(output())
-                        }
-                    };
-                    let dst_port = match &dst.input {
-                        Some(Port { name, index: None }) => {
-                            quote! { #name() }
-                        }
-                        Some(Port {
-                            name,
-                            index: Some(i),
-                        }) => {
-                            quote! { #name().get_mut(#i).unwrap() }
-                        }
-                        None => {
-                            quote!(input())
-                        }
-                    };
+                    let src_port = port_method(src_port, quote!(output()));
+                    let dst_port = port_method(&dst.input, quote!(input()));
                     let dst_block = &dst.block;
                     let method = match connection_type {
-                        ConnectionType::Stream => quote! { stream },
-                        ConnectionType::LocalStream => quote! { stream_local },
+                        ConnectionType::Stream => quote! { stream_async },
+                        ConnectionType::LocalStream => quote! { stream_local_async },
                         _ => unreachable!(),
                     };
                     quote! {
@@ -161,46 +155,20 @@ pub fn connect(input: TokenStream) -> TokenStream {
                             |b| b.#src_port,
                             &#dst_block,
                             |b| b.#dst_port,
-                        )?;
+                        ).await?;
                     }
                 }
                 ConnectionType::Circuit => {
-                    let src_port = match src_port {
-                        Some(Port { name, index: None }) => {
-                            quote! { #name() }
-                        }
-                        Some(Port {
-                            name,
-                            index: Some(i),
-                        }) => {
-                            quote! { #name().get_mut(#i).unwrap() }
-                        }
-                        None => {
-                            quote!(output())
-                        }
-                    };
-                    let dst_port = match &dst.input {
-                        Some(Port { name, index: None }) => {
-                            quote! { #name() }
-                        }
-                        Some(Port {
-                            name,
-                            index: Some(i),
-                        }) => {
-                            quote! { #name().get_mut(#i).unwrap() }
-                        }
-                        None => {
-                            quote!(input())
-                        }
-                    };
+                    let src_port = port_method(src_port, quote!(output()));
+                    let dst_port = port_method(&dst.input, quote!(input()));
                     let dst_block = &dst.block;
                     quote! {
-                        #fg.close_circuit(
+                        #fg.close_circuit_async(
                             &#src_block,
                             |b| b.#src_port,
                             &#dst_block,
                             |b| b.#dst_port,
-                        )?;
+                        ).await?;
                     }
                 }
                 ConnectionType::Message => {
@@ -218,12 +186,12 @@ pub fn connect(input: TokenStream) -> TokenStream {
                     };
                     let dest_block = &dst.block;
                     quote! {
-                        #fg.message(
+                        #fg.message_async(
                             #src_block,
                             #src_port,
                             #dest_block,
                             #dst_port,
-                        )?;
+                        ).await?;
                     }
                 }
             };
@@ -244,24 +212,46 @@ pub fn connect(input: TokenStream) -> TokenStream {
         }
     });
 
-    let out = quote! {
+    let body = quote! {
         use ::futuresdr::runtime::__private::ConnectAdd as _;
         #(#block_decls)*
         #(#connections)*
-        (#(#blocks),*)
+        ::core::result::Result::Ok::<_, ::futuresdr::runtime::Error>((#(#blocks),*))
     };
 
-    let out = quote![
-        #[allow(unused_variables)]
-        let (#(#blocks),*) = {
-            #out
-        };
-    ];
+    match mode {
+        ConnectMode::Async => quote![
+            #[allow(unused_variables)]
+            let (#(#blocks),*) = {
+                #body
+            }?;
+        ],
+        ConnectMode::BlockingNative => quote![
+            #[cfg(target_arch = "wasm32")]
+            compile_error!("connect! is synchronous and unavailable on wasm32; use connect_async!(...).await instead");
 
-    // let tmp = quote!(fn foo() { #out });
-    // println!("{}", pretty_print(&tmp));
-    // println!("{}", &out);
-    out.into()
+            #[cfg(not(target_arch = "wasm32"))]
+            #[allow(unused_variables)]
+            let (#(#blocks),*) = ::futuresdr::runtime::__private::block_on(async {
+                #body
+            })?;
+        ],
+    }
+}
+
+fn port_method(port: &Option<Port>, default: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    match port {
+        Some(Port { name, index: None }) => {
+            quote! { #name() }
+        }
+        Some(Port {
+            name,
+            index: Some(i),
+        }) => {
+            quote! { #name().get_mut(#i).unwrap() }
+        }
+        None => default,
+    }
 }
 
 // full macro input

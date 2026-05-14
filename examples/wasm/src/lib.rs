@@ -15,7 +15,7 @@ pub async fn run() -> Result<()> {
     let mul = Apply::new(|i: &f32| i * 12.0);
     let snk = VectorSink::<f32>::new(n_items);
 
-    connect!(fg, src > mul > snk);
+    connect_async!(fg, src > mul > snk);
 
     info!("start flowgraph");
     let fg = Runtime::new().run_async(fg).await?;

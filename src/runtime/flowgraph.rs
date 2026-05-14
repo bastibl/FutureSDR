@@ -443,6 +443,42 @@ impl<'a> LocalDomainContext<'a> {
         Ok(())
     }
 
+    /// Async counterpart to [`LocalDomainContext::stream_local`].
+    pub async fn stream_local_async<KS, KD, B, FS, FD>(
+        &self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B,
+        FD: FnOnce(&mut KD) -> &mut B::Reader,
+    {
+        self.stream_local(src_block, src_port, dst_block, dst_port)
+    }
+
+    /// Async send-capable stream alias for local-domain contexts.
+    pub async fn stream_async<KS, KD, B, FS, FD>(
+        &self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B,
+        FD: FnOnce(&mut KD) -> &mut B::Reader,
+    {
+        self.stream_local(src_block, src_port, dst_block, dst_port)
+    }
+
     /// Connect message ports between local blocks in this domain context.
     pub fn message(
         &self,
@@ -518,6 +554,17 @@ impl<'a> LocalDomainContext<'a> {
             .state
             .add_message_edge((src_block_id, src_port_id, dst_block_id, dst_port_id));
         Ok(())
+    }
+
+    /// Async counterpart to [`LocalDomainContext::message`].
+    pub async fn message_async(
+        &self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        self.message(src_block_id, src_port_id, dst_block_id, dst_port_id)
     }
 }
 
@@ -1474,6 +1521,44 @@ impl Flowgraph {
         })
     }
 
+    async fn connect_local_local_stream_async<KS, KD, B, FS, FD>(
+        &self,
+        src: LocalEndpoint,
+        src_port: FS,
+        dst: LocalEndpoint,
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        if src.domain_id != dst.domain_id {
+            return Err(Error::ValidationError(
+                "stream connections between different local domains are not supported".to_string(),
+            ));
+        }
+        let domain = self
+            .local_domains
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?;
+        domain
+            .exec_async(move |state| {
+                let result = (|| {
+                    let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
+                        state,
+                        (src.local_id, src.block_id, src.kind),
+                        (dst.local_id, dst.block_id, dst.kind),
+                    )?;
+                    Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
+                })();
+                Box::pin(futures::future::ready(result))
+            })
+            .await
+    }
+
     fn connect_cross_local_stream<KS, KD, B, FS, FD>(
         &self,
         src: LocalEndpoint,
@@ -1524,6 +1609,70 @@ impl Flowgraph {
         })
     }
 
+    async fn connect_cross_local_stream_async<KS, KD, B, FS, FD>(
+        &self,
+        src: LocalEndpoint,
+        src_port: FS,
+        dst: LocalEndpoint,
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + Default + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        let src_handle = self
+            .local_domains
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?
+            .handle();
+        let dst_handle = self
+            .local_domains
+            .get(dst.domain_id)
+            .ok_or(Error::InvalidBlock(dst.block_id))?
+            .handle();
+
+        src_handle
+            .exec_async(move |state| {
+                Box::pin(async move {
+                    let src = Self::local_state_kernel_mut::<KS>(
+                        state,
+                        src.local_id,
+                        src.block_id,
+                        src.kind,
+                    )?;
+                    let src_port = src_port(src);
+                    let writer = Arc::new(Mutex::new(Some(std::mem::take(src_port))));
+                    let dst_writer = Arc::clone(&writer);
+
+                    let edge_result = dst_handle
+                        .exec_async(move |state| {
+                            let result = (|| {
+                                let mut writer_guard =
+                                    dst_writer.lock().map_err(|_| Error::LockError)?;
+                                let writer = writer_guard.as_mut().ok_or(Error::LockError)?;
+                                let dst = Self::local_state_kernel_mut::<KD>(
+                                    state,
+                                    dst.local_id,
+                                    dst.block_id,
+                                    dst.kind,
+                                )?;
+                                Ok(Self::connect_stream_ports(writer, dst_port(dst)))
+                            })();
+                            Box::pin(futures::future::ready(result))
+                        })
+                        .await;
+
+                    let mut writer_guard = writer.lock().map_err(|_| Error::LockError)?;
+                    *src_port = writer_guard.take().ok_or(Error::LockError)?;
+                    edge_result
+                })
+            })
+            .await
+    }
+
     fn wrapped_kernel_mut<K: 'static>(
         block: &mut dyn BlockObject,
         block_id: BlockId,
@@ -1568,6 +1717,39 @@ impl Flowgraph {
         result
     }
 
+    async fn with_normal_local_blocks_mut_async<R, F>(
+        &mut self,
+        normal_id: BlockId,
+        local: LocalEndpoint,
+        f: F,
+    ) -> Result<R, Error>
+    where
+        F: FnOnce(&mut dyn BlockObject, &mut dyn BlockObject) -> Result<R, Error> + Send + 'static,
+        R: Send + 'static,
+    {
+        let normal = self.blocks[normal_id.0]
+            .block
+            .take()
+            .ok_or(Error::LockError)?;
+        let normal = Arc::new(Mutex::new(Some(normal)));
+        let domain_normal = Arc::clone(&normal);
+
+        let result = self.local_domains[local.domain_id]
+            .exec_async(move |state| {
+                let result = (|| {
+                    let mut normal_guard = domain_normal.lock().map_err(|_| Error::LockError)?;
+                    let normal = normal_guard.as_mut().ok_or(Error::LockError)?;
+                    let local = state.block_mut(local.local_id, local.block_id)?;
+                    f(normal.as_mut(), local)
+                })();
+                Box::pin(futures::future::ready(result))
+            })
+            .await;
+
+        self.blocks[normal_id.0].block = normal.lock().map_err(|_| Error::LockError)?.take();
+        result
+    }
+
     fn connect_local_normal_stream<KS, KD, B, FS, FD>(
         &mut self,
         src: LocalEndpoint,
@@ -1592,6 +1774,31 @@ impl Flowgraph {
         })
     }
 
+    async fn connect_local_normal_stream_async<KS, KD, B, FS, FD>(
+        &mut self,
+        src: LocalEndpoint,
+        src_port: FS,
+        dst_id: BlockId,
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        self.with_normal_local_blocks_mut_async(dst_id, src, move |dst, src_block| {
+            let src = Self::local_kernel_mut::<KS>(src_block, src.block_id, src.kind)?;
+            let dst = Self::wrapped_kernel_mut::<KD>(dst, dst_id)?;
+            Ok(Self::connect_stream_ports(
+                src_port(src),
+                dst_port(&mut dst.kernel),
+            ))
+        })
+        .await
+    }
+
     fn connect_normal_local_stream<KS, KD, B, FS, FD>(
         &mut self,
         src_id: BlockId,
@@ -1614,6 +1821,31 @@ impl Flowgraph {
                 dst_port(dst),
             ))
         })
+    }
+
+    async fn connect_normal_local_stream_async<KS, KD, B, FS, FD>(
+        &mut self,
+        src_id: BlockId,
+        src_port: FS,
+        dst: LocalEndpoint,
+        dst_port: FD,
+    ) -> Result<StreamEdge, Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        self.with_normal_local_blocks_mut_async(src_id, dst, move |src, dst_block| {
+            let src = Self::wrapped_kernel_mut::<KS>(src, src_id)?;
+            let dst = Self::local_kernel_mut::<KD>(dst_block, dst.block_id, dst.kind)?;
+            Ok(Self::connect_stream_ports(
+                src_port(&mut src.kernel),
+                dst_port(dst),
+            ))
+        })
+        .await
     }
 
     fn connect_normal_normal_stream_dyn(
@@ -1691,6 +1923,43 @@ impl Flowgraph {
         })
     }
 
+    async fn connect_local_local_stream_dyn_async(
+        &self,
+        src: LocalEndpoint,
+        src_port_id: PortId,
+        dst: LocalEndpoint,
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        if src.domain_id != dst.domain_id {
+            return Err(Error::ValidationError(
+                "stream connections between different local domains are not supported".to_string(),
+            ));
+        }
+        let domain = self
+            .local_domains
+            .get(src.domain_id)
+            .ok_or(Error::InvalidBlock(src.block_id))?;
+        domain
+            .exec_async(move |state| {
+                let result = (|| {
+                    let (src_block, dst_block) = state.two_blocks_mut(
+                        (src.local_id, src.block_id),
+                        (dst.local_id, dst.block_id),
+                    )?;
+                    Self::connect_stream_ports_dyn(
+                        src.block_id,
+                        &src_port_id,
+                        src_block,
+                        dst.block_id,
+                        &dst_port_id,
+                        dst_block,
+                    )
+                })();
+                Box::pin(futures::future::ready(result))
+            })
+            .await
+    }
+
     fn connect_local_normal_stream_dyn(
         &mut self,
         src: LocalEndpoint,
@@ -1710,6 +1979,26 @@ impl Flowgraph {
         })
     }
 
+    async fn connect_local_normal_stream_dyn_async(
+        &mut self,
+        src: LocalEndpoint,
+        src_port_id: PortId,
+        dst_id: BlockId,
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        self.with_normal_local_blocks_mut_async(dst_id, src, move |dst_block, src_block| {
+            Self::connect_stream_ports_dyn(
+                src.block_id,
+                &src_port_id,
+                src_block,
+                dst_id,
+                &dst_port_id,
+                dst_block,
+            )
+        })
+        .await
+    }
+
     fn connect_normal_local_stream_dyn(
         &mut self,
         src_id: BlockId,
@@ -1727,6 +2016,26 @@ impl Flowgraph {
                 dst_block,
             )
         })
+    }
+
+    async fn connect_normal_local_stream_dyn_async(
+        &mut self,
+        src_id: BlockId,
+        src_port_id: PortId,
+        dst: LocalEndpoint,
+        dst_port_id: PortId,
+    ) -> Result<StreamEdge, Error> {
+        self.with_normal_local_blocks_mut_async(src_id, dst, move |src_block, dst_block| {
+            Self::connect_stream_ports_dyn(
+                src_id,
+                &src_port_id,
+                src_block,
+                dst.block_id,
+                &dst_port_id,
+                dst_block,
+            )
+        })
+        .await
     }
 
     /// Connect stream ports through typed block handles owned by this flowgraph.
@@ -1780,6 +2089,63 @@ impl Flowgraph {
         Ok(())
     }
 
+    /// Async counterpart to [`Flowgraph::stream`].
+    pub async fn stream_async<KS, KD, B, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: SendBufferWriter + Default + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        self.validate_block_ref(src_block)?;
+        self.validate_block_ref(dst_block)?;
+        let src_id = src_block.id;
+        let dst_id = dst_block.id;
+        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
+        {
+            StreamPlan::NormalNormal {
+                src: src_id,
+                dst: dst_id,
+            } => {
+                let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_id, dst_id)?;
+                Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(&mut dst.kernel))
+            }
+            StreamPlan::LocalLocalSame { src, dst } => {
+                self.connect_local_local_stream_async::<KS, KD, B, FS, FD>(
+                    src, src_port, dst, dst_port,
+                )
+                .await?
+            }
+            StreamPlan::LocalLocalCross { src, dst } => {
+                self.connect_cross_local_stream_async::<KS, KD, B, FS, FD>(
+                    src, src_port, dst, dst_port,
+                )
+                .await?
+            }
+            StreamPlan::LocalToNormal { src, dst } => {
+                self.connect_local_normal_stream_async::<KS, KD, B, FS, FD>(
+                    src, src_port, dst, dst_port,
+                )
+                .await?
+            }
+            StreamPlan::NormalToLocal { src, dst } => {
+                self.connect_normal_local_stream_async::<KS, KD, B, FS, FD>(
+                    src, src_port, dst, dst_port,
+                )
+                .await?
+            }
+        };
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
     /// Connect local-only stream ports through typed block handles owned by this flowgraph.
     ///
     /// This only accepts two local-domain blocks in the same [`LocalDomain`].
@@ -1825,6 +2191,50 @@ impl Flowgraph {
         Ok(())
     }
 
+    /// Async counterpart to [`Flowgraph::stream_local`].
+    pub async fn stream_local_async<KS, KD, B, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
+        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
+    {
+        self.validate_block_ref(src_block)?;
+        self.validate_block_ref(dst_block)?;
+        let src_id = src_block.id;
+        let dst_id = dst_block.id;
+        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
+        {
+            StreamPlan::LocalLocalSame { src, dst } => {
+                self.connect_local_local_stream_async::<KS, KD, B, FS, FD>(
+                    src, src_port, dst, dst_port,
+                )
+                .await?
+            }
+            StreamPlan::LocalLocalCross { .. } => {
+                return Err(Error::ValidationError(
+                    "stream connections between different local domains are not supported"
+                        .to_string(),
+                ));
+            }
+            _ => {
+                return Err(Error::ValidationError(
+                    "local stream connections require source and destination blocks in the same local domain"
+                        .to_string(),
+                ));
+            }
+        };
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
     /// Close a circuit between already connected circuit-capable buffers.
     ///
     /// Circuit-capable buffers are still connected like normal stream buffers with
@@ -1852,6 +2262,24 @@ impl Flowgraph {
         let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_block.id, dst_block.id)?;
         src_port(&mut src.kernel).close_circuit(dst_port(&mut dst.kernel));
         Ok(())
+    }
+
+    /// Async counterpart to [`Flowgraph::close_circuit`].
+    pub async fn close_circuit_async<KS, KD, CW, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        CW: CircuitWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut CW,
+        FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
+    {
+        self.close_circuit(src_block, src_port, dst_block, dst_port)
     }
 
     /// Connect stream ports without static port type checks.
@@ -1925,6 +2353,42 @@ impl Flowgraph {
         Ok(())
     }
 
+    /// Async counterpart to [`Flowgraph::stream_dyn`].
+    pub async fn stream_dyn_async(
+        &mut self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        let src_block_id = src_block_id.into();
+        let src_port_id = src_port_id.into();
+        let dst_block_id = dst_block_id.into();
+        let dst_port_id = dst_port_id.into();
+
+        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
+            StreamPlan::NormalNormal { src, dst } => {
+                self.connect_normal_normal_stream_dyn(src, &src_port_id, dst, &dst_port_id)?
+            }
+            StreamPlan::LocalLocalSame { .. } | StreamPlan::LocalLocalCross { .. } => {
+                return Err(Error::ValidationError(
+                    "stream_dyn does not connect local-local streams; use stream_local_dyn for same-domain local stream buffers"
+                        .to_string(),
+                ));
+            }
+            StreamPlan::LocalToNormal { src, dst } => {
+                self.connect_local_normal_stream_dyn_async(src, src_port_id, dst, dst_port_id)
+                    .await?
+            }
+            StreamPlan::NormalToLocal { src, dst } => {
+                self.connect_normal_local_stream_dyn_async(src, src_port_id, dst, dst_port_id)
+                    .await?
+            }
+        };
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
     /// Connect local-only stream ports without static port type checks.
     ///
     /// This only accepts two local-domain blocks in the same [`LocalDomain`].
@@ -1945,6 +2409,42 @@ impl Flowgraph {
         let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
             StreamPlan::LocalLocalSame { src, dst } => {
                 self.connect_local_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
+            }
+            StreamPlan::LocalLocalCross { .. } => {
+                return Err(Error::ValidationError(
+                    "stream connections between different local domains are not supported"
+                        .to_string(),
+                ));
+            }
+            _ => {
+                return Err(Error::ValidationError(
+                    "local dynamic stream connections require source and destination blocks in the same local domain"
+                        .to_string(),
+                ));
+            }
+        };
+
+        self.stream_edges.push(edge);
+        Ok(())
+    }
+
+    /// Async counterpart to [`Flowgraph::stream_local_dyn`].
+    pub async fn stream_local_dyn_async(
+        &mut self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        let src_block_id = src_block_id.into();
+        let src_port_id = src_port_id.into();
+        let dst_block_id = dst_block_id.into();
+        let dst_port_id = dst_port_id.into();
+
+        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
+            StreamPlan::LocalLocalSame { src, dst } => {
+                self.connect_local_local_stream_dyn_async(src, src_port_id, dst, dst_port_id)
+                    .await?
             }
             StreamPlan::LocalLocalCross { .. } => {
                 return Err(Error::ValidationError(
@@ -2015,6 +2515,64 @@ impl Flowgraph {
                     let src_block = state.block_mut(local_id, src_block_id)?;
                     src_block.connect(&src_port, dst_box, &dst_port)
                 })?;
+            }
+        }
+        self.message_edges
+            .push((src_block_id, src_port_id, dst_block_id, dst_port_id));
+        Ok(())
+    }
+
+    /// Async counterpart to [`Flowgraph::message`].
+    pub async fn message_async(
+        &mut self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        let src_block_id = src_block_id.into();
+        let src_port_id = src_port_id.into();
+        let dst_block_id = dst_block_id.into();
+        let dst_port_id = dst_port_id.into();
+
+        let dst_inputs = self
+            .blocks
+            .get(dst_block_id.0)
+            .and_then(|entry| entry.message_inputs)
+            .ok_or(Error::InvalidBlock(dst_block_id))?;
+        if !dst_inputs.contains(&dst_port_id.name()) {
+            return Err(Error::InvalidMessagePort(
+                BlockPortCtx::Id(dst_block_id),
+                dst_port_id.clone(),
+            ));
+        }
+        let dst_box = self
+            .blocks
+            .get(dst_block_id.0)
+            .and_then(|entry| entry.inbox.as_ref())
+            .cloned()
+            .ok_or(Error::InvalidBlock(dst_block_id))?;
+        match self.placement(src_block_id)? {
+            BlockPlacement::Normal => {
+                let src_block = self.raw_block_mut(src_block_id)?;
+                src_block.connect(&src_port_id, dst_box, &dst_port_id)?;
+            }
+            BlockPlacement::Local {
+                domain_id,
+                local_id,
+                ..
+            } => {
+                let src_port = src_port_id.clone();
+                let dst_port = dst_port_id.clone();
+                self.local_domains[domain_id]
+                    .exec_async(move |state| {
+                        let result = (|| {
+                            let src_block = state.block_mut(local_id, src_block_id)?;
+                            src_block.connect(&src_port, dst_box, &dst_port)
+                        })();
+                        Box::pin(futures::future::ready(result))
+                    })
+                    .await?;
             }
         }
         self.message_edges
