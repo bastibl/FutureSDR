@@ -522,19 +522,21 @@ async fn start_receiver(
 
     let mut fg = Flowgraph::new();
     let local = fg.local_domain();
-    let src = fg.add_local(local, move || {
-        HackRf::new()
-            .frequency(config.frequency as u64)
-            .sample_rate(config.sample_rate)
-            .lna_gain(config.lna_gain)
-            .vga_gain(config.vga_gain)
-            .amp_enable(config.amp)
-    });
-    let source = src.id();
 
     let failure_for_task = failure.clone();
     spawn_local(async move {
         let result = async move {
+            let src = fg
+                .add_local_async(local, move || {
+                    HackRf::new()
+                        .frequency(config.frequency as u64)
+                        .sample_rate(config.sample_rate)
+                        .lna_gain(config.lna_gain)
+                        .vga_gain(config.vga_gain)
+                        .amp_enable(config.amp)
+                })
+                .await;
+            let source = src.id();
             build_rx_flowgraph(&mut fg, src, frames_for_pipe, config.dc_offset).await?;
             futuresdr::tracing::debug!("starting WLAN WASM flowgraph");
             let running = rt_handle.start(fg).await?;

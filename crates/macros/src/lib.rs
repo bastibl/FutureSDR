@@ -9,6 +9,7 @@
 //! - `#[derive(LocalBlock)]`, which generates the runtime interface for
 //!   explicitly local block kernels.
 use proc_macro::TokenStream;
+use quote::format_ident;
 use quote::quote;
 use syn::Attribute;
 use syn::Data;
@@ -205,15 +206,24 @@ fn generate_connect(connect_input: ConnectInput, mode: ConnectMode) -> proc_macr
     blocks.sort_by_key(|b| b.to_string());
     blocks.dedup();
 
-    // Generate block declarations
-    let block_decls = blocks.iter().map(|block| {
-        quote! {
+    let block_decls = blocks.iter().map(|block| match mode {
+        ConnectMode::Async => quote! {
+            let #block = #fg.connect_add_async(#block).await?;
+        },
+        ConnectMode::BlockingNative => quote! {
             let #block = #fg.connect_add(#block)?;
-        }
+        },
     });
 
+    let connect_add_trait = match mode {
+        ConnectMode::Async => quote! { use ::futuresdr::runtime::__private::ConnectAddAsync as _; },
+        ConnectMode::BlockingNative => {
+            quote! { use ::futuresdr::runtime::__private::ConnectAdd as _; }
+        }
+    };
+
     let body = quote! {
-        use ::futuresdr::runtime::__private::ConnectAdd as _;
+        #connect_add_trait
         #(#block_decls)*
         #(#connections)*
         ::core::result::Result::Ok::<_, ::futuresdr::runtime::Error>((#(#blocks),*))
@@ -1182,6 +1192,11 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
     } else {
         quote! { __add_local_from_kernel }
     };
+    let add_local_async_method = if local {
+        format_ident!("__add_local_from_local_kernel_async")
+    } else {
+        format_ident!("__add_local_from_kernel_async")
+    };
     let add_domain_method = if local {
         quote! { __add_from_local_kernel }
     } else {
@@ -1312,6 +1327,7 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
         impl #add_local_impl_generics ::futuresdr::runtime::__private::AddLocal for #struct_name #unconstraint_generics
             #add_local_where_clause
         {
+            #[cfg(not(target_arch = "wasm32"))]
             fn add_local(
                 block: impl FnOnce() -> Self + Send + 'static,
                 fg: &mut ::futuresdr::runtime::Flowgraph,
@@ -1319,6 +1335,15 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
             ) -> ::futuresdr::runtime::BlockRef<Self>
             {
                 fg.#add_local_method(domain, block)
+            }
+
+            async fn add_local_async(
+                block: impl FnOnce() -> Self + Send + 'static,
+                fg: &mut ::futuresdr::runtime::Flowgraph,
+                domain: ::futuresdr::runtime::LocalDomain,
+            ) -> ::futuresdr::runtime::BlockRef<Self>
+            {
+                fg.#add_local_async_method(domain, block).await
             }
 
             fn add_domain(

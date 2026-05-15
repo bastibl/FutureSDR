@@ -110,6 +110,7 @@ pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
 pub mod __private {
     pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
+    pub use super::connect_add::ConnectAddAsync;
 
     pub use super::kernel_interface::KernelInterface;
     pub use super::kernel_interface::LocalKernelInterface;

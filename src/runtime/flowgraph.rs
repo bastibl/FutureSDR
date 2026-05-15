@@ -932,19 +932,45 @@ impl Flowgraph {
     where
         K: SendKernel + SendKernelInterface + 'static,
     {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::runtime::block_on(self.add_async(block))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if <K as KernelInterface>::is_blocking() {
+                panic!("Flowgraph::add cannot add blocking blocks on wasm32; use add_async");
+            }
+            self.add_normal_kernel(block)
+        }
+    }
+
+    /// Asynchronously add a block and return a typed reference to it.
+    pub async fn add_async<K>(&mut self, block: K) -> BlockRef<K>
+    where
+        K: SendKernel + SendKernelInterface + 'static,
+    {
         if <K as KernelInterface>::is_blocking() {
             let domain_id = self.local_domains.len();
             self.local_domains.push(LocalDomainRuntime::new());
-            self.add_kernel_to_domain(domain_id, move || block)
+            self.add_kernel_to_domain_async(domain_id, move || block)
+                .await
         } else {
-            let block_id = BlockId(self.blocks.len());
-            let mut b = WrappedKernel::new(block, block_id);
-            let block_name = <K as KernelInterface>::type_name();
-            b.meta
-                .set_instance_name(format!("{}-{}", block_name, block_id.0));
-            let inbox = b.inbox();
-            self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
+            self.add_normal_kernel(block)
         }
+    }
+
+    fn add_normal_kernel<K>(&mut self, block: K) -> BlockRef<K>
+    where
+        K: SendKernel + SendKernelInterface + 'static,
+    {
+        let block_id = BlockId(self.blocks.len());
+        let mut b = WrappedKernel::new(block, block_id);
+        let block_name = <K as KernelInterface>::type_name();
+        b.meta
+            .set_instance_name(format!("{}-{}", block_name, block_id.0));
+        let inbox = b.inbox();
+        self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
     }
 
     fn reserve_block_id(&mut self, placement: BlockPlacement) -> BlockId {
@@ -979,7 +1005,7 @@ impl Flowgraph {
         self.block_ref(block_id, placement)
     }
 
-    fn add_local_block_builder<K>(
+    async fn add_local_block_builder_async<K>(
         &mut self,
         domain_id: usize,
         kind: LocalBlockKind,
@@ -994,11 +1020,10 @@ impl Flowgraph {
             kind,
         };
         let block_id = self.reserve_block_id(placement);
-        let build = self.local_domains[domain_id].build(local_id, builder(block_id));
-        #[cfg(not(target_arch = "wasm32"))]
-        let inbox = crate::runtime::block_on(build).expect(expect_msg);
-        #[cfg(target_arch = "wasm32")]
-        let inbox = futures::executor::block_on(build).expect(expect_msg);
+        let inbox = self.local_domains[domain_id]
+            .build(local_id, builder(block_id))
+            .await
+            .expect(expect_msg);
         let entry = &mut self.blocks[block_id.0];
         entry.inbox = Some(inbox);
         entry.message_inputs = Some(message_inputs);
@@ -1011,6 +1036,7 @@ impl Flowgraph {
     /// non-`Send` state that never leaves that domain. Use this for blocks
     /// derived with `LocalBlock`, for non-`Send` buffers, or for integrations
     /// that must remain thread-affine.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn add_local<K>(
         &mut self,
         domain: LocalDomain,
@@ -1022,7 +1048,20 @@ impl Flowgraph {
         crate::runtime::__private::AddLocal::add_local(block, self, domain)
     }
 
+    /// Asynchronously add a block to a local domain.
+    pub async fn add_local_async<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: crate::runtime::__private::AddLocal + 'static,
+    {
+        crate::runtime::__private::AddLocal::add_local_async(block, self, domain).await
+    }
+
     #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn __add_local_from_kernel<K>(
         &mut self,
         domain: LocalDomain,
@@ -1038,6 +1077,22 @@ impl Flowgraph {
     }
 
     #[doc(hidden)]
+    pub async fn __add_local_from_kernel_async<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
+        let domain_id = self
+            .validate_local_domain(domain)
+            .expect("local domain belongs to another flowgraph");
+        self.add_kernel_to_domain_async(domain_id, block).await
+    }
+
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn __add_local_from_local_kernel<K>(
         &mut self,
         domain: LocalDomain,
@@ -1052,6 +1107,22 @@ impl Flowgraph {
         self.add_local_to_domain(domain_id, block)
     }
 
+    #[doc(hidden)]
+    pub async fn __add_local_from_local_kernel_async<K>(
+        &mut self,
+        domain: LocalDomain,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: LocalKernel + LocalKernelInterface + 'static,
+    {
+        let domain_id = self
+            .validate_local_domain(domain)
+            .expect("local domain belongs to another flowgraph");
+        self.add_local_to_domain_async(domain_id, block).await
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn add_kernel_to_domain<K>(
         &mut self,
         domain_id: usize,
@@ -1060,7 +1131,18 @@ impl Flowgraph {
     where
         K: Kernel + KernelInterface + 'static,
     {
-        self.add_local_block_builder(
+        crate::runtime::block_on(self.add_kernel_to_domain_async(domain_id, block))
+    }
+
+    async fn add_kernel_to_domain_async<K>(
+        &mut self,
+        domain_id: usize,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
+        self.add_local_block_builder_async(
             domain_id,
             LocalBlockKind::Kernel,
             <K as KernelInterface>::message_inputs(),
@@ -1075,8 +1157,10 @@ impl Flowgraph {
             },
             "failed to build block in local domain",
         )
+        .await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn add_local_to_domain<K>(
         &mut self,
         domain_id: usize,
@@ -1085,7 +1169,18 @@ impl Flowgraph {
     where
         K: LocalKernel + LocalKernelInterface + 'static,
     {
-        self.add_local_block_builder(
+        crate::runtime::block_on(self.add_local_to_domain_async(domain_id, block))
+    }
+
+    async fn add_local_to_domain_async<K>(
+        &mut self,
+        domain_id: usize,
+        block: impl FnOnce() -> K + Send + 'static,
+    ) -> BlockRef<K>
+    where
+        K: LocalKernel + LocalKernelInterface + 'static,
+    {
+        self.add_local_block_builder_async(
             domain_id,
             LocalBlockKind::LocalKernel,
             <K as LocalKernelInterface>::message_inputs(),
@@ -1100,6 +1195,7 @@ impl Flowgraph {
             },
             "failed to build local block in local domain",
         )
+        .await
     }
 
     pub(crate) fn validate_block_ref<K>(&self, block: &BlockRef<K>) -> Result<(), Error> {
