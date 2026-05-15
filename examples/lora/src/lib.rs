@@ -126,7 +126,7 @@ pub fn build_lora_rx_dyn(
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_lora_rx_soft_decoding(
-    mut fg: &mut Flowgraph,
+    fg: &mut Flowgraph,
     chan: Channel,
     bw: Bandwidth,
     sf: SpreadingFactor,
@@ -168,7 +168,7 @@ pub fn build_lora_rx_soft_decoding(
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_lora_rx_hard_decoding(
-    mut fg: &mut Flowgraph,
+    fg: &mut Flowgraph,
     chan: Channel,
     bw: Bandwidth,
     sf: SpreadingFactor,

@@ -146,7 +146,11 @@ fn main() -> Result<()> {
         // If the user entered a valid number, set the new frequency by sending a message to the `FlowgraphHandle`
         if let Ok(new_freq) = input.parse::<f64>() {
             println!("Setting frequency to {input}");
-            futuresdr::runtime::block_on(handle.post(src, "freq", Pmt::F64(new_freq * 1e6 + freq_offset)))?;
+            futuresdr::runtime::block_on(handle.post(
+                src,
+                "freq",
+                Pmt::F64(new_freq * 1e6 + freq_offset),
+            ))?;
         } else {
             println!("Input not parsable: {input}");
         }

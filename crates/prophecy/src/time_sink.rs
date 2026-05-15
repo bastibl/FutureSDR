@@ -227,39 +227,39 @@ fn render_frame(
         gl.viewport(0, 0, display_width as i32, display_height as i32);
     }
 
-    if let Some(bytes) = data.try_read_untracked() {
-        if !bytes.is_empty() {
-            let samples = unsafe {
-                let s = std::cmp::min(bytes.len() / 4, MAX_SAMPLES);
-                let p = bytes.as_ptr();
-                std::slice::from_raw_parts(p as *const f32, s)
-            };
+    if let Some(bytes) = data.try_read_untracked()
+        && !bytes.is_empty()
+    {
+        let samples = unsafe {
+            let s = std::cmp::min(bytes.len() / 4, MAX_SAMPLES);
+            let p = bytes.as_ptr();
+            std::slice::from_raw_parts(p as *const f32, s)
+        };
 
-            let l = samples.len();
-            let vertices: Vec<f32> = samples
-                .iter()
-                .enumerate()
-                .flat_map(|(i, v)| vec![i as f32, *v])
-                .collect();
+        let l = samples.len();
+        let vertices: Vec<f32> = samples
+            .iter()
+            .enumerate()
+            .flat_map(|(i, v)| vec![i as f32, *v])
+            .collect();
 
-            let view = unsafe { f32::view(&vertices) };
-            gl.buffer_sub_data_with_i32_and_array_buffer_view(GL::ARRAY_BUFFER, 0, &view);
+        let view = unsafe { f32::view(&vertices) };
+        gl.buffer_sub_data_with_i32_and_array_buffer_view(GL::ARRAY_BUFFER, 0, &view);
 
-            gl.use_program(Some(shader));
-            if let Some(min) = min.try_get_untracked() {
-                let u_min = gl.get_uniform_location(shader, "u_min");
-                gl.uniform1f(u_min.as_ref(), min);
-            }
-            if let Some(max) = max.try_get_untracked() {
-                let u_max = gl.get_uniform_location(shader, "u_max");
-                gl.uniform1f(u_max.as_ref(), max);
-            }
-            let u_nsamples = gl.get_uniform_location(shader, "u_nsamples");
-            gl.uniform1f(u_nsamples.as_ref(), l as f32);
-
-            *vertex_len = l as i32;
-
-            gl.draw_arrays(GL::LINE_STRIP, 0, *vertex_len);
+        gl.use_program(Some(shader));
+        if let Some(min) = min.try_get_untracked() {
+            let u_min = gl.get_uniform_location(shader, "u_min");
+            gl.uniform1f(u_min.as_ref(), min);
         }
+        if let Some(max) = max.try_get_untracked() {
+            let u_max = gl.get_uniform_location(shader, "u_max");
+            gl.uniform1f(u_max.as_ref(), max);
+        }
+        let u_nsamples = gl.get_uniform_location(shader, "u_nsamples");
+        gl.uniform1f(u_nsamples.as_ref(), l as f32);
+
+        *vertex_len = l as i32;
+
+        gl.draw_arrays(GL::LINE_STRIP, 0, *vertex_len);
     }
 }

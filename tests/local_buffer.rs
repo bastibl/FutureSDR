@@ -94,6 +94,7 @@ fn local_cpu_buffer_moves_items() -> Result<()> {
     let out = CpuBufferWriter::slice(&mut writer);
     out[..4].copy_from_slice(&[1, 2, 3, 4]);
     CpuBufferWriter::produce(&mut writer, 4);
+    futuresdr::runtime::block_on(BufferWriter::notify_finished(&mut writer));
 
     let input = CpuBufferReader::slice(&mut reader);
     assert_eq!(input, &[1, 2, 3, 4]);

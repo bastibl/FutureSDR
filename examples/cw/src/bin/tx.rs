@@ -4,7 +4,6 @@ use anyhow::Result;
 mod foo {
     use anyhow::Result;
     use clap::Parser;
-    use futuresdr::prelude::Runtime;
 
     use cw::run_fg;
 
