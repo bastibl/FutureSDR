@@ -121,10 +121,7 @@ impl<S: Scheduler> Runtime<S> {
     /// wait for completion.
     pub async fn start_async(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
         let running = start_flowgraph(self.scheduler.clone(), fg).await?;
-        self.flowgraphs
-            .try_lock()
-            .ok_or(Error::LockError)?
-            .push(running.handle());
+        self.flowgraphs.lock().await.push(running.handle());
         Ok(running)
     }
 
@@ -269,25 +266,11 @@ impl<S: Scheduler> RuntimeHandle<S> {
     }
 
     /// Add a [`FlowgraphHandle`] to make it available to web handlers.
-    #[cfg(not(target_arch = "wasm32"))]
     async fn add_flowgraph(&self, handle: FlowgraphHandle) -> FlowgraphId {
         let mut v = self.flowgraphs.lock().await;
         let l = v.len();
         v.push(handle);
         FlowgraphId(l)
-    }
-
-    /// Add a [`FlowgraphHandle`] to make it available to web handlers.
-    #[cfg(target_arch = "wasm32")]
-    async fn add_flowgraph(&self, handle: FlowgraphHandle) -> FlowgraphId {
-        loop {
-            if let Some(mut v) = self.flowgraphs.try_lock() {
-                let l = v.len();
-                v.push(handle);
-                return FlowgraphId(l);
-            }
-            runtime::yield_now().await;
-        }
     }
 
     /// Get the control handle for a flowgraph by runtime registry id.
