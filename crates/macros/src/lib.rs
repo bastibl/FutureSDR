@@ -232,7 +232,7 @@ fn generate_connect(connect_input: ConnectInput, mode: ConnectMode) -> proc_macr
 
             #[cfg(not(target_arch = "wasm32"))]
             #[allow(unused_variables)]
-            let (#(#blocks),*) = ::futuresdr::runtime::__private::block_on(async {
+            let (#(#blocks),*) = ::futuresdr::runtime::block_on(async {
                 #body
             })?;
         ],

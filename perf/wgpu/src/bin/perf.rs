@@ -25,7 +25,7 @@ mod foo {
             buffer_size,
         } = Args::parse();
 
-        futuresdr::runtime::Runtime::block_on(perf_wgpu::run(
+        futuresdr::runtime::block_on(perf_wgpu::run(
             run,
             scheduler,
             samples,

@@ -4,7 +4,6 @@ use futuresdr::runtime::__private::KernelInterface;
 use futuresdr::runtime::__private::SendKernelInterface;
 use futuresdr::runtime::BlockId;
 use futuresdr::runtime::PortId;
-use futuresdr::runtime::Runtime;
 use futuresdr::runtime::buffer::BufferReader;
 use futuresdr::runtime::buffer::BufferWriter;
 use futuresdr::runtime::buffer::CpuBufferReader;
@@ -131,7 +130,7 @@ fn local_cpu_buffer_flushes_partial_buffer_on_finish() -> Result<()> {
     CpuBufferWriter::produce(&mut writer, 3);
     assert!(CpuBufferReader::slice(&mut reader).is_empty());
 
-    Runtime::block_on(BufferWriter::notify_finished(&mut writer));
+    futuresdr::runtime::block_on(BufferWriter::notify_finished(&mut writer));
 
     let input = CpuBufferReader::slice(&mut reader);
     assert_eq!(input, &[9, 8, 7]);

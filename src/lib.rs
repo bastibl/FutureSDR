@@ -86,6 +86,8 @@ pub mod prelude {
     pub use futuresdr::runtime::RunningFlowgraph;
     pub use futuresdr::runtime::Runtime;
     pub use futuresdr::runtime::Timer;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use futuresdr::runtime::block_on;
     pub use futuresdr::runtime::channel::mpsc;
     pub use futuresdr::runtime::macros::connect;
     pub use futuresdr::runtime::macros::connect_async;

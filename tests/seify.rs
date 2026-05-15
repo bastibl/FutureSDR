@@ -96,13 +96,13 @@ fn config_freq_gain_ports() -> Result<()> {
     let fg_handle = rt.start(fg)?.handle();
 
     // Freq
-    let ret = Runtime::block_on(fg_handle.call(src, "freq", Pmt::F64(102e6)))?;
+    let ret = futuresdr::runtime::block_on(fg_handle.call(src, "freq", Pmt::F64(102e6)))?;
     assert_eq!(ret, Pmt::Ok);
 
     assert_approx_eq!(f64, dev.frequency(Rx, 0)?, 102e6, epsilon = 0.1);
 
     // Gain, use Pmt::U32 to test type conversion
-    let ret = Runtime::block_on(fg_handle.call(src, "gain", Pmt::U32(2)))?;
+    let ret = futuresdr::runtime::block_on(fg_handle.call(src, "gain", Pmt::U32(2)))?;
     assert_eq!(ret, Pmt::Ok);
 
     assert_approx_eq!(f64, dev.gain(Rx, 0)?.unwrap(), 2.0);
@@ -136,13 +136,13 @@ fn src_config_cmd_map() -> Result<()> {
         ("freq".to_owned(), Pmt::F64(102e6)),
         ("sample_rate".to_owned(), Pmt::F32(1e6)),
     ]));
-    let ret = Runtime::block_on(fg_handle.call(src, "cmd", pmt))?;
+    let ret = futuresdr::runtime::block_on(fg_handle.call(src, "cmd", pmt))?;
     assert_eq!(ret, Pmt::Ok);
 
     assert_approx_eq!(f64, dev.frequency(Rx, 0)?, 102e6, epsilon = 0.1);
     assert_approx_eq!(f64, dev.sample_rate(Rx, 0)?, 1e6);
 
-    let conf = Runtime::block_on(fg_handle.call(src, "config", Pmt::Ok))?;
+    let conf = futuresdr::runtime::block_on(fg_handle.call(src, "config", Pmt::Ok))?;
 
     match conf {
         Pmt::MapStrPmt(m) => {
@@ -180,13 +180,13 @@ fn sink_config_cmd_map() -> Result<()> {
         ("freq".to_owned(), Pmt::F64(102e6)),
         ("sample_rate".to_owned(), Pmt::F32(1e6)),
     ]));
-    let ret = Runtime::block_on(fg_handle.call(snk, "cmd", pmt))?;
+    let ret = futuresdr::runtime::block_on(fg_handle.call(snk, "cmd", pmt))?;
     assert_eq!(ret, Pmt::Ok);
 
     assert_approx_eq!(f64, dev.frequency(Tx, 0)?, 102e6, epsilon = 0.1);
     assert_approx_eq!(f64, dev.sample_rate(Tx, 0)?, 1e6);
 
-    let conf = Runtime::block_on(fg_handle.call(snk, "config", Pmt::Ok))?;
+    let conf = futuresdr::runtime::block_on(fg_handle.call(snk, "config", Pmt::Ok))?;
 
     match conf {
         Pmt::MapStrPmt(m) => {
@@ -219,7 +219,7 @@ fn src_config_cmd_invalid_chan() -> Result<()> {
         ("chan".to_owned(), Pmt::U32(1)),
         ("freq".to_owned(), Pmt::F64(102e6)),
     ]));
-    let ret = Runtime::block_on(fg_handle.call(src, "cmd", pmt))?;
+    let ret = futuresdr::runtime::block_on(fg_handle.call(src, "cmd", pmt))?;
     assert_eq!(ret, Pmt::InvalidValue);
     assert_approx_eq!(f64, dev.frequency(Rx, 0)?, 100e6, epsilon = 0.1);
 

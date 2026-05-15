@@ -96,7 +96,7 @@ impl FlowScheduler {
                     debug!("starting executor thread on core id {}", id.id);
                     core_affinity::set_for_current(id);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        async_io::block_on(e.run_on(worker_index, async {
+                        crate::runtime::block_on(e.run_on(worker_index, async {
                             b.wait().await;
                             receiver.await
                         }))
@@ -111,7 +111,7 @@ impl FlowScheduler {
             workers.push((handle, sender));
         }
 
-        async_io::block_on(barrier.wait());
+        crate::runtime::block_on(barrier.wait());
 
         FlowScheduler {
             inner: Arc::new(FlowSchedulerInner {

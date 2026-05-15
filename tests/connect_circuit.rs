@@ -222,7 +222,7 @@ fn connect_circuit_description_omits_closure_edge() -> Result<()> {
     let rt = Runtime::new();
     let running = rt.start(fg)?;
     let handle = running.handle();
-    let description = Runtime::block_on(async {
+    let description = futuresdr::runtime::block_on(async {
         let description = handle.describe().await?;
         handle.stop_and_wait().await?;
         Ok::<_, Error>(description)

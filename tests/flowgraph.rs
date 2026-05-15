@@ -107,7 +107,7 @@ fn fg_terminate() -> Result<()> {
 
     let rt = Runtime::new();
     let running = rt.start(fg)?;
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         Timer::after(std::time::Duration::from_secs(1)).await;
         running.stop().await.unwrap();
         let _ = running.wait_async().await;
@@ -129,7 +129,7 @@ fn fg_handle_survives_runtime_and_task_drop() -> Result<()> {
     drop(task);
     drop(runtime);
 
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         handle.post(blk, "in", Pmt::Null).await?;
 
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -219,7 +219,7 @@ fn flowgraph_instance_name() -> Result<()> {
     fg.block_mut(&snk)?.set_instance_name(name);
     let fg = rt.start(fg)?.handle();
 
-    let desc = Runtime::block_on(async move { fg.describe().await })?;
+    let desc = futuresdr::runtime::block_on(async move { fg.describe().await })?;
     assert_eq!(desc.blocks.first().unwrap().instance_name, name);
     Ok(())
 }

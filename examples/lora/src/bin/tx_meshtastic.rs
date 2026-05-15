@@ -91,7 +91,7 @@ fn main() -> Result<()> {
         let data = channel.encode(msg);
         let handle = handle.clone();
 
-        Runtime::block_on(async move {
+        futuresdr::runtime::block_on(async move {
             handle
                 .post(transmitter, "msg", Pmt::Blob(data))
                 .await

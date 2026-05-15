@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     let handle = rt.start(fg)?.handle();
 
     let mut seq = 0u64;
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         loop {
             Timer::after(Duration::from_secs_f32(0.1)).await;
             handle

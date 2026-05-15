@@ -33,7 +33,7 @@ fn connect_macro_works_in_local_domain_context() -> Result<()> {
 
 #[test]
 fn connect_macro_works_in_async_local_domain_context() -> Result<()> {
-    Runtime::block_on(async {
+    futuresdr::runtime::block_on(async {
         let mut fg = Flowgraph::new();
         let local = fg.local_domain();
 

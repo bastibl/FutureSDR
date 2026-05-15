@@ -380,14 +380,14 @@ fn run_domain_thread(
                     error!("failed to insert local block: {e}");
                 }
             }
-            LocalDomainMessage::Exec(f) => async_io::block_on(f(&mut state)),
+            LocalDomainMessage::Exec(f) => crate::runtime::block_on(f(&mut state)),
             LocalDomainMessage::Run {
                 main_channel,
                 executor_factory,
                 reply,
             } => {
                 let executor = executor_factory();
-                let result = async_io::block_on(run_local_domain(
+                let result = crate::runtime::block_on(run_local_domain(
                     &mut state,
                     executor,
                     main_channel,
@@ -566,7 +566,7 @@ mod tests {
 
         drop(controller);
 
-        async_io::block_on(run)
+        crate::runtime::block_on(run)
             .map_err(|_| Error::RuntimeError("local domain task canceled".to_string()))?
     }
 }

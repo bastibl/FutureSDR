@@ -68,15 +68,6 @@ impl Runtime<DefaultScheduler> {
         Self::with_custom_routes(Router::new())
     }
 
-    /// Block the current thread until a future completes.
-    ///
-    /// This is a small convenience wrapper around the native async executor and
-    /// is useful when synchronous application code needs to call async runtime
-    /// handle methods.
-    pub fn block_on<T>(future: impl Future<Output = T>) -> T {
-        async_io::block_on(future)
-    }
-
     /// Construct a runtime with additional routes for the integrated web server.
     ///
     /// The routes are merged into the native control-port server. Use this for
@@ -178,14 +169,14 @@ impl<S: Scheduler> Runtime<S> {
     ///
     /// Blocks until the flowgraph is initialized and running.
     pub fn start(&self, fg: Flowgraph) -> Result<RunningFlowgraph, Error> {
-        async_io::block_on(self.start_async(fg))
+        runtime::block_on(self.start_async(fg))
     }
 
     /// Start a [`Flowgraph`] on the [`Runtime`] and block until it terminates.
     ///
     /// This is the synchronous counterpart of [`Runtime::run_async`].
     pub fn run(&self, fg: Flowgraph) -> Result<Flowgraph, Error> {
-        let running = async_io::block_on(self.start_async(fg))?;
+        let running = runtime::block_on(self.start_async(fg))?;
         running.wait()
     }
 }

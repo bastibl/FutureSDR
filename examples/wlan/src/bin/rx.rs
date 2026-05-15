@@ -116,7 +116,7 @@ fn main() -> Result<()> {
                  decoder.rftap | udp2);
 
     let _running = rt.start(fg)?;
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         while let Some(x) = rx_frame.recv().await {
             match x {
                 Pmt::Blob(data) => {

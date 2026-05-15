@@ -56,7 +56,7 @@ impl RunningFlowgraph {
     /// Block until the flowgraph terminates and return the finished [`Flowgraph`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(self) -> Result<Flowgraph, Error> {
-        async_io::block_on(self.wait_async())
+        crate::runtime::block_on(self.wait_async())
     }
 
     /// Post a message to a block without waiting for handler completion.

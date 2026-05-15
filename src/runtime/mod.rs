@@ -95,6 +95,15 @@ pub use futuresdr_types::Pmt;
 pub use futuresdr_types::PmtKind;
 pub use futuresdr_types::PortId;
 
+/// Block the current thread until a future completes.
+///
+/// This is a small convenience wrapper around the native async executor and is
+/// useful when synchronous application code needs to call async runtime APIs.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    async_io::block_on(future)
+}
+
 /// Proc-macro and runtime plumbing that is public only so downstream macro
 /// expansions can reference generated implementation details.
 #[doc(hidden)]
@@ -102,10 +111,6 @@ pub mod __private {
     pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
-        async_io::block_on(future)
-    }
     pub use super::kernel_interface::KernelInterface;
     pub use super::kernel_interface::LocalKernelInterface;
     pub use super::kernel_interface::SendKernelInterface;

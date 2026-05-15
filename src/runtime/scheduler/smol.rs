@@ -86,7 +86,7 @@ impl SmolScheduler {
                         core_affinity::set_for_current(c);
                     }
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        async_io::block_on(e.run(receiver))
+                        crate::runtime::block_on(e.run(receiver))
                     }));
                     if result.is_err() {
                         eprintln!("smol worker panicked {result:?}");
@@ -159,7 +159,7 @@ mod test {
         let _ = SmolScheduler::default();
         let s = SmolScheduler::default();
         let t = s.spawn(async { 1 + 1 });
-        let r = async_io::block_on(t);
+        let r = crate::runtime::block_on(t);
         assert_eq!(r, 2);
     }
 }

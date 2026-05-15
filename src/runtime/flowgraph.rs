@@ -394,7 +394,7 @@ impl<'a> LocalDomainContext<'a> {
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
     {
-        crate::runtime::__private::block_on(
+        crate::runtime::block_on(
             self.stream_local_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
         )
     }
@@ -492,7 +492,7 @@ impl<'a> LocalDomainContext<'a> {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        crate::runtime::__private::block_on(self.message_async(
+        crate::runtime::block_on(self.message_async(
             src_block_id,
             src_port_id,
             dst_block_id,
@@ -640,7 +640,7 @@ impl<K: 'static> BlockRef<K> {
     where
         R: Send + 'static,
     {
-        crate::runtime::__private::block_on(self.with_async(fg, f))
+        crate::runtime::block_on(self.with_async(fg, f))
     }
 
     /// Asynchronously access the typed block through the given [`Flowgraph`].
@@ -703,7 +703,7 @@ impl<K: 'static> BlockRef<K> {
     where
         R: Send + 'static,
     {
-        crate::runtime::__private::block_on(self.with_mut_async(fg, f))
+        crate::runtime::block_on(self.with_mut_async(fg, f))
     }
 
     /// Asynchronously mutably access the typed block through the given [`Flowgraph`].
@@ -895,7 +895,7 @@ impl Flowgraph {
     where
         R: Send + 'static,
     {
-        crate::runtime::__private::block_on(
+        crate::runtime::block_on(
             self.domain_run_async(domain, async move |ctx: &LocalDomainContext<'_>| f(ctx)),
         )
     }
@@ -1865,7 +1865,7 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        crate::runtime::__private::block_on(
+        crate::runtime::block_on(
             self.stream_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
         )
     }
@@ -1947,7 +1947,7 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        crate::runtime::__private::block_on(
+        crate::runtime::block_on(
             self.stream_local_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
         )
     }
@@ -2019,7 +2019,7 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut CW,
         FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
     {
-        crate::runtime::__private::block_on(
+        crate::runtime::block_on(
             self.close_circuit_async::<KS, KD, CW, FS, FD>(
                 src_block, src_port, dst_block, dst_port,
             ),
@@ -2094,7 +2094,7 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        crate::runtime::__private::block_on(self.stream_dyn_async(
+        crate::runtime::block_on(self.stream_dyn_async(
             src_block_id,
             src_port_id,
             dst_block_id,
@@ -2151,7 +2151,7 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        crate::runtime::__private::block_on(self.stream_local_dyn_async(
+        crate::runtime::block_on(self.stream_local_dyn_async(
             src_block_id,
             src_port_id,
             dst_block_id,
@@ -2209,7 +2209,7 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        crate::runtime::__private::block_on(self.message_async(
+        crate::runtime::block_on(self.message_async(
             src_block_id,
             src_port_id,
             dst_block_id,

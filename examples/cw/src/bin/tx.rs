@@ -19,7 +19,7 @@ mod foo {
         let args = Args::parse();
         let msg: String = args.message;
 
-        Runtime::block_on(run_fg(msg))?;
+        futuresdr::runtime::block_on(run_fg(msg))?;
         Ok(())
     }
 }

@@ -15,7 +15,7 @@ fn channel_source_min() -> Result<()> {
 
     let rt = Runtime::new();
     let running = rt.start(fg)?;
-    let fg = Runtime::block_on(async move {
+    let fg = futuresdr::runtime::block_on(async move {
         tx.send(vec![0, 1, 2].into_boxed_slice()).await?;
         drop(tx);
         running
@@ -40,7 +40,7 @@ fn channel_source_small() -> Result<()> {
 
     let rt = Runtime::new();
     let running = rt.start(fg)?;
-    let fg = Runtime::block_on(async move {
+    let fg = futuresdr::runtime::block_on(async move {
         tx.send(vec![0, 1, 2].into_boxed_slice()).await?;
         tx.send(vec![3, 4].into_boxed_slice()).await?;
         tx.send(vec![].into_boxed_slice()).await?;
@@ -68,7 +68,7 @@ fn channel_source_big() -> Result<()> {
 
     let rt = Runtime::new();
     let running = rt.start(fg)?;
-    let fg = Runtime::block_on(async move {
+    let fg = futuresdr::runtime::block_on(async move {
         tx.send(vec![0; 99999].into_boxed_slice()).await?;
         tx.send(vec![1; 88888].into_boxed_slice()).await?;
         drop(tx);

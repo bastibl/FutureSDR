@@ -66,7 +66,7 @@ impl TpbScheduler {
             .name("tpb-smol".to_string())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    async_io::block_on(e.run(receiver))
+                    futuresdr::runtime::block_on(e.run(receiver))
                 }));
                 if result.is_err() {
                     eprintln!("tpb worker panicked {result:?}");

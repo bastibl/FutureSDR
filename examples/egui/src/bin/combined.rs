@@ -84,7 +84,7 @@ impl MyApp {
             let rt = Runtime::new();
             let handle = rt.start(fg)?.handle();
 
-            let _ = Runtime::block_on(process_gui_actions(rx, handle, src_id));
+            let _ = futuresdr::runtime::block_on(process_gui_actions(rx, handle, src_id));
 
             Ok(())
         });

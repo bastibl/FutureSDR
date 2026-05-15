@@ -102,7 +102,7 @@ fn main() -> Result<()> {
     // ==============================================================
     let rt = Runtime::new();
     let handle = rt.start(fg)?.handle();
-    Runtime::block_on(async move {
+    futuresdr::runtime::block_on(async move {
         let mut counter: usize = 0;
         loop {
             let payload = format!("hello world! {counter:02}");

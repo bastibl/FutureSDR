@@ -126,7 +126,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         let WrappedKernel {
             meta, mo, kernel, ..
         } = &mut self.block;
-        async_io::block_on(kernel.call_handler(&mut io, mo, meta, id, p))
+        crate::runtime::block_on(kernel.call_handler(&mut io, mo, meta, id, p))
             .map_err(|e| Error::HandlerError(e.to_string()))
     }
 
@@ -135,12 +135,12 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
     /// The loop repeats while the block sets [`WorkIo::call_again`]. Message
     /// outputs produced during each call are captured before the next iteration.
     pub fn run(&mut self) {
-        async_io::block_on(self.run_async());
+        crate::runtime::block_on(self.run_async());
     }
 
     /// Run the block's `init()` method synchronously.
     pub fn init(&mut self) {
-        async_io::block_on(async {
+        crate::runtime::block_on(async {
             self.block
                 .kernel
                 .init(&mut self.block.mo, &mut self.block.meta)
@@ -151,7 +151,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
 
     /// Run the block's `deinit()` method synchronously.
     pub fn deinit(&mut self) {
-        async_io::block_on(async {
+        crate::runtime::block_on(async {
             self.block
                 .kernel
                 .deinit(&mut self.block.mo, &mut self.block.meta)

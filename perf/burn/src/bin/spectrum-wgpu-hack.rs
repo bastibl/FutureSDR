@@ -87,10 +87,10 @@ impl Fft {
     fn create_state() -> Result<WgpuState> {
         let instance = wgpu::Instance::default();
         let adapter =
-            Runtime::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            futuresdr::runtime::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .expect("Failed to find an appropriate adapter");
 
-        let (device, queue) = Runtime::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = futuresdr::runtime::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("perf-burn-spectrum-wgpu-hack"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
