@@ -10,6 +10,7 @@ const TRANSFER_SIZE: usize = 262144;
 const N_PENDING_TRANSFERS: usize = 8;
 const USB_INIT_TIMEOUT_MS: u32 = 10_000;
 const HACKRF_VENDOR_ID: u16 = 7504;
+const DEFAULT_SAMPLE_RATE_HZ: f64 = 4_000_000.0;
 
 async fn wait_usb<T>(future: JsFuture<T>, operation: &str) -> Result<T, Error> {
     let future = future.fuse();
@@ -129,7 +130,14 @@ impl From<JsValue> for Error {
 /// let source = HackRf::new();
 /// ```
 #[derive(LocalBlock)]
-#[message_inputs(freq, vga, lna, amp, sample_rate, bandwidth)]
+#[message_inputs(
+    freq,
+    vga,
+    lna,
+    amp,
+    set_sample_rate_msg = "sample_rate",
+    set_bandwidth_msg = "bandwidth"
+)]
 pub struct HackRf {
     #[output]
     output: slab::Writer<Complex32>,
@@ -138,8 +146,8 @@ pub struct HackRf {
     device: Option<web_sys::UsbDevice>,
     pending_transfers: VecDeque<js_sys::Promise<web_sys::UsbInTransferResult>>,
     frequency: u64,
-    sample_rate: Option<f64>,
-    bandwidth: Option<f64>,
+    sample_rate: f64,
+    bandwidth: f64,
     vga_gain: u16,
     lna_gain: u16,
     amp: bool,
@@ -170,8 +178,8 @@ impl HackRf {
             device: None,
             pending_transfers: VecDeque::new(),
             frequency: 2_480_000_000,
-            sample_rate: None,
-            bandwidth: None,
+            sample_rate: DEFAULT_SAMPLE_RATE_HZ,
+            bandwidth: DEFAULT_SAMPLE_RATE_HZ,
             vga_gain: 2,
             lna_gain: 32,
             amp: true,
@@ -227,15 +235,19 @@ impl HackRf {
         self
     }
 
-    /// Set the initial sample rate in Hz.
-    pub fn initial_sample_rate(mut self, sample_rate: f64) -> Self {
-        self.sample_rate = Some(sample_rate);
+    /// Set the sample rate in Hz.
+    ///
+    /// This also sets the baseband filter bandwidth to the same value. To use
+    /// a different bandwidth, call [`Self::bandwidth`] after this method.
+    pub fn sample_rate(mut self, sample_rate: f64) -> Self {
+        self.sample_rate = sample_rate;
+        self.bandwidth = sample_rate;
         self
     }
 
-    /// Set the initial baseband filter bandwidth in Hz.
-    pub fn initial_bandwidth(mut self, bandwidth: f64) -> Self {
-        self.bandwidth = Some(bandwidth);
+    /// Set the baseband filter bandwidth in Hz.
+    pub fn bandwidth(mut self, bandwidth: f64) -> Self {
+        self.bandwidth = bandwidth;
         self
     }
 
@@ -354,48 +366,66 @@ impl HackRf {
         }
     }
 
-    async fn sample_rate(
+    async fn set_sample_rate_msg(
         &mut self,
         _io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let (rate, res) = match &p {
-            Pmt::F32(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
-            Pmt::F64(v) => (*v, self.set_sample_rate_auto(*v).await),
-            Pmt::U32(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
-            Pmt::U64(v) => (*v as f64, self.set_sample_rate_auto(*v as f64).await),
+        let rate = match &p {
+            Pmt::F32(v) => *v as f64,
+            Pmt::F64(v) => *v,
+            Pmt::U32(v) => *v as f64,
+            Pmt::U64(v) => *v as f64,
             _ => return Ok(Pmt::InvalidValue),
         };
+
+        let res = self.set_sample_rate_auto(rate).await;
         if res.is_ok() {
-            self.sample_rate = Some(rate);
-            self.low_rate_intervals = 0;
-            self.flush_rx_queue("sample-rate change");
-            Ok(Pmt::Ok)
+            let bandwidth_res = self.set_baseband_filter_bandwidth(rate as u32).await;
+            if bandwidth_res.is_ok() {
+                self.sample_rate = rate;
+                self.bandwidth = rate;
+                self.low_rate_intervals = 0;
+                self.flush_rx_queue("sample-rate change");
+                info!("HackRF WebUSB sample rate and bandwidth set to {rate} Hz");
+                Ok(Pmt::Ok)
+            } else {
+                warn!(
+                    "HackRF WebUSB failed to set default bandwidth to {rate} Hz after sample-rate change: {bandwidth_res:?}"
+                );
+                Ok(Pmt::InvalidValue)
+            }
         } else {
+            warn!("HackRF WebUSB failed to set sample rate to {rate} Hz: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
 
-    async fn bandwidth(
+    async fn set_bandwidth_msg(
         &mut self,
         _io: &mut LocalWorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
     ) -> Result<Pmt> {
-        let res = match &p {
-            Pmt::F32(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
-            Pmt::F64(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
-            Pmt::U32(v) => self.set_baseband_filter_bandwidth(*v).await,
-            Pmt::U64(v) => self.set_baseband_filter_bandwidth(*v as u32).await,
+        let bandwidth = match &p {
+            Pmt::F32(v) => *v as f64,
+            Pmt::F64(v) => *v,
+            Pmt::U32(v) => *v as f64,
+            Pmt::U64(v) => *v as f64,
             _ => return Ok(Pmt::InvalidValue),
         };
+
+        let res = self.set_baseband_filter_bandwidth(bandwidth as u32).await;
         if res.is_ok() {
+            self.bandwidth = bandwidth;
             self.flush_rx_queue("bandwidth change");
+            info!("HackRF WebUSB bandwidth set to {bandwidth} Hz");
             Ok(Pmt::Ok)
         } else {
+            warn!("HackRF WebUSB failed to set bandwidth to {bandwidth} Hz: {res:?}");
             Ok(Pmt::InvalidValue)
         }
     }
@@ -553,10 +583,7 @@ impl HackRf {
         let mut buf = [0; 8];
         buf[..4].copy_from_slice(&hz.to_le_bytes());
         buf[4..].copy_from_slice(&div.to_le_bytes());
-        self.write_control(Request::SampleRateSet, 0, 0, &buf)
-            .await?;
-        self.set_baseband_filter_bandwidth((0.75 * (hz as f32) / (div as f32)) as u32)
-            .await
+        self.write_control(Request::SampleRateSet, 0, 0, &buf).await
     }
 
     async fn set_transceiver_mode(&mut self, mode: TransceiverMode) -> Result<(), Error> {
@@ -672,20 +699,18 @@ impl HackRf {
                 self.transfers_since_log as f64 / elapsed_s,
                 self.transfers_total
             );
-            if let Some(sample_rate) = self.sample_rate {
-                let expected_msps = sample_rate / 1.0e6;
-                if msps < 0.90 * expected_msps {
-                    self.low_rate_intervals += 1;
-                    if self.low_rate_intervals >= 3 && now - self.last_overrun_log_ms >= 5_000.0 {
-                        warn!(
-                            "HackRF WebUSB sustained RX throughput below requested rate: {:.2}/{:.2} MS/s; samples may be dropped",
-                            msps, expected_msps
-                        );
-                        self.last_overrun_log_ms = now;
-                    }
-                } else {
-                    self.low_rate_intervals = 0;
+            let expected_msps = self.sample_rate / 1.0e6;
+            if msps < 0.90 * expected_msps {
+                self.low_rate_intervals += 1;
+                if self.low_rate_intervals >= 3 && now - self.last_overrun_log_ms >= 5_000.0 {
+                    warn!(
+                        "HackRF WebUSB sustained RX throughput below requested rate: {:.2}/{:.2} MS/s; samples may be dropped",
+                        msps, expected_msps
+                    );
+                    self.last_overrun_log_ms = now;
                 }
+            } else {
+                self.low_rate_intervals = 0;
             }
             self.samples_since_log = 0;
             self.transfers_since_log = 0;
@@ -755,7 +780,7 @@ impl LocalKernel for HackRf {
 
         self.device = Some(device);
         info!(
-            "HackRF WebUSB init: frequency {} Hz, requested sample rate {:?} Hz, requested bandwidth {:?} Hz, LNA {} dB, VGA {} dB, amp {}",
+            "HackRF WebUSB init: frequency {} Hz, sample rate {} Hz, bandwidth {} Hz, LNA {} dB, VGA {} dB, amp {}",
             self.frequency,
             self.sample_rate,
             self.bandwidth,
@@ -764,18 +789,13 @@ impl LocalKernel for HackRf {
             self.amp
         );
 
-        if let Some(sample_rate) = self.sample_rate {
-            self.set_sample_rate_auto(sample_rate).await?;
-        } else {
-            self.set_sample_rate(8_000_000, 2).await?;
-        }
-        if let Some(bandwidth) = self.bandwidth {
-            self.set_baseband_filter_bandwidth(bandwidth as u32).await?;
-            info!(
-                "HackRF WebUSB baseband filter bandwidth set to {} Hz",
-                bandwidth
-            );
-        }
+        self.set_sample_rate_auto(self.sample_rate).await?;
+        self.set_baseband_filter_bandwidth(self.bandwidth as u32)
+            .await?;
+        info!(
+            "HackRF WebUSB baseband filter bandwidth set to {} Hz",
+            self.bandwidth
+        );
         self.set_hw_sync_mode(0).await?;
         self.set_freq(self.frequency).await?;
         self.set_vga_gain(self.vga_gain).await?;

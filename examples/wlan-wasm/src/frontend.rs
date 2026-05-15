@@ -525,8 +525,7 @@ async fn start_receiver(
     let src = fg.add_local(local, move || {
         HackRf::new()
             .frequency(config.frequency as u64)
-            .initial_sample_rate(config.sample_rate)
-            .initial_bandwidth(config.sample_rate)
+            .sample_rate(config.sample_rate)
             .lna_gain(config.lna_gain)
             .vga_gain(config.vga_gain)
             .amp_enable(config.amp)

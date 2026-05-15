@@ -141,7 +141,8 @@ impl BlockInbox {
 
     /// Notify the destination block that one stream output port is done.
     pub async fn stream_output_done(&self, output_id: PortId) -> Result<(), crate::runtime::Error> {
-        self.send(BlockMessage::StreamOutputDone { output_id }).await
+        self.send(BlockMessage::StreamOutputDone { output_id })
+            .await
     }
 
     /// Enqueue a block message and wake the destination block on success.
