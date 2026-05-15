@@ -77,8 +77,24 @@ pub mod mpsc {
 
     impl<T> Sender<T> {
         /// Send a value into the channel.
+        #[cfg(not(target_arch = "wasm32"))]
         pub async fn send(&self, data: T) -> Result<(), SendError> {
             self.0.send(data).await
+        }
+
+        /// Send a value into the channel.
+        #[cfg(target_arch = "wasm32")]
+        pub async fn send(&self, mut data: T) -> Result<(), SendError> {
+            loop {
+                match self.try_send(data) {
+                    Ok(()) => return Ok(()),
+                    Err(TrySendError::Full(value)) => {
+                        data = value;
+                        crate::runtime::wasm_event_loop_yield().await;
+                    }
+                    Err(TrySendError::Disconnected(_)) => return Err(SendError::ReceiveClosed),
+                }
+            }
         }
 
         /// Attempt to send a value without waiting.
@@ -109,8 +125,23 @@ pub mod mpsc {
 
     impl<T> Receiver<T> {
         /// Receive the next value from the channel.
+        #[cfg(not(target_arch = "wasm32"))]
         pub async fn recv(&self) -> Option<T> {
             self.0.recv().await.ok()
+        }
+
+        /// Receive the next value from the channel.
+        #[cfg(target_arch = "wasm32")]
+        pub async fn recv(&self) -> Option<T> {
+            loop {
+                match self.try_recv() {
+                    Ok(value) => return Some(value),
+                    Err(TryRecvError::Empty) => {
+                        crate::runtime::wasm_event_loop_yield().await;
+                    }
+                    Err(TryRecvError::Disconnected) => return None,
+                }
+            }
         }
 
         /// Attempt to receive a value without waiting.
@@ -169,12 +200,26 @@ pub mod oneshot {
         type Output = Result<T, Canceled>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            match Pin::new(&mut self.inner).poll(cx) {
-                Poll::Ready(result) => Poll::Ready(result),
-                Poll::Pending => {
-                    #[cfg(target_arch = "wasm32")]
-                    schedule_wake(&self.wake_scheduled, cx);
-                    Poll::Pending
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Pin::new(&mut self.inner).poll(cx)
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Do not register `cx.waker()` with the underlying futures
+                // oneshot on WASM: the sender may live in another web worker,
+                // and waking a wasm-bindgen/async-task waker from there can
+                // reschedule the receiving future on the wrong worker. Poll the
+                // inner channel with a noop waker and schedule a local timer to
+                // check again on the receiver's own event loop.
+                let mut noop_cx = Context::from_waker(futures::task::noop_waker_ref());
+                match Pin::new(&mut self.inner).poll(&mut noop_cx) {
+                    Poll::Ready(result) => Poll::Ready(result),
+                    Poll::Pending => {
+                        schedule_wake(&self.wake_scheduled, cx);
+                        Poll::Pending
+                    }
                 }
             }
         }
@@ -196,7 +241,11 @@ pub mod oneshot {
             });
             let function = wasm_bindgen::JsCast::unchecked_ref::<js_sys::Function>(&callback);
             if let Some(window) = web_sys::window() {
-                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(function, 0);
+                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(function, 1);
+            } else if let Ok(scope) =
+                wasm_bindgen::JsCast::dyn_into::<web_sys::WorkerGlobalScope>(js_sys::global())
+            {
+                let _ = scope.set_timeout_with_callback_and_timeout_and_arguments_0(function, 1);
             } else {
                 wake_scheduled.store(false, Ordering::Release);
                 cx.waker().wake_by_ref();
