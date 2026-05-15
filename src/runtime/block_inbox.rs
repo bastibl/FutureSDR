@@ -8,6 +8,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use crate::runtime::BlockMessage;
+use crate::runtime::PortId;
 use crate::runtime::channel::mpsc;
 
 #[derive(Debug)]
@@ -98,9 +99,8 @@ impl Future for Notified {
 /// Sender-side actor inbox for a block.
 ///
 /// Message outputs and runtime control paths use `BlockInbox` to enqueue
-/// [`BlockMessage`](crate::runtime::BlockMessage)s and wake the destination
-/// block. Most block authors interact with it indirectly through
-/// [`MessageOutputs`](crate::runtime::dev::MessageOutputs).
+/// internal messages and wake the destination block. Most block authors interact
+/// with it indirectly through [`MessageOutputs`](crate::runtime::dev::MessageOutputs).
 #[derive(Clone, Debug)]
 pub struct BlockInbox {
     control: mpsc::Sender<BlockMessage>,
@@ -109,7 +109,7 @@ pub struct BlockInbox {
 
 impl BlockInbox {
     /// Create a sender-side block inbox from an mpsc sender and notifier.
-    pub fn new(control: mpsc::Sender<BlockMessage>, notifier: BlockNotifier) -> Self {
+    pub(crate) fn new(control: mpsc::Sender<BlockMessage>, notifier: BlockNotifier) -> Self {
         Self { control, notifier }
     }
 
@@ -134,8 +134,18 @@ impl BlockInbox {
         self.control.is_closed()
     }
 
+    /// Notify the destination block that one stream input port is done.
+    pub async fn stream_input_done(&self, input_id: PortId) -> Result<(), crate::runtime::Error> {
+        self.send(BlockMessage::StreamInputDone { input_id }).await
+    }
+
+    /// Notify the destination block that one stream output port is done.
+    pub async fn stream_output_done(&self, output_id: PortId) -> Result<(), crate::runtime::Error> {
+        self.send(BlockMessage::StreamOutputDone { output_id }).await
+    }
+
     /// Enqueue a block message and wake the destination block on success.
-    pub async fn send(&self, msg: BlockMessage) -> Result<(), crate::runtime::Error> {
+    pub(crate) async fn send(&self, msg: BlockMessage) -> Result<(), crate::runtime::Error> {
         self.control.send(msg).await?;
         self.notifier.notify();
         Ok(())

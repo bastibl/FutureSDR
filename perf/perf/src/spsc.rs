@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use futuresdr::runtime::BlockId;
-use futuresdr::runtime::BlockMessage;
 use futuresdr::runtime::Error;
 use futuresdr::runtime::PortId;
 use futuresdr::runtime::buffer::BufferReader;
@@ -222,9 +221,7 @@ where
     async fn notify_finished(&mut self) {
         let _ = self
             .reader_inbox
-            .send(BlockMessage::StreamInputDone {
-                input_id: self.reader_input_id.clone(),
-            })
+            .stream_input_done(self.reader_input_id.clone())
             .await;
     }
 
@@ -396,9 +393,7 @@ where
     async fn notify_finished(&mut self) {
         let _ = self
             .writer_inbox
-            .send(BlockMessage::StreamOutputDone {
-                output_id: self.writer_output_id.clone(),
-            })
+            .stream_output_done(self.writer_output_id.clone())
             .await;
     }
 

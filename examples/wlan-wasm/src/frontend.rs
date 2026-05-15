@@ -6,9 +6,7 @@ use futuresdr::blocks::Fft;
 use futuresdr::blocks::StreamDuplicator;
 use futuresdr::blocks::wasm::HackRf;
 use futuresdr::prelude::*;
-use futuresdr::runtime::BlockMessage;
 use futuresdr::runtime::channel::mpsc;
-use futuresdr::runtime::dev::BlockInbox;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::CpuBufferReader;
 use futuresdr::runtime::dev::DefaultCpuReader;
@@ -117,7 +115,7 @@ type Shared<T> = Arc<Mutex<Option<T>>>;
 
 #[derive(Clone)]
 struct RunControl {
-    source: BlockInbox,
+    source: FlowgraphBlockHandle,
 }
 
 struct Receiver {
@@ -480,48 +478,9 @@ fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p
     let value = format!("{p:?}");
     if let Some(run_control) = control.get_untracked() {
         spawn_local(async move {
-            futuresdr::tracing::info!("calling HackRF setting {handler} = {value}");
-            let (tx, rx) = futuresdr::futures::channel::oneshot::channel();
-            let send = Box::pin(run_control.source.send(BlockMessage::Callback {
-                port_id: handler.into(),
-                data: p,
-                tx,
-            }));
-            let timeout = Box::pin(TimeoutFuture::new(2_000));
-
-            match futuresdr::prelude::future::select(send, timeout).await {
-                futuresdr::prelude::future::Either::Left((Ok(()), _)) => {
-                    let reply = Box::pin(rx);
-                    let timeout = Box::pin(TimeoutFuture::new(2_000));
-                    match futuresdr::prelude::future::select(reply, timeout).await {
-                        futuresdr::prelude::future::Either::Left((Ok(Ok(reply)), _)) => {
-                            futuresdr::tracing::info!(
-                                "HackRF setting {handler} reply: {reply:?}"
-                            );
-                        }
-                        futuresdr::prelude::future::Either::Left((Ok(Err(e)), _)) => {
-                            futuresdr::tracing::warn!("failed to call {handler}: {e:?}");
-                        }
-                        futuresdr::prelude::future::Either::Left((Err(e), _)) => {
-                            futuresdr::tracing::warn!(
-                                "HackRF setting {handler} reply channel canceled: {e:?}"
-                            );
-                        }
-                        futuresdr::prelude::future::Either::Right((_, _)) => {
-                            futuresdr::tracing::warn!(
-                                "timed out waiting for HackRF setting {handler} = {value} reply"
-                            );
-                        }
-                    }
-                }
-                futuresdr::prelude::future::Either::Left((Err(e), _)) => {
-                    futuresdr::tracing::warn!("failed to send HackRF setting {handler}: {e:?}");
-                }
-                futuresdr::prelude::future::Either::Right((_, _)) => {
-                    futuresdr::tracing::warn!(
-                        "timed out sending HackRF setting {handler} = {value}"
-                    );
-                }
+            futuresdr::tracing::info!("posting HackRF setting {handler} = {value}");
+            if let Err(e) = run_control.source.post(handler, p).await {
+                futuresdr::tracing::warn!("failed to post HackRF setting {handler}: {e:?}");
             }
         });
     } else {
@@ -573,12 +532,6 @@ async fn start_receiver(
             .amp_enable(config.amp)
     });
     let source = src.id();
-    let source_inbox = fg.block_inbox(source)?;
-    let control = RunControl {
-        source: source_inbox,
-    };
-    set_control.set(Some(control.clone()));
-    futuresdr::tracing::debug!("WLAN receiver control inbox installed");
 
     let failure_for_task = failure.clone();
     spawn_local(async move {
@@ -586,6 +539,10 @@ async fn start_receiver(
             build_rx_flowgraph(&mut fg, src, frames_for_pipe, config.dc_offset).await?;
             futuresdr::tracing::debug!("starting WLAN WASM flowgraph");
             let running = rt_handle.start(fg).await?;
+            set_control.set(Some(RunControl {
+                source: running.handle().block(source),
+            }));
+            futuresdr::tracing::debug!("WLAN receiver control handle installed");
             futuresdr::tracing::debug!("WLAN WASM flowgraph started; detaching runtime task");
             drop(running);
             Ok::<(), anyhow::Error>(())

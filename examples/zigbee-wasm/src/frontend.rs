@@ -4,9 +4,6 @@ use futuresdr::blocks::Apply;
 use futuresdr::blocks::NullSink;
 use futuresdr::blocks::wasm::HackRf;
 use futuresdr::prelude::*;
-use futuresdr::runtime::BlockMessage;
-use futuresdr::runtime::channel::oneshot;
-use futuresdr::runtime::dev::BlockInbox;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
@@ -54,7 +51,7 @@ type Shared<T> = Arc<Mutex<Option<T>>>;
 
 #[derive(Clone)]
 struct RunControl {
-    source: BlockInbox,
+    source: FlowgraphBlockHandle,
 }
 
 struct Receiver {
@@ -306,10 +303,6 @@ async fn start_receiver(
     let local = fg.local_domain();
     let src = fg.add_local(local, HackRf::new);
     let source = src.id();
-    let source_inbox = fg.block_inbox(source)?;
-    set_control.set(Some(RunControl {
-        source: source_inbox,
-    }));
 
     spawn_local(async move {
         let result = async move {
@@ -335,6 +328,9 @@ async fn start_receiver(
                          mac.rxed | frame_pipe);
 
             let running = rt_handle.start(fg).await?;
+            set_control.set(Some(RunControl {
+                source: running.handle().block(source),
+            }));
             drop(running);
             Ok::<(), futuresdr::runtime::Error>(())
         }
@@ -398,25 +394,9 @@ fn post_source(control: ReadSignal<Option<RunControl>>, handler: &'static str, p
     let value = format!("{p:?}");
     if let Some(run_control) = control.get_untracked() {
         spawn_local(async move {
-            info!("calling HackRF setting {handler} = {value}");
-            let (tx, rx) = oneshot::channel();
-            if let Err(e) = run_control
-                .source
-                .send(BlockMessage::Callback {
-                    port_id: handler.into(),
-                    data: p,
-                    tx,
-                })
-                .await
-            {
-                warn!("failed to send HackRF setting {handler}: {e:?}");
-                return;
-            }
-
-            match rx.await {
-                Ok(Ok(reply)) => info!("HackRF setting {handler} reply: {reply:?}"),
-                Ok(Err(e)) => warn!("failed to call {handler}: {e:?}"),
-                Err(e) => warn!("HackRF setting {handler} reply channel canceled: {e:?}"),
+            info!("posting HackRF setting {handler} = {value}");
+            if let Err(e) = run_control.source.post(handler, p).await {
+                warn!("failed to post HackRF setting {handler}: {e:?}");
             }
         });
     } else {

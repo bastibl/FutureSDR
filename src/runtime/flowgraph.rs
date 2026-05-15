@@ -853,20 +853,6 @@ impl Flowgraph {
         })
     }
 
-    /// Get a sender-side inbox for a block.
-    ///
-    /// This is mainly useful for integrations that need to enqueue control
-    /// messages before a [`FlowgraphHandle`] is available. Messages sent to the
-    /// inbox are delivered directly to the block.
-    pub fn block_inbox(&self, block_id: impl Into<BlockId>) -> Result<BlockInbox, Error> {
-        let block_id = block_id.into();
-        self.blocks
-            .get(block_id.0)
-            .and_then(|entry| entry.inbox.as_ref())
-            .cloned()
-            .ok_or(Error::InvalidBlock(block_id))
-    }
-
     fn commit_local_context_entries(
         &mut self,
         domain_id: usize,
