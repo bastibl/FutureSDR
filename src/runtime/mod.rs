@@ -136,13 +136,47 @@ pub(crate) async fn await_oneshot<T>(
         if let Some(result) = rx.as_mut().now_or_never() {
             return result;
         }
-        yield_now().await;
+
+        wasm_event_loop_yield().await;
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn yield_now() -> impl std::future::Future<Output = ()> + Unpin {
     WasmYieldNow(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_event_loop_yield() -> impl std::future::Future<Output = ()> + Send + Unpin {
+    WasmEventLoopYield(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WasmEventLoopYield(bool);
+
+#[cfg(target_arch = "wasm32")]
+impl std::future::Future for WasmEventLoopYield {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if !self.0 {
+            self.0 = true;
+            let waker = cx.waker().clone();
+            let callback = wasm_bindgen::closure::Closure::once_into_js(move || waker.wake());
+            let function = wasm_bindgen::JsCast::unchecked_ref::<js_sys::Function>(&callback);
+            if let Some(window) = web_sys::window() {
+                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(function, 0);
+            } else {
+                cx.waker().wake_by_ref();
+            }
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
