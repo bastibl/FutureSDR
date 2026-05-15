@@ -97,7 +97,7 @@ pub mod mpsc {
         }
 
         /// Close the channel.
-        pub async fn close(&self) -> Result<(), SendError> {
+        pub fn close(&self) -> Result<(), SendError> {
             self.0.close().map_err(|_| SendError::Closed)
         }
 

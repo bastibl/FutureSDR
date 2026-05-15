@@ -3,7 +3,6 @@ use futures::Future;
 use futures::channel::oneshot;
 use futures::future::Either;
 use std::pin::Pin;
-use std::sync::mpsc as sync_mpsc;
 use std::thread;
 
 use crate::runtime::BlockId;
@@ -13,13 +12,12 @@ use crate::runtime::FlowgraphMessage;
 use crate::runtime::PortId;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
-use crate::runtime::block_inbox::BlockInboxReader;
+use crate::runtime::channel::mpsc;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::config;
 use crate::runtime::dev::BlockInbox;
 
-pub(crate) type LocalBlockBuilder =
-    Box<dyn FnOnce(BlockInbox, BlockInboxReader) -> Box<dyn LocalBlock> + Send + 'static>;
+pub(crate) type LocalBlockBuilder = Box<dyn FnOnce() -> Box<dyn LocalBlock> + Send + 'static>;
 
 type LocalDomainAsyncExec = Box<
     dyn for<'a> FnOnce(&'a mut LocalDomainState) -> Pin<Box<dyn Future<Output = ()> + 'a>>
@@ -133,8 +131,7 @@ enum LocalDomainMessage {
     Build {
         local_id: usize,
         builder: LocalBlockBuilder,
-        inbox: BlockInbox,
-        inbox_rx: BlockInboxReader,
+        reply: oneshot::Sender<Result<BlockInbox, Error>>,
     },
     Exec(LocalDomainAsyncExec),
     Run {
@@ -186,12 +183,12 @@ impl LocalDomainRuntime {
         self.controller.handle()
     }
 
-    pub(crate) fn build(
+    pub(crate) async fn build(
         &self,
         local_id: usize,
         builder: LocalBlockBuilder,
     ) -> Result<BlockInbox, Error> {
-        self.controller.build(local_id, builder)
+        self.controller.build(local_id, builder).await
     }
 
     pub(crate) async fn exec<R>(
@@ -208,7 +205,7 @@ impl LocalDomainRuntime {
         self.controller.exec(f).await
     }
 
-    pub(crate) fn run_if_needed(
+    pub(crate) async fn run_if_needed(
         &mut self,
         main_channel: Sender<FlowgraphMessage>,
     ) -> Result<Option<oneshot::Receiver<Result<(), Error>>>, Error> {
@@ -217,7 +214,8 @@ impl LocalDomainRuntime {
         }
         let task = self
             .controller
-            .run(main_channel, default_local_executor_factory())?;
+            .run(main_channel, default_local_executor_factory())
+            .await?;
         self.running = true;
         Ok(Some(task))
     }
@@ -228,14 +226,14 @@ impl LocalDomainRuntime {
 }
 
 pub(crate) struct LocalDomainController {
-    tx: sync_mpsc::Sender<LocalDomainMessage>,
+    tx: Sender<LocalDomainMessage>,
     terminate_tx: Option<oneshot::Sender<()>>,
     join: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct LocalDomainHandle {
-    tx: sync_mpsc::Sender<LocalDomainMessage>,
+    tx: Sender<LocalDomainMessage>,
 }
 
 impl LocalDomainHandle {
@@ -264,6 +262,7 @@ impl LocalDomainHandle {
                     let _ = reply.send(f(state).await);
                 })
             })))
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
         rx.await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
@@ -272,12 +271,12 @@ impl LocalDomainHandle {
 
 impl LocalDomainController {
     pub(crate) fn try_new() -> Result<Self, Error> {
-        let (tx, rx) = sync_mpsc::channel();
+        let (tx, rx) = mpsc::channel(config::config().queue_size);
         let (terminate_tx, terminate_rx) = oneshot::channel();
         let join = thread::Builder::new()
             .stack_size(config::config().stack_size)
             .name("futuresdr-local".to_string())
-            .spawn(move || run_domain_thread(rx, terminate_rx))
+            .spawn(move || crate::runtime::block_on(run_domain_thread(rx, terminate_rx)))
             .map_err(|e| {
                 Error::RuntimeError(format!("failed to spawn local domain thread: {e}"))
             })?;
@@ -295,25 +294,22 @@ impl LocalDomainController {
         }
     }
 
-    pub(crate) fn build(
+    pub(crate) async fn build(
         &self,
         local_id: usize,
         builder: LocalBlockBuilder,
     ) -> Result<BlockInbox, Error> {
-        // Return the sender side immediately so flowgraph construction can wire
-        // message ports without a synchronous round-trip to the local domain.
-        // FIFO ordering on `tx` still guarantees the Build message is handled
-        // before later Exec/Run messages from the same controller.
-        let (inbox, inbox_rx) = crate::runtime::block_inbox::channel(config::config().queue_size);
+        let (reply, rx) = oneshot::channel();
         self.tx
             .send(LocalDomainMessage::Build {
                 local_id,
                 builder,
-                inbox: inbox.clone(),
-                inbox_rx,
+                reply,
             })
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
-        Ok(inbox)
+        rx.await
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
     }
 
     pub(crate) async fn exec<R>(
@@ -330,7 +326,7 @@ impl LocalDomainController {
         self.handle().exec(f).await
     }
 
-    pub(crate) fn run(
+    pub(crate) async fn run(
         &self,
         main_channel: Sender<FlowgraphMessage>,
         executor_factory: LocalExecutorFactory,
@@ -342,6 +338,7 @@ impl LocalDomainController {
                 executor_factory,
                 reply,
             })
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
         Ok(rx)
     }
@@ -352,7 +349,7 @@ impl Drop for LocalDomainController {
         if let Some(terminate_tx) = self.terminate_tx.take() {
             let _ = terminate_tx.send(());
         }
-        let _ = self.tx.send(LocalDomainMessage::Terminate);
+        let _ = self.tx.try_send(LocalDomainMessage::Terminate);
         if let Some(join) = self.join.take()
             && join.join().is_err()
         {
@@ -361,38 +358,36 @@ impl Drop for LocalDomainController {
     }
 }
 
-fn run_domain_thread(
-    rx: sync_mpsc::Receiver<LocalDomainMessage>,
+async fn run_domain_thread(
+    rx: mpsc::Receiver<LocalDomainMessage>,
     mut terminate_rx: oneshot::Receiver<()>,
 ) {
     let mut state = LocalDomainState::new();
 
-    while let Ok(message) = rx.recv() {
+    while let Some(message) = rx.recv().await {
         match message {
             LocalDomainMessage::Build {
                 local_id,
                 builder,
-                inbox,
-                inbox_rx,
+                reply,
             } => {
-                let block = builder(inbox, inbox_rx);
-                if let Err(e) = state.insert_block(local_id, block) {
+                let block = builder();
+                let inbox = block.inbox();
+                let result = state.insert_block(local_id, block).map(|_| inbox);
+                if let Err(e) = &result {
                     error!("failed to insert local block: {e}");
                 }
+                let _ = reply.send(result);
             }
-            LocalDomainMessage::Exec(f) => crate::runtime::block_on(f(&mut state)),
+            LocalDomainMessage::Exec(f) => f(&mut state).await,
             LocalDomainMessage::Run {
                 main_channel,
                 executor_factory,
                 reply,
             } => {
                 let executor = executor_factory();
-                let result = crate::runtime::block_on(run_local_domain(
-                    &mut state,
-                    executor,
-                    main_channel,
-                    &mut terminate_rx,
-                ));
+                let result =
+                    run_local_domain(&mut state, executor, main_channel, &mut terminate_rx).await;
                 let _ = reply.send(result);
             }
             LocalDomainMessage::Terminate => break,
@@ -551,18 +546,20 @@ mod tests {
     #[test]
     fn controller_drop_terminates_running_local_blocks() -> Result<(), Error> {
         let controller = LocalDomainController::try_new()?;
-        controller.build(
+        crate::runtime::block_on(controller.build(
             0,
-            Box::new(|inbox, inbox_rx| {
+            Box::new(|| {
+                let (inbox, inbox_rx) = crate::runtime::block_inbox::channel(4);
                 Box::new(WaitForTerminate {
                     id: BlockId(0),
                     inbox,
                     inbox_rx,
                 })
             }),
-        )?;
+        ))?;
         let (main_tx, _main_rx) = crate::runtime::channel::mpsc::channel(4);
-        let run = controller.run(main_tx, default_local_executor_factory())?;
+        let run =
+            crate::runtime::block_on(controller.run(main_tx, default_local_executor_factory()))?;
 
         drop(controller);
 

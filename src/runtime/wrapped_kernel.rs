@@ -84,17 +84,8 @@ where
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<K: KernelInterface + 'static> WrappedKernel<K> {
     /// Create typed block wrapper.
-    pub fn new(kernel: K, id: BlockId) -> Self {
+    pub fn new(mut kernel: K, id: BlockId) -> Self {
         let (tx, rx) = crate::runtime::block_inbox::channel(config::config().queue_size);
-        Self::new_with_inbox(kernel, id, tx, rx)
-    }
-
-    pub(crate) fn new_with_inbox(
-        mut kernel: K,
-        id: BlockId,
-        tx: BlockInbox,
-        rx: BlockInboxReader,
-    ) -> Self {
         kernel.stream_ports_init(id, tx.clone());
         Self {
             meta: BlockMeta::new(),
@@ -291,17 +282,8 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
 impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
     /// Create typed local block wrapper.
     #[allow(dead_code)]
-    pub fn new(kernel: K, id: BlockId) -> Self {
+    pub fn new(mut kernel: K, id: BlockId) -> Self {
         let (tx, rx) = crate::runtime::block_inbox::channel(config::config().queue_size);
-        Self::new_with_inbox(kernel, id, tx, rx)
-    }
-
-    pub(crate) fn new_with_inbox(
-        mut kernel: K,
-        id: BlockId,
-        tx: BlockInbox,
-        rx: BlockInboxReader,
-    ) -> Self {
         kernel.stream_ports_init(id, tx.clone());
         Self {
             meta: BlockMeta::new(),

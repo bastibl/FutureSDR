@@ -305,11 +305,7 @@ impl<'a> LocalDomainContext<'a> {
         &self,
         kind: LocalBlockKind,
         message_inputs: &'static [&'static str],
-        build: impl FnOnce(
-            BlockId,
-            BlockInbox,
-            crate::runtime::block_inbox::BlockInboxReader,
-        ) -> Box<dyn crate::runtime::block::LocalBlock>,
+        build: impl FnOnce(BlockId) -> Box<dyn crate::runtime::block::LocalBlock>,
     ) -> BlockRef<K> {
         let mut inner = self.inner.borrow_mut();
         let block_id = BlockId(inner.next_block_id);
@@ -322,9 +318,8 @@ impl<'a> LocalDomainContext<'a> {
             kind,
         };
 
-        let (inbox, inbox_rx) =
-            crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
-        let block = build(block_id, inbox.clone(), inbox_rx);
+        let block = build(block_id);
+        let inbox = block.inbox();
         inner
             .state
             .insert_block(local_id, block)
@@ -350,8 +345,8 @@ impl<'a> LocalDomainContext<'a> {
         self.add_wrapped(
             LocalBlockKind::Kernel,
             <K as KernelInterface>::message_inputs(),
-            move |block_id, inbox, inbox_rx| {
-                let mut b = WrappedKernel::new_with_inbox(block, block_id, inbox, inbox_rx);
+            move |block_id| {
+                let mut b = WrappedKernel::new(block, block_id);
                 let block_name = <K as KernelInterface>::type_name();
                 b.meta
                     .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -368,8 +363,8 @@ impl<'a> LocalDomainContext<'a> {
         self.add_wrapped(
             LocalBlockKind::LocalKernel,
             <K as LocalKernelInterface>::message_inputs(),
-            move |block_id, inbox, inbox_rx| {
-                let mut b = WrappedLocalKernel::new_with_inbox(block, block_id, inbox, inbox_rx);
+            move |block_id| {
+                let mut b = WrappedLocalKernel::new(block, block_id);
                 let block_name = <K as LocalKernelInterface>::type_name();
                 b.meta
                     .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -999,9 +994,11 @@ impl Flowgraph {
             kind,
         };
         let block_id = self.reserve_block_id(placement);
-        let inbox = self.local_domains[domain_id]
-            .build(local_id, builder(block_id))
-            .expect(expect_msg);
+        let build = self.local_domains[domain_id].build(local_id, builder(block_id));
+        #[cfg(not(target_arch = "wasm32"))]
+        let inbox = crate::runtime::block_on(build).expect(expect_msg);
+        #[cfg(target_arch = "wasm32")]
+        let inbox = futures::executor::block_on(build).expect(expect_msg);
         let entry = &mut self.blocks[block_id.0];
         entry.inbox = Some(inbox);
         entry.message_inputs = Some(message_inputs);
@@ -1068,8 +1065,8 @@ impl Flowgraph {
             LocalBlockKind::Kernel,
             <K as KernelInterface>::message_inputs(),
             move |block_id| {
-                Box::new(move |inbox, inbox_rx| {
-                    let mut b = WrappedKernel::new_with_inbox(block(), block_id, inbox, inbox_rx);
+                Box::new(move || {
+                    let mut b = WrappedKernel::new(block(), block_id);
                     let block_name = <K as KernelInterface>::type_name();
                     b.meta
                         .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -1093,9 +1090,8 @@ impl Flowgraph {
             LocalBlockKind::LocalKernel,
             <K as LocalKernelInterface>::message_inputs(),
             move |block_id| {
-                Box::new(move |inbox, inbox_rx| {
-                    let mut b =
-                        WrappedLocalKernel::new_with_inbox(block(), block_id, inbox, inbox_rx);
+                Box::new(move || {
+                    let mut b = WrappedLocalKernel::new(block(), block_id);
                     let block_name = <K as LocalKernelInterface>::type_name();
                     b.meta
                         .set_instance_name(format!("{}-{}", block_name, block_id.0));
@@ -2320,13 +2316,13 @@ impl Flowgraph {
         })
     }
 
-    pub(crate) fn run_local_domains(
+    pub(crate) async fn run_local_domains(
         &mut self,
         main_channel: crate::runtime::channel::mpsc::Sender<crate::runtime::FlowgraphMessage>,
     ) -> Result<Vec<oneshot::Receiver<Result<(), Error>>>, Error> {
         let mut tasks = Vec::new();
         for domain in self.local_domains.iter_mut() {
-            if let Some(task) = domain.run_if_needed(main_channel.clone())? {
+            if let Some(task) = domain.run_if_needed(main_channel.clone()).await? {
                 tasks.push(task);
             }
         }

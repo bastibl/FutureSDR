@@ -380,7 +380,7 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     let (mut inboxes, ids, stream_edges_desc, message_edges_desc) = fg.startup_snapshot()?.await?;
     let blocks = fg.take_blocks()?;
     let block_tasks = scheduler.run_domain(blocks, &main_channel);
-    let local_tasks = fg.run_local_domains(main_channel.clone())?;
+    let local_tasks = fg.run_local_domains(main_channel.clone()).await?;
 
     let run_result = run_flowgraph_loop(
         &mut inboxes,

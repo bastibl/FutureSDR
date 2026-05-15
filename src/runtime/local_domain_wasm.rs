@@ -22,12 +22,11 @@ use crate::runtime::FlowgraphMessage;
 use crate::runtime::PortId;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
-use crate::runtime::block_inbox::BlockInboxReader;
+use crate::runtime::channel::mpsc;
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::dev::BlockInbox;
 
-pub(crate) type LocalBlockBuilder =
-    Box<dyn FnOnce(BlockInbox, BlockInboxReader) -> Box<dyn LocalBlock> + Send + 'static>;
+pub(crate) type LocalBlockBuilder = Box<dyn FnOnce() -> Box<dyn LocalBlock> + Send + 'static>;
 
 type LocalDomainAsyncExec = Box<
     dyn for<'a> FnOnce(&'a mut LocalDomainState) -> Pin<Box<dyn Future<Output = ()> + 'a>>
@@ -139,8 +138,7 @@ enum LocalDomainMessage {
     Build {
         local_id: usize,
         builder: LocalBlockBuilder,
-        inbox: BlockInbox,
-        inbox_rx: BlockInboxReader,
+        reply: oneshot::Sender<Result<BlockInbox, Error>>,
     },
     Exec(LocalDomainAsyncExec),
     Run {
@@ -191,12 +189,12 @@ impl LocalDomainRuntime {
         self.controller.handle()
     }
 
-    pub(crate) fn build(
+    pub(crate) async fn build(
         &self,
         local_id: usize,
         builder: LocalBlockBuilder,
     ) -> Result<BlockInbox, Error> {
-        self.controller.build(local_id, builder)
+        self.controller.build(local_id, builder).await
     }
 
     pub(crate) async fn exec<R>(
@@ -213,14 +211,14 @@ impl LocalDomainRuntime {
         self.controller.exec(f).await
     }
 
-    pub(crate) fn run_if_needed(
+    pub(crate) async fn run_if_needed(
         &mut self,
         main_channel: Sender<FlowgraphMessage>,
     ) -> Result<Option<oneshot::Receiver<Result<(), Error>>>, Error> {
         if self.blocks == 0 {
             return Ok(None);
         }
-        let task = self.controller.run(main_channel)?;
+        let task = self.controller.run(main_channel).await?;
         self.running = true;
         Ok(Some(task))
     }
@@ -231,7 +229,7 @@ impl LocalDomainRuntime {
 }
 
 pub(crate) struct LocalDomainController {
-    tx: kanal::Sender<LocalDomainMessage>,
+    tx: Sender<LocalDomainMessage>,
     terminate: Arc<AtomicBool>,
     worker: Option<WasmWorker>,
     domain_id: Option<usize>,
@@ -239,7 +237,7 @@ pub(crate) struct LocalDomainController {
 
 #[derive(Clone)]
 pub(crate) struct LocalDomainHandle {
-    tx: kanal::Sender<LocalDomainMessage>,
+    tx: Sender<LocalDomainMessage>,
 }
 
 impl LocalDomainHandle {
@@ -268,6 +266,7 @@ impl LocalDomainHandle {
                     let _ = reply.send(f(state).await);
                 })
             })))
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
         rx.await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
@@ -276,7 +275,7 @@ impl LocalDomainHandle {
 
 impl LocalDomainController {
     pub(crate) fn try_new() -> Result<Self, Error> {
-        let (tx, rx) = kanal::unbounded();
+        let (tx, rx) = mpsc::channel(crate::runtime::config::config().queue_size);
         let terminate = Arc::new(AtomicBool::new(false));
         let init = WasmLocalDomainInit {
             rx,
@@ -308,26 +307,22 @@ impl LocalDomainController {
         }
     }
 
-    pub(crate) fn build(
+    pub(crate) async fn build(
         &self,
         local_id: usize,
         builder: LocalBlockBuilder,
     ) -> Result<BlockInbox, Error> {
-        // Return the sender side immediately so flowgraph construction on the
-        // browser thread does not busy-wait for the local-domain worker. FIFO
-        // ordering on `tx` still guarantees the Build message is handled before
-        // later Exec/Run messages from the same controller.
-        let (inbox, inbox_rx) =
-            crate::runtime::block_inbox::channel(crate::runtime::config::config().queue_size);
+        let (reply, rx) = oneshot::channel();
         self.tx
             .send(LocalDomainMessage::Build {
                 local_id,
                 builder,
-                inbox: inbox.clone(),
-                inbox_rx,
+                reply,
             })
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
-        Ok(inbox)
+        rx.await
+            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?
     }
 
     pub(crate) async fn exec<R>(
@@ -344,7 +339,7 @@ impl LocalDomainController {
         self.handle().exec(f).await
     }
 
-    pub(crate) fn run(
+    pub(crate) async fn run(
         &self,
         main_channel: Sender<FlowgraphMessage>,
     ) -> Result<oneshot::Receiver<Result<(), Error>>, Error> {
@@ -354,6 +349,7 @@ impl LocalDomainController {
                 main_channel,
                 reply,
             })
+            .await
             .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
         Ok(rx)
     }
@@ -362,7 +358,7 @@ impl LocalDomainController {
 impl Drop for LocalDomainController {
     fn drop(&mut self) {
         self.terminate.store(true, Ordering::Release);
-        let _ = self.tx.send(LocalDomainMessage::Terminate);
+        let _ = self.tx.try_send(LocalDomainMessage::Terminate);
         if let Some(id) = self.domain_id.take() {
             let _ = WASM_LOCAL_DOMAINS.lock().unwrap().try_remove(id);
         }
@@ -376,7 +372,7 @@ static WASM_LOCAL_DOMAINS: once_cell::sync::Lazy<Mutex<Slab<WasmLocalDomainInit>
     once_cell::sync::Lazy::new(|| Mutex::new(Slab::new()));
 
 struct WasmLocalDomainInit {
-    rx: kanal::Receiver<LocalDomainMessage>,
+    rx: mpsc::Receiver<LocalDomainMessage>,
     terminate: Arc<AtomicBool>,
 }
 
@@ -448,27 +444,20 @@ async fn run_domain_worker(init: WasmLocalDomainInit) {
     let WasmLocalDomainInit { rx, terminate } = init;
     let mut state = LocalDomainState::new();
 
-    loop {
-        let message = match rx.try_recv() {
-            Ok(Some(message)) => message,
-            Ok(None) => {
-                gloo_timers::future::TimeoutFuture::new(1).await;
-                continue;
-            }
-            Err(_) => break,
-        };
-
+    while let Some(message) = rx.recv().await {
         match message {
             LocalDomainMessage::Build {
                 local_id,
                 builder,
-                inbox,
-                inbox_rx,
+                reply,
             } => {
-                let block = builder(inbox, inbox_rx);
-                if let Err(e) = state.insert_block(local_id, block) {
+                let block = builder();
+                let inbox = block.inbox();
+                let result = state.insert_block(local_id, block).map(|_| inbox);
+                if let Err(e) = &result {
                     error!("failed to insert local block: {e}");
                 }
+                let _ = reply.send(result);
             }
             LocalDomainMessage::Exec(f) => f(&mut state).await,
             LocalDomainMessage::Run {
