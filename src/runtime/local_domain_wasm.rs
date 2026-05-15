@@ -4,12 +4,10 @@ use futures::Future;
 use futures::FutureExt;
 use futures::channel::oneshot;
 use slab::Slab;
-use std::cell::UnsafeCell;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
@@ -137,83 +135,6 @@ impl LocalDomainState {
     }
 }
 
-struct SpinReply<T> {
-    state: Arc<SpinReplyState<T>>,
-}
-
-struct SpinReplyReceiver<T> {
-    state: Arc<SpinReplyState<T>>,
-}
-
-struct SpinReplyState<T> {
-    ready: AtomicI32,
-    value: UnsafeCell<Option<T>>,
-}
-
-// `value` is written exactly once before `ready` is set with Release ordering.
-// Receivers read it only after observing `ready` with Acquire ordering.
-unsafe impl<T: Send> Send for SpinReplyState<T> {}
-unsafe impl<T: Send> Sync for SpinReplyState<T> {}
-
-fn spin_reply<T>() -> (SpinReply<T>, SpinReplyReceiver<T>) {
-    let state = Arc::new(SpinReplyState {
-        ready: AtomicI32::new(0),
-        value: UnsafeCell::new(None),
-    });
-    (
-        SpinReply {
-            state: state.clone(),
-        },
-        SpinReplyReceiver { state },
-    )
-}
-
-impl<T> SpinReply<T> {
-    fn send(self, value: T) {
-        unsafe {
-            *self.state.value.get() = Some(value);
-        }
-        self.state.ready.store(1, Ordering::Release);
-        let ready = atomic_i32_view(&self.state.ready);
-        let _ = js_sys::Atomics::notify(&ready, 0);
-    }
-}
-
-impl<T> SpinReplyReceiver<T> {
-    fn recv(self) -> Result<T, Error> {
-        if web_sys::window().is_some() {
-            return Err(Error::RuntimeError(
-                "synchronous WASM local-domain operation on the browser thread".to_string(),
-            ));
-        }
-
-        while self.state.ready.load(Ordering::Acquire) == 0 {
-            let ready = atomic_i32_view(&self.state.ready);
-            let result =
-                js_sys::Atomics::wait_with_timeout(&ready, 0, 0, 10_000.0).map_err(|e| {
-                    Error::RuntimeError(format!("waiting for local domain failed: {e:?}"))
-                })?;
-            if result == "timed-out" {
-                return Err(Error::RuntimeError(
-                    "timed out waiting for WASM local domain".to_string(),
-                ));
-            }
-        }
-
-        unsafe {
-            Ok((*self.state.value.get())
-                .take()
-                .expect("reply value missing"))
-        }
-    }
-}
-
-fn atomic_i32_view(value: &AtomicI32) -> js_sys::Int32Array {
-    // The returned view is used immediately for one Atomics operation and is
-    // not kept across allocations or awaits.
-    unsafe { js_sys::Int32Array::view_mut_raw(value as *const AtomicI32 as *mut i32, 1) }
-}
-
 enum LocalDomainMessage {
     Build {
         local_id: usize,
@@ -221,8 +142,7 @@ enum LocalDomainMessage {
         inbox: BlockInbox,
         inbox_rx: BlockInboxReader,
     },
-    Exec(Box<dyn FnOnce(&mut LocalDomainState) + Send + 'static>),
-    ExecAsync(LocalDomainAsyncExec),
+    Exec(LocalDomainAsyncExec),
     Run {
         main_channel: Sender<FlowgraphMessage>,
         reply: oneshot::Sender<Result<(), Error>>,
@@ -279,17 +199,7 @@ impl LocalDomainRuntime {
         self.controller.build(local_id, builder)
     }
 
-    pub(crate) fn exec<R>(
-        &self,
-        f: impl FnOnce(&mut LocalDomainState) -> Result<R, Error> + Send + 'static,
-    ) -> Result<R, Error>
-    where
-        R: Send + 'static,
-    {
-        self.controller.exec(f)
-    }
-
-    pub(crate) async fn exec_async<R>(
+    pub(crate) async fn exec<R>(
         &self,
         f: impl for<'a> FnOnce(
             &'a mut LocalDomainState,
@@ -300,7 +210,7 @@ impl LocalDomainRuntime {
     where
         R: Send + 'static,
     {
-        self.controller.exec_async(f).await
+        self.controller.exec(f).await
     }
 
     pub(crate) fn run_if_needed(
@@ -333,30 +243,14 @@ pub(crate) struct LocalDomainHandle {
 }
 
 impl LocalDomainHandle {
-    pub(crate) fn exec<R>(
-        &self,
-        f: impl FnOnce(&mut LocalDomainState) -> Result<R, Error> + Send + 'static,
-    ) -> Result<R, Error>
-    where
-        R: Send + 'static,
-    {
-        let (reply, rx) = spin_reply();
-        self.tx
-            .send(LocalDomainMessage::Exec(Box::new(move |state| {
-                reply.send(f(state));
-            })))
-            .map_err(|_| Error::RuntimeError("local domain terminated".to_string()))?;
-        rx.recv()?
-    }
-
     pub(crate) async fn topology_async(
         &self,
     ) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
-        self.exec_async(|state| Box::pin(async move { Ok(state.topology()) }))
+        self.exec(|state| Box::pin(async move { Ok(state.topology()) }))
             .await
     }
 
-    pub(crate) async fn exec_async<R>(
+    pub(crate) async fn exec<R>(
         &self,
         f: impl for<'a> FnOnce(
             &'a mut LocalDomainState,
@@ -369,7 +263,7 @@ impl LocalDomainHandle {
     {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(LocalDomainMessage::ExecAsync(Box::new(move |state| {
+            .send(LocalDomainMessage::Exec(Box::new(move |state| {
                 Box::pin(async move {
                     let _ = reply.send(f(state).await);
                 })
@@ -436,17 +330,7 @@ impl LocalDomainController {
         Ok(inbox)
     }
 
-    pub(crate) fn exec<R>(
-        &self,
-        f: impl FnOnce(&mut LocalDomainState) -> Result<R, Error> + Send + 'static,
-    ) -> Result<R, Error>
-    where
-        R: Send + 'static,
-    {
-        self.handle().exec(f)
-    }
-
-    pub(crate) async fn exec_async<R>(
+    pub(crate) async fn exec<R>(
         &self,
         f: impl for<'a> FnOnce(
             &'a mut LocalDomainState,
@@ -457,7 +341,7 @@ impl LocalDomainController {
     where
         R: Send + 'static,
     {
-        self.handle().exec_async(f).await
+        self.handle().exec(f).await
     }
 
     pub(crate) fn run(
@@ -586,8 +470,7 @@ async fn run_domain_worker(init: WasmLocalDomainInit) {
                     error!("failed to insert local block: {e}");
                 }
             }
-            LocalDomainMessage::Exec(f) => f(&mut state),
-            LocalDomainMessage::ExecAsync(f) => f(&mut state).await,
+            LocalDomainMessage::Exec(f) => f(&mut state).await,
             LocalDomainMessage::Run {
                 main_channel,
                 reply,

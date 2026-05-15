@@ -379,7 +379,28 @@ impl<'a> LocalDomainContext<'a> {
     }
 
     /// Connect local-only stream ports between blocks in this domain context.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stream_local<KS, KD, B, FS, FD>(
+        &self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        B: BufferWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut B,
+        FD: FnOnce(&mut KD) -> &mut B::Reader,
+    {
+        crate::runtime::__private::block_on(
+            self.stream_local_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
+        )
+    }
+
+    /// Asynchronously connect local-only stream ports between blocks in this domain context.
+    pub async fn stream_local_async<KS, KD, B, FS, FD>(
         &self,
         src_block: &BlockRef<KS>,
         src_port: FS,
@@ -443,24 +464,6 @@ impl<'a> LocalDomainContext<'a> {
         Ok(())
     }
 
-    /// Async counterpart to [`LocalDomainContext::stream_local`].
-    pub async fn stream_local_async<KS, KD, B, FS, FD>(
-        &self,
-        src_block: &BlockRef<KS>,
-        src_port: FS,
-        dst_block: &BlockRef<KD>,
-        dst_port: FD,
-    ) -> Result<(), Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: BufferWriter + 'static,
-        FS: FnOnce(&mut KS) -> &mut B,
-        FD: FnOnce(&mut KD) -> &mut B::Reader,
-    {
-        self.stream_local(src_block, src_port, dst_block, dst_port)
-    }
-
     /// Async send-capable stream alias for local-domain contexts.
     pub async fn stream_async<KS, KD, B, FS, FD>(
         &self,
@@ -476,11 +479,29 @@ impl<'a> LocalDomainContext<'a> {
         FS: FnOnce(&mut KS) -> &mut B,
         FD: FnOnce(&mut KD) -> &mut B::Reader,
     {
-        self.stream_local(src_block, src_port, dst_block, dst_port)
+        self.stream_local_async(src_block, src_port, dst_block, dst_port)
+            .await
     }
 
     /// Connect message ports between local blocks in this domain context.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn message(
+        &self,
+        src_block_id: impl Into<BlockId>,
+        src_port_id: impl Into<PortId>,
+        dst_block_id: impl Into<BlockId>,
+        dst_port_id: impl Into<PortId>,
+    ) -> Result<(), Error> {
+        crate::runtime::__private::block_on(self.message_async(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ))
+    }
+
+    /// Asynchronously connect message ports between local blocks in this domain context.
+    pub async fn message_async(
         &self,
         src_block_id: impl Into<BlockId>,
         src_port_id: impl Into<PortId>,
@@ -555,17 +576,6 @@ impl<'a> LocalDomainContext<'a> {
             .add_message_edge((src_block_id, src_port_id, dst_block_id, dst_port_id));
         Ok(())
     }
-
-    /// Async counterpart to [`LocalDomainContext::message`].
-    pub async fn message_async(
-        &self,
-        src_block_id: impl Into<BlockId>,
-        src_port_id: impl Into<PortId>,
-        dst_block_id: impl Into<BlockId>,
-        dst_port_id: impl Into<PortId>,
-    ) -> Result<(), Error> {
-        self.message(src_block_id, src_port_id, dst_block_id, dst_port_id)
-    }
 }
 
 pub(crate) struct BlockEntry {
@@ -621,6 +631,7 @@ impl<K: 'static> BlockRef<K> {
     ///
     /// Local-domain blocks are accessed by running the closure in the local
     /// domain. This keeps non-`Send` block state confined to its owning domain.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with<R>(
         &self,
         fg: &Flowgraph,
@@ -629,33 +640,7 @@ impl<K: 'static> BlockRef<K> {
     where
         R: Send + 'static,
     {
-        fg.validate_block_ref(self)?;
-        match self.placement {
-            BlockPlacement::Normal => {
-                let block = fg.block(self)?;
-                Ok(f(&block))
-            }
-            BlockPlacement::Local {
-                domain_id,
-                local_id,
-                kind,
-                ..
-            } => {
-                let domain = fg
-                    .local_domains
-                    .get(domain_id)
-                    .ok_or(Error::InvalidBlock(self.id))?;
-                if domain.is_running() {
-                    return Err(Error::LockError);
-                }
-                let block_id = self.id;
-                domain.exec(move |state| {
-                    Ok(f(Flowgraph::local_state_kernel_ref(
-                        state, local_id, block_id, kind,
-                    )?))
-                })
-            }
-        }
+        crate::runtime::__private::block_on(self.with_async(fg, f))
     }
 
     /// Asynchronously access the typed block through the given [`Flowgraph`].
@@ -692,7 +677,7 @@ impl<K: 'static> BlockRef<K> {
                 }
                 let block_id = self.id;
                 domain
-                    .exec_async(move |state| {
+                    .exec(move |state| {
                         Box::pin(async move {
                             Ok(f(Flowgraph::local_state_kernel_ref(
                                 state, local_id, block_id, kind,
@@ -709,6 +694,7 @@ impl<K: 'static> BlockRef<K> {
     /// Local-domain blocks are accessed by running the closure in the local
     /// domain. This requires the flowgraph to be stopped; running local-domain
     /// blocks cannot be borrowed mutably through the construction API.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_mut<R>(
         &self,
         fg: &mut Flowgraph,
@@ -717,33 +703,7 @@ impl<K: 'static> BlockRef<K> {
     where
         R: Send + 'static,
     {
-        fg.validate_block_ref(self)?;
-        match self.placement {
-            BlockPlacement::Normal => {
-                let mut block = fg.block_mut(self)?;
-                Ok(f(&mut block))
-            }
-            BlockPlacement::Local {
-                domain_id,
-                local_id,
-                kind,
-                ..
-            } => {
-                let domain = fg
-                    .local_domains
-                    .get(domain_id)
-                    .ok_or(Error::InvalidBlock(self.id))?;
-                if domain.is_running() {
-                    return Err(Error::LockError);
-                }
-                let block_id = self.id;
-                domain.exec(move |state| {
-                    Ok(f(Flowgraph::local_state_kernel_mut(
-                        state, local_id, block_id, kind,
-                    )?))
-                })
-            }
-        }
+        crate::runtime::__private::block_on(self.with_mut_async(fg, f))
     }
 
     /// Asynchronously mutably access the typed block through the given [`Flowgraph`].
@@ -779,7 +739,7 @@ impl<K: 'static> BlockRef<K> {
                 }
                 let block_id = self.id;
                 domain
-                    .exec_async(move |state| {
+                    .exec(move |state| {
                         Box::pin(async move {
                             Ok(f(Flowgraph::local_state_kernel_mut(
                                 state, local_id, block_id, kind,
@@ -926,6 +886,7 @@ impl Flowgraph {
     ///
     /// Blocks added through the [`LocalDomainContext`] are constructed inside the
     /// local domain and therefore may contain non-`Send` state.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn domain_run<R>(
         &mut self,
         domain: LocalDomain,
@@ -934,29 +895,9 @@ impl Flowgraph {
     where
         R: Send + 'static,
     {
-        let domain_id = self.validate_local_domain(domain)?;
-        if self.local_domains[domain_id].is_running() {
-            return Err(Error::LockError);
-        }
-
-        let next_block_id = self.blocks.len();
-        let next_local_id = self.local_domains[domain_id].block_count();
-        let flowgraph_id = self.id;
-        let (ret, entries) = self.local_domains[domain_id].exec(move |state| {
-            let ctx = LocalDomainContext::new(
-                flowgraph_id,
-                domain_id,
-                next_block_id,
-                next_local_id,
-                state,
-            );
-            let ret = f(&ctx)?;
-            Ok((ret, ctx.take_entries()))
-        })?;
-
-        self.commit_local_context_entries(domain_id, entries);
-
-        Ok(ret)
+        crate::runtime::__private::block_on(
+            self.domain_run_async(domain, async move |ctx: &LocalDomainContext<'_>| f(ctx)),
+        )
     }
 
     /// Run an async builder closure inside a local domain.
@@ -980,7 +921,7 @@ impl Flowgraph {
         let next_local_id = self.local_domains[domain_id].block_count();
         let flowgraph_id = self.id;
         let (ret, entries) = self.local_domains[domain_id]
-            .exec_async(move |state| {
+            .exec(move |state| {
                 Box::pin(async move {
                     let ctx = LocalDomainContext::new(
                         flowgraph_id,
@@ -1579,39 +1520,6 @@ impl Flowgraph {
         })
     }
 
-    fn connect_local_local_stream<KS, KD, B, FS, FD>(
-        &self,
-        src: LocalEndpoint,
-        src_port: FS,
-        dst: LocalEndpoint,
-        dst_port: FD,
-    ) -> Result<StreamEdge, Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: BufferWriter,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        if src.domain_id != dst.domain_id {
-            return Err(Error::ValidationError(
-                "stream connections between different local domains are not supported".to_string(),
-            ));
-        }
-        let domain = self
-            .local_domains
-            .get(src.domain_id)
-            .ok_or(Error::InvalidBlock(src.block_id))?;
-        domain.exec(move |state| {
-            let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
-                state,
-                (src.local_id, src.block_id, src.kind),
-                (dst.local_id, dst.block_id, dst.kind),
-            )?;
-            Ok(Self::connect_stream_ports(src_port(src), dst_port(dst)))
-        })
-    }
-
     async fn connect_local_local_stream_async<KS, KD, B, FS, FD>(
         &self,
         src: LocalEndpoint,
@@ -1636,7 +1544,7 @@ impl Flowgraph {
             .get(src.domain_id)
             .ok_or(Error::InvalidBlock(src.block_id))?;
         domain
-            .exec_async(move |state| {
+            .exec(move |state| {
                 let result = (|| {
                     let (src, dst) = Self::two_local_state_kernels_mut::<KS, KD>(
                         state,
@@ -1648,56 +1556,6 @@ impl Flowgraph {
                 Box::pin(futures::future::ready(result))
             })
             .await
-    }
-
-    fn connect_cross_local_stream<KS, KD, B, FS, FD>(
-        &self,
-        src: LocalEndpoint,
-        src_port: FS,
-        dst: LocalEndpoint,
-        dst_port: FD,
-    ) -> Result<StreamEdge, Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: SendBufferWriter + Default + 'static,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        let src_handle = self
-            .local_domains
-            .get(src.domain_id)
-            .ok_or(Error::InvalidBlock(src.block_id))?
-            .handle();
-        let dst_handle = self
-            .local_domains
-            .get(dst.domain_id)
-            .ok_or(Error::InvalidBlock(dst.block_id))?
-            .handle();
-
-        src_handle.exec(move |state| {
-            let src =
-                Self::local_state_kernel_mut::<KS>(state, src.local_id, src.block_id, src.kind)?;
-            let src_port = src_port(src);
-            let writer = Arc::new(Mutex::new(Some(std::mem::take(src_port))));
-            let dst_writer = Arc::clone(&writer);
-
-            let edge_result = dst_handle.exec(move |state| {
-                let mut writer_guard = dst_writer.lock().map_err(|_| Error::LockError)?;
-                let writer = writer_guard.as_mut().ok_or(Error::LockError)?;
-                let dst = Self::local_state_kernel_mut::<KD>(
-                    state,
-                    dst.local_id,
-                    dst.block_id,
-                    dst.kind,
-                )?;
-                Ok(Self::connect_stream_ports(writer, dst_port(dst)))
-            });
-
-            let mut writer_guard = writer.lock().map_err(|_| Error::LockError)?;
-            *src_port = writer_guard.take().ok_or(Error::LockError)?;
-            edge_result
-        })
     }
 
     async fn connect_cross_local_stream_async<KS, KD, B, FS, FD>(
@@ -1726,7 +1584,7 @@ impl Flowgraph {
             .handle();
 
         src_handle
-            .exec_async(move |state| {
+            .exec(move |state| {
                 Box::pin(async move {
                     let src = Self::local_state_kernel_mut::<KS>(
                         state,
@@ -1739,7 +1597,7 @@ impl Flowgraph {
                     let dst_writer = Arc::clone(&writer);
 
                     let edge_result = dst_handle
-                        .exec_async(move |state| {
+                        .exec(move |state| {
                             let result = (|| {
                                 let mut writer_guard =
                                     dst_writer.lock().map_err(|_| Error::LockError)?;
@@ -1780,34 +1638,6 @@ impl Flowgraph {
             })
     }
 
-    fn with_normal_local_blocks_mut<R, F>(
-        &mut self,
-        normal_id: BlockId,
-        local: LocalEndpoint,
-        f: F,
-    ) -> Result<R, Error>
-    where
-        F: FnOnce(&mut dyn BlockObject, &mut dyn BlockObject) -> Result<R, Error> + Send + 'static,
-        R: Send + 'static,
-    {
-        let normal = self.blocks[normal_id.0]
-            .block
-            .take()
-            .ok_or(Error::LockError)?;
-        let normal = Arc::new(Mutex::new(Some(normal)));
-        let domain_normal = Arc::clone(&normal);
-
-        let result = self.local_domains[local.domain_id].exec(move |state| {
-            let mut normal_guard = domain_normal.lock().map_err(|_| Error::LockError)?;
-            let normal = normal_guard.as_mut().ok_or(Error::LockError)?;
-            let local = state.block_mut(local.local_id, local.block_id)?;
-            f(normal.as_mut(), local)
-        });
-
-        self.blocks[normal_id.0].block = normal.lock().map_err(|_| Error::LockError)?.take();
-        result
-    }
-
     async fn with_normal_local_blocks_mut_async<R, F>(
         &mut self,
         normal_id: BlockId,
@@ -1826,7 +1656,7 @@ impl Flowgraph {
         let domain_normal = Arc::clone(&normal);
 
         let result = self.local_domains[local.domain_id]
-            .exec_async(move |state| {
+            .exec(move |state| {
                 let result = (|| {
                     let mut normal_guard = domain_normal.lock().map_err(|_| Error::LockError)?;
                     let normal = normal_guard.as_mut().ok_or(Error::LockError)?;
@@ -1839,30 +1669,6 @@ impl Flowgraph {
 
         self.blocks[normal_id.0].block = normal.lock().map_err(|_| Error::LockError)?.take();
         result
-    }
-
-    fn connect_local_normal_stream<KS, KD, B, FS, FD>(
-        &mut self,
-        src: LocalEndpoint,
-        src_port: FS,
-        dst_id: BlockId,
-        dst_port: FD,
-    ) -> Result<StreamEdge, Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: SendBufferWriter + 'static,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        self.with_normal_local_blocks_mut(dst_id, src, move |dst, src_block| {
-            let src = Self::local_kernel_mut::<KS>(src_block, src.block_id, src.kind)?;
-            let dst = Self::wrapped_kernel_mut::<KD>(dst, dst_id)?;
-            Ok(Self::connect_stream_ports(
-                src_port(src),
-                dst_port(&mut dst.kernel),
-            ))
-        })
     }
 
     async fn connect_local_normal_stream_async<KS, KD, B, FS, FD>(
@@ -1888,30 +1694,6 @@ impl Flowgraph {
             ))
         })
         .await
-    }
-
-    fn connect_normal_local_stream<KS, KD, B, FS, FD>(
-        &mut self,
-        src_id: BlockId,
-        src_port: FS,
-        dst: LocalEndpoint,
-        dst_port: FD,
-    ) -> Result<StreamEdge, Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        B: SendBufferWriter + 'static,
-        FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
-        FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
-    {
-        self.with_normal_local_blocks_mut(src_id, dst, move |src, dst_block| {
-            let src = Self::wrapped_kernel_mut::<KS>(src, src_id)?;
-            let dst = Self::local_kernel_mut::<KD>(dst_block, dst.block_id, dst.kind)?;
-            Ok(Self::connect_stream_ports(
-                src_port(&mut src.kernel),
-                dst_port(dst),
-            ))
-        })
     }
 
     async fn connect_normal_local_stream_async<KS, KD, B, FS, FD>(
@@ -1984,36 +1766,6 @@ impl Flowgraph {
         )
     }
 
-    fn connect_local_local_stream_dyn(
-        &self,
-        src: LocalEndpoint,
-        src_port_id: PortId,
-        dst: LocalEndpoint,
-        dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
-        if src.domain_id != dst.domain_id {
-            return Err(Error::ValidationError(
-                "stream connections between different local domains are not supported".to_string(),
-            ));
-        }
-        let domain = self
-            .local_domains
-            .get(src.domain_id)
-            .ok_or(Error::InvalidBlock(src.block_id))?;
-        domain.exec(move |state| {
-            let (src_block, dst_block) =
-                state.two_blocks_mut((src.local_id, src.block_id), (dst.local_id, dst.block_id))?;
-            Self::connect_stream_ports_dyn(
-                src.block_id,
-                &src_port_id,
-                src_block,
-                dst.block_id,
-                &dst_port_id,
-                dst_block,
-            )
-        })
-    }
-
     async fn connect_local_local_stream_dyn_async(
         &self,
         src: LocalEndpoint,
@@ -2031,7 +1783,7 @@ impl Flowgraph {
             .get(src.domain_id)
             .ok_or(Error::InvalidBlock(src.block_id))?;
         domain
-            .exec_async(move |state| {
+            .exec(move |state| {
                 let result = (|| {
                     let (src_block, dst_block) = state.two_blocks_mut(
                         (src.local_id, src.block_id),
@@ -2049,25 +1801,6 @@ impl Flowgraph {
                 Box::pin(futures::future::ready(result))
             })
             .await
-    }
-
-    fn connect_local_normal_stream_dyn(
-        &mut self,
-        src: LocalEndpoint,
-        src_port_id: PortId,
-        dst_id: BlockId,
-        dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
-        self.with_normal_local_blocks_mut(dst_id, src, move |dst_block, src_block| {
-            Self::connect_stream_ports_dyn(
-                src.block_id,
-                &src_port_id,
-                src_block,
-                dst_id,
-                &dst_port_id,
-                dst_block,
-            )
-        })
     }
 
     async fn connect_local_normal_stream_dyn_async(
@@ -2088,25 +1821,6 @@ impl Flowgraph {
             )
         })
         .await
-    }
-
-    fn connect_normal_local_stream_dyn(
-        &mut self,
-        src_id: BlockId,
-        src_port_id: PortId,
-        dst: LocalEndpoint,
-        dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
-        self.with_normal_local_blocks_mut(src_id, dst, move |src_block, dst_block| {
-            Self::connect_stream_ports_dyn(
-                src_id,
-                &src_port_id,
-                src_block,
-                dst.block_id,
-                &dst_port_id,
-                dst_block,
-            )
-        })
     }
 
     async fn connect_normal_local_stream_dyn_async(
@@ -2136,6 +1850,7 @@ impl Flowgraph {
     ///
     /// The selected writer must be send-capable and default-constructible. Use
     /// [`Flowgraph::stream_local`] for local-only buffers in a local domain.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stream<KS, KD, B, FS, FD>(
         &mut self,
         src_block: &BlockRef<KS>,
@@ -2150,34 +1865,9 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        self.validate_block_ref(src_block)?;
-        self.validate_block_ref(dst_block)?;
-        let src_id = src_block.id;
-        let dst_id = dst_block.id;
-        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
-        {
-            StreamPlan::NormalNormal {
-                src: src_id,
-                dst: dst_id,
-            } => {
-                let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_id, dst_id)?;
-                Self::connect_stream_ports(src_port(&mut src.kernel), dst_port(&mut dst.kernel))
-            }
-            StreamPlan::LocalLocalSame { src, dst } => {
-                self.connect_local_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
-            }
-            StreamPlan::LocalLocalCross { src, dst } => {
-                self.connect_cross_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
-            }
-            StreamPlan::LocalToNormal { src, dst } => {
-                self.connect_local_normal_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
-            }
-            StreamPlan::NormalToLocal { src, dst } => {
-                self.connect_normal_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
-            }
-        };
-        self.stream_edges.push(edge);
-        Ok(())
+        crate::runtime::__private::block_on(
+            self.stream_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
+        )
     }
 
     /// Async counterpart to [`Flowgraph::stream`].
@@ -2242,6 +1932,7 @@ impl Flowgraph {
     /// This only accepts two local-domain blocks in the same [`LocalDomain`].
     /// Use this for non-`Send` stream buffers such as
     /// [`LocalCpuWriter`](crate::runtime::buffer::LocalCpuWriter).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stream_local<KS, KD, B, FS, FD>(
         &mut self,
         src_block: &BlockRef<KS>,
@@ -2256,30 +1947,9 @@ impl Flowgraph {
         FS: FnOnce(&mut KS) -> &mut B + Send + 'static,
         FD: FnOnce(&mut KD) -> &mut B::Reader + Send + 'static,
     {
-        self.validate_block_ref(src_block)?;
-        self.validate_block_ref(dst_block)?;
-        let src_id = src_block.id;
-        let dst_id = dst_block.id;
-        let edge = match Self::stream_plan(src_id, src_block.placement, dst_id, dst_block.placement)
-        {
-            StreamPlan::LocalLocalSame { src, dst } => {
-                self.connect_local_local_stream::<KS, KD, B, FS, FD>(src, src_port, dst, dst_port)?
-            }
-            StreamPlan::LocalLocalCross { .. } => {
-                return Err(Error::ValidationError(
-                    "stream connections between different local domains are not supported"
-                        .to_string(),
-                ));
-            }
-            _ => {
-                return Err(Error::ValidationError(
-                    "local stream connections require source and destination blocks in the same local domain"
-                        .to_string(),
-                ));
-            }
-        };
-        self.stream_edges.push(edge);
-        Ok(())
+        crate::runtime::__private::block_on(
+            self.stream_local_async::<KS, KD, B, FS, FD>(src_block, src_port, dst_block, dst_port),
+        )
     }
 
     /// Async counterpart to [`Flowgraph::stream_local`].
@@ -2334,7 +2004,30 @@ impl Flowgraph {
     ///
     /// This is the typed block-level circuit-closing API used by the
     /// [`connect`](crate::runtime::macros::connect) macro's `<` operator.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn close_circuit<KS, KD, CW, FS, FD>(
+        &mut self,
+        src_block: &BlockRef<KS>,
+        src_port: FS,
+        dst_block: &BlockRef<KD>,
+        dst_port: FD,
+    ) -> Result<(), Error>
+    where
+        KS: 'static,
+        KD: 'static,
+        CW: CircuitWriter + 'static,
+        FS: FnOnce(&mut KS) -> &mut CW,
+        FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
+    {
+        crate::runtime::__private::block_on(
+            self.close_circuit_async::<KS, KD, CW, FS, FD>(
+                src_block, src_port, dst_block, dst_port,
+            ),
+        )
+    }
+
+    /// Async counterpart to [`Flowgraph::close_circuit`].
+    pub async fn close_circuit_async<KS, KD, CW, FS, FD>(
         &mut self,
         src_block: &BlockRef<KS>,
         src_port: FS,
@@ -2353,24 +2046,6 @@ impl Flowgraph {
         let (src, dst) = self.get_two_typed_wrapped_blocks_mut(src_block.id, dst_block.id)?;
         src_port(&mut src.kernel).close_circuit(dst_port(&mut dst.kernel));
         Ok(())
-    }
-
-    /// Async counterpart to [`Flowgraph::close_circuit`].
-    pub async fn close_circuit_async<KS, KD, CW, FS, FD>(
-        &mut self,
-        src_block: &BlockRef<KS>,
-        src_port: FS,
-        dst_block: &BlockRef<KD>,
-        dst_port: FD,
-    ) -> Result<(), Error>
-    where
-        KS: 'static,
-        KD: 'static,
-        CW: CircuitWriter + 'static,
-        FS: FnOnce(&mut KS) -> &mut CW,
-        FD: FnOnce(&mut KD) -> &mut CW::CircuitEnd,
-    {
-        self.close_circuit(src_block, src_port, dst_block, dst_port)
     }
 
     /// Connect stream ports without static port type checks.
@@ -2411,6 +2086,7 @@ impl Flowgraph {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stream_dyn(
         &mut self,
         src_block_id: impl Into<BlockId>,
@@ -2418,30 +2094,12 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        let src_block_id = src_block_id.into();
-        let src_port_id = src_port_id.into();
-        let dst_block_id = dst_block_id.into();
-        let dst_port_id = dst_port_id.into();
-
-        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
-            StreamPlan::NormalNormal { src, dst } => {
-                self.connect_normal_normal_stream_dyn(src, &src_port_id, dst, &dst_port_id)?
-            }
-            StreamPlan::LocalLocalSame { .. } | StreamPlan::LocalLocalCross { .. } => {
-                return Err(Error::ValidationError(
-                    "stream_dyn does not connect local-local streams; use stream_local_dyn for same-domain local stream buffers"
-                        .to_string(),
-                ));
-            }
-            StreamPlan::LocalToNormal { src, dst } => {
-                self.connect_local_normal_stream_dyn(src, src_port_id, dst, dst_port_id)?
-            }
-            StreamPlan::NormalToLocal { src, dst } => {
-                self.connect_normal_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
-            }
-        };
-        self.stream_edges.push(edge);
-        Ok(())
+        crate::runtime::__private::block_on(self.stream_dyn_async(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ))
     }
 
     /// Async counterpart to [`Flowgraph::stream_dyn`].
@@ -2485,6 +2143,7 @@ impl Flowgraph {
     /// This only accepts two local-domain blocks in the same [`LocalDomain`].
     /// Use [`Flowgraph::stream_dyn`] for send-capable/default dynamic stream
     /// connections that involve normal runtime blocks.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn stream_local_dyn(
         &mut self,
         src_block_id: impl Into<BlockId>,
@@ -2492,31 +2151,12 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        let src_block_id = src_block_id.into();
-        let src_port_id = src_port_id.into();
-        let dst_block_id = dst_block_id.into();
-        let dst_port_id = dst_port_id.into();
-
-        let edge = match self.stream_plan_by_id(src_block_id, dst_block_id)? {
-            StreamPlan::LocalLocalSame { src, dst } => {
-                self.connect_local_local_stream_dyn(src, src_port_id, dst, dst_port_id)?
-            }
-            StreamPlan::LocalLocalCross { .. } => {
-                return Err(Error::ValidationError(
-                    "stream connections between different local domains are not supported"
-                        .to_string(),
-                ));
-            }
-            _ => {
-                return Err(Error::ValidationError(
-                    "local dynamic stream connections require source and destination blocks in the same local domain"
-                        .to_string(),
-                ));
-            }
-        };
-
-        self.stream_edges.push(edge);
-        Ok(())
+        crate::runtime::__private::block_on(self.stream_local_dyn_async(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ))
     }
 
     /// Async counterpart to [`Flowgraph::stream_local_dyn`].
@@ -2561,6 +2201,7 @@ impl Flowgraph {
     /// including cycles and self-connections. The destination message input is
     /// validated immediately; the source output is validated when the connection
     /// is registered with the source block.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn message(
         &mut self,
         src_block_id: impl Into<BlockId>,
@@ -2568,49 +2209,12 @@ impl Flowgraph {
         dst_block_id: impl Into<BlockId>,
         dst_port_id: impl Into<PortId>,
     ) -> Result<(), Error> {
-        let src_block_id = src_block_id.into();
-        let src_port_id = src_port_id.into();
-        let dst_block_id = dst_block_id.into();
-        let dst_port_id = dst_port_id.into();
-
-        let dst_inputs = self
-            .blocks
-            .get(dst_block_id.0)
-            .and_then(|entry| entry.message_inputs)
-            .ok_or(Error::InvalidBlock(dst_block_id))?;
-        if !dst_inputs.contains(&dst_port_id.name()) {
-            return Err(Error::InvalidMessagePort(
-                BlockPortCtx::Id(dst_block_id),
-                dst_port_id.clone(),
-            ));
-        }
-        let dst_box = self
-            .blocks
-            .get(dst_block_id.0)
-            .and_then(|entry| entry.inbox.as_ref())
-            .cloned()
-            .ok_or(Error::InvalidBlock(dst_block_id))?;
-        match self.placement(src_block_id)? {
-            BlockPlacement::Normal => {
-                let src_block = self.raw_block_mut(src_block_id)?;
-                src_block.connect(&src_port_id, dst_box, &dst_port_id)?;
-            }
-            BlockPlacement::Local {
-                domain_id,
-                local_id,
-                ..
-            } => {
-                let src_port = src_port_id.clone();
-                let dst_port = dst_port_id.clone();
-                self.local_domains[domain_id].exec(move |state| {
-                    let src_block = state.block_mut(local_id, src_block_id)?;
-                    src_block.connect(&src_port, dst_box, &dst_port)
-                })?;
-            }
-        }
-        self.message_edges
-            .push((src_block_id, src_port_id, dst_block_id, dst_port_id));
-        Ok(())
+        crate::runtime::__private::block_on(self.message_async(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ))
     }
 
     /// Async counterpart to [`Flowgraph::message`].
@@ -2656,7 +2260,7 @@ impl Flowgraph {
                 let src_port = src_port_id.clone();
                 let dst_port = dst_port_id.clone();
                 self.local_domains[domain_id]
-                    .exec_async(move |state| {
+                    .exec(move |state| {
                         let result = (|| {
                             let src_block = state.block_mut(local_id, src_block_id)?;
                             src_block.connect(&src_port, dst_box, &dst_port)
