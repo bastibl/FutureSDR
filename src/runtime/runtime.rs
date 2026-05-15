@@ -1,7 +1,7 @@
+use crate::runtime::channel::oneshot;
 use async_lock::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use axum::Router;
-use futures::channel::oneshot;
 use futures::prelude::*;
 use std::fmt;
 use std::sync::Arc;
@@ -333,7 +333,7 @@ async fn start_flowgraph<S: Scheduler>(
 async fn await_flowgraph_startup(
     rx: oneshot::Receiver<Result<(), Error>>,
 ) -> std::result::Result<Result<(), Error>, oneshot::Canceled> {
-    runtime::await_oneshot(rx).await
+    rx.await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -536,7 +536,7 @@ async fn run_flowgraph_loop(
                         .await
                         .is_ok()
                     {
-                        match runtime::await_oneshot(block_rx).await? {
+                        match block_rx.await? {
                             Ok(p) => tx.send(Ok(p)).ok(),
                             Err(e) => tx.send(Err(Error::HandlerError(e.to_string()))).ok(),
                         };
@@ -562,7 +562,7 @@ async fn run_flowgraph_loop(
                         .await
                         .is_ok()
                     {
-                        if let Ok(b) = runtime::await_oneshot(rx).await {
+                        if let Ok(b) = rx.await {
                             let _ = tx.send(Ok(b));
                         } else {
                             let _ = tx.send(Err(Error::RuntimeError(format!(
@@ -586,7 +586,7 @@ async fn run_flowgraph_loop(
                             .await
                             .is_ok()
                     {
-                        blocks.push(runtime::await_oneshot(rx).await?);
+                        blocks.push(rx.await?);
                     }
                 }
 

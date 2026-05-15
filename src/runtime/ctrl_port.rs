@@ -1,4 +1,5 @@
 //! Remote Control through REST API
+use crate::runtime::channel::oneshot;
 use axum::Json;
 use axum::Router;
 use axum::extract::Path;
@@ -6,7 +7,6 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::routing::get_service;
-use futures::channel::oneshot;
 use std::net::SocketAddr;
 use std::path;
 use std::thread::JoinHandle;

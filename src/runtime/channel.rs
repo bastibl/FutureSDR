@@ -1,6 +1,6 @@
 //! Async channels used by the runtime and block implementation APIs.
 //!
-//! `mpsc` uses `kanal`, while `oneshot` uses the channels from the `futures`
+//! `mpsc` uses `kanal`, while `oneshot` wraps the channels from the `futures`
 //! crate.
 
 /// Multi-producer, single-consumer channels backed by `kanal`.
@@ -124,4 +124,83 @@ pub mod mpsc {
     }
 }
 
-pub use futures::channel::oneshot;
+/// Single-use channels.
+pub mod oneshot {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+
+    pub use futures::channel::oneshot::Canceled;
+
+    /// Sending side of a oneshot channel.
+    #[derive(Debug)]
+    pub struct Sender<T>(futures::channel::oneshot::Sender<T>);
+
+    /// Receiving side of a oneshot channel.
+    #[derive(Debug)]
+    pub struct Receiver<T> {
+        inner: futures::channel::oneshot::Receiver<T>,
+        #[cfg(target_arch = "wasm32")]
+        wake_scheduled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    /// Create a oneshot channel.
+    pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        (
+            Sender(tx),
+            Receiver {
+                inner: rx,
+                #[cfg(target_arch = "wasm32")]
+                wake_scheduled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+    }
+
+    impl<T> Sender<T> {
+        /// Send a value to the receiver.
+        pub fn send(self, data: T) -> Result<(), T> {
+            self.0.send(data)
+        }
+    }
+
+    impl<T> Future for Receiver<T> {
+        type Output = Result<T, Canceled>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            match Pin::new(&mut self.inner).poll(cx) {
+                Poll::Ready(result) => Poll::Ready(result),
+                Poll::Pending => {
+                    #[cfg(target_arch = "wasm32")]
+                    schedule_wake(&self.wake_scheduled, cx);
+                    Poll::Pending
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn schedule_wake(
+        wake_scheduled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cx: &Context<'_>,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        if !wake_scheduled.swap(true, Ordering::AcqRel) {
+            let wake_scheduled_for_callback = wake_scheduled.clone();
+            let waker = cx.waker().clone();
+            let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+                wake_scheduled_for_callback.store(false, Ordering::Release);
+                waker.wake();
+            });
+            let function = wasm_bindgen::JsCast::unchecked_ref::<js_sys::Function>(&callback);
+            if let Some(window) = web_sys::window() {
+                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(function, 0);
+            } else {
+                wake_scheduled.store(false, Ordering::Release);
+                cx.waker().wake_by_ref();
+            }
+        }
+    }
+}

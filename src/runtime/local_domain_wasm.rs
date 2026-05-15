@@ -1,8 +1,8 @@
+use crate::runtime::channel::oneshot;
 use async_task::Runnable;
 use concurrent_queue::ConcurrentQueue;
 use futures::Future;
 use futures::FutureExt;
-use futures::channel::oneshot;
 use slab::Slab;
 use std::pin::Pin;
 use std::sync::Arc;

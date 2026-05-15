@@ -1,4 +1,4 @@
-use futures::channel::oneshot;
+use crate::runtime::channel::oneshot;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::marker::PhantomData;

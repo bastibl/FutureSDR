@@ -1,6 +1,6 @@
+use crate::runtime::channel::oneshot;
 use async_executor::Executor;
 use async_executor::Task;
-use futures::channel::oneshot;
 use futures::future::Future;
 use once_cell::sync::Lazy;
 use slab::Slab;

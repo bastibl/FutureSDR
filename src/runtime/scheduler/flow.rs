@@ -1,8 +1,8 @@
+use crate::runtime::channel::oneshot;
 use async_lock::Barrier;
 use async_task::Runnable;
 use async_task::Task;
 use concurrent_queue::ConcurrentQueue;
-use futures::channel::oneshot;
 use futures::future;
 use futures::future::Either;
 use futures::future::select;

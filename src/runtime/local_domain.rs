@@ -1,6 +1,6 @@
+use crate::runtime::channel::oneshot;
 use async_executor::LocalExecutor;
 use futures::Future;
-use futures::channel::oneshot;
 use futures::future::Either;
 use std::pin::Pin;
 use std::thread;
