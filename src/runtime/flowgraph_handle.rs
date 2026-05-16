@@ -1,6 +1,5 @@
 use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::oneshot;
-use std::cmp::PartialEq;
 use std::fmt::Debug;
 
 use futuresdr::runtime::BlockDescription;
@@ -34,12 +33,6 @@ pub struct FlowgraphHandle {
 pub struct FlowgraphBlockHandle {
     flowgraph: FlowgraphHandle,
     block_id: BlockId,
-}
-
-impl PartialEq for FlowgraphHandle {
-    fn eq(&self, other: &Self) -> bool {
-        self.inbox.same_receiver(&other.inbox)
-    }
 }
 
 impl FlowgraphHandle {

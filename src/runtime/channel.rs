@@ -6,14 +6,13 @@
 /// Multi-producer, single-consumer channels backed by `kanal`.
 pub mod mpsc {
     use std::fmt;
-    use std::sync::Arc;
 
     pub use ::kanal::ReceiveError;
     pub use ::kanal::SendError;
 
     /// Sending side of a channel.
     #[derive(Debug)]
-    pub struct Sender<T>(Arc<::kanal::AsyncSender<T>>);
+    pub struct Sender<T>(::kanal::AsyncSender<T>);
 
     /// Receiving side of a channel.
     #[derive(Debug)]
@@ -66,7 +65,7 @@ pub mod mpsc {
     /// Create a bounded channel.
     pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>) {
         let (tx, rx) = ::kanal::bounded_async(size);
-        (Sender(Arc::new(tx)), Receiver(rx))
+        (Sender(tx), Receiver(rx))
     }
 
     impl<T> Clone for Sender<T> {
@@ -115,11 +114,6 @@ pub mod mpsc {
         /// Close the channel.
         pub fn close(&self) -> Result<(), SendError> {
             self.0.close().map_err(|_| SendError::Closed)
-        }
-
-        /// Return whether two senders point to the same receiver.
-        pub fn same_receiver(&self, other: &Self) -> bool {
-            Arc::ptr_eq(&self.0, &other.0)
         }
     }
 

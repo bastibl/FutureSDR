@@ -149,7 +149,7 @@ impl RuntimeHandle {
 }
 
 /// Reference to a FutureSDR Flowgraph
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum FlowgraphHandle {
     /// FutureSDR running in the browser
     Web(runtime::FlowgraphHandle),
