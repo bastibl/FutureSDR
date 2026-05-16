@@ -302,30 +302,20 @@ async fn start_flowgraph<S: Scheduler>(
     let (fg_inbox, fg_inbox_rx) = channel::<FlowgraphMessage>(queue_size);
 
     let (tx, rx) = oneshot::channel::<Result<(), Error>>();
-    let task = spawn_run_flowgraph(scheduler, fg, fg_inbox.clone(), fg_inbox_rx, tx);
+    let scheduler_clone = scheduler.clone();
+    let task = scheduler.spawn(run_flowgraph(
+        fg,
+        scheduler_clone,
+        fg_inbox.clone(),
+        fg_inbox_rx,
+        tx,
+    ));
 
     rx.await
         .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
 
     let handle = FlowgraphHandle::new(fg_inbox);
     Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
-}
-
-fn spawn_run_flowgraph<S: Scheduler>(
-    scheduler: S,
-    fg: Flowgraph,
-    fg_inbox: Sender<FlowgraphMessage>,
-    fg_inbox_rx: Receiver<FlowgraphMessage>,
-    initialized: oneshot::Sender<Result<(), Error>>,
-) -> Task<Result<Flowgraph, Error>> {
-    let scheduler_clone = scheduler.clone();
-    scheduler.spawn(run_flowgraph(
-        fg,
-        scheduler_clone,
-        fg_inbox,
-        fg_inbox_rx,
-        initialized,
-    ))
 }
 
 pub(crate) async fn run_flowgraph<S: Scheduler>(
@@ -373,10 +363,6 @@ pub(crate) async fn run_flowgraph<S: Scheduler>(
     Ok(fg)
 }
 
-async fn recv_flowgraph_message(rx: &Receiver<FlowgraphMessage>) -> Option<FlowgraphMessage> {
-    rx.recv().await
-}
-
 async fn run_flowgraph_loop(
     inboxes: &mut [Option<crate::runtime::dev::BlockInbox>],
     ids: &[BlockId],
@@ -404,7 +390,7 @@ async fn run_flowgraph_loop(
             break;
         }
 
-        let m = recv_flowgraph_message(&main_rx).await.ok_or_else(|| {
+        let m = main_rx.recv().await.ok_or_else(|| {
             Error::RuntimeError("no reply from blocks during init phase".to_string())
         })?;
 
@@ -454,7 +440,7 @@ async fn run_flowgraph_loop(
             break;
         }
 
-        let m = recv_flowgraph_message(&main_rx).await.ok_or_else(|| {
+        let m = main_rx.recv().await.ok_or_else(|| {
             Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
         })?;
 
