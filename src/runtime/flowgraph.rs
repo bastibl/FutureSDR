@@ -1,3 +1,5 @@
+use crate::runtime::channel::mpsc::Receiver;
+use crate::runtime::channel::mpsc::Sender;
 use crate::runtime::channel::oneshot;
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -9,10 +11,15 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use crate::runtime::BlockDescription;
 use crate::runtime::BlockId;
+use crate::runtime::BlockMessage;
 use crate::runtime::BlockPortCtx;
 use crate::runtime::Error;
+use crate::runtime::FlowgraphDescription;
 use crate::runtime::FlowgraphId;
+use crate::runtime::FlowgraphMessage;
+use crate::runtime::Pmt;
 use crate::runtime::PortId;
 use crate::runtime::Result;
 use crate::runtime::block::Block;
@@ -29,6 +36,7 @@ use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
 use crate::runtime::local_domain::LocalDomainRuntime;
 use crate::runtime::local_domain_common::LocalDomainState;
+use crate::runtime::scheduler::Scheduler;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);
@@ -2160,6 +2168,243 @@ impl Flowgraph {
         Ok(())
     }
 
+    pub(crate) async fn run_flowgraph<S: Scheduler>(
+        mut self,
+        scheduler: S,
+        main_channel: Sender<FlowgraphMessage>,
+        main_rx: Receiver<FlowgraphMessage>,
+        initialized: oneshot::Sender<Result<(), Error>>,
+    ) -> Result<Flowgraph, Error> {
+        debug!("in run_flowgraph");
+
+        let (mut inboxes, ids, stream_edges_desc, message_edges_desc) =
+            self.startup_snapshot()?.await?;
+        let blocks = self.take_blocks()?;
+        let block_tasks = scheduler.run_domain(blocks, &main_channel);
+        let local_tasks = self.run_local_domains(main_channel.clone()).await?;
+
+        let run_result: Result<(), Error> = async {
+            debug!("init blocks");
+            // init blocks
+            let mut active_blocks = 0u32;
+            for inbox in inboxes.iter_mut().flatten() {
+                inbox.send(BlockMessage::Initialize).await?;
+                active_blocks += 1;
+            }
+
+            debug!("wait for blocks init");
+            // wait until all blocks are initialized
+            let mut i = active_blocks;
+            let mut queue = Vec::new();
+            let mut block_error = false;
+            loop {
+                if i == 0 {
+                    break;
+                }
+
+                let m = main_rx.recv().await.ok_or_else(|| {
+                    Error::RuntimeError("no reply from blocks during init phase".to_string())
+                })?;
+
+                match m {
+                    FlowgraphMessage::Initialized => i -= 1,
+                    FlowgraphMessage::BlockError { block_id } => {
+                        i -= 1;
+                        active_blocks -= 1;
+                        block_error = true;
+                        error!("flowgraph init: block {:?} reported an error", block_id);
+                    }
+                    x => {
+                        debug!(
+                            "queueing unhandled message received during initialization {:?}",
+                            &x
+                        );
+                        queue.push(x);
+                    }
+                }
+            }
+
+            debug!("running blocks");
+            for inbox in inboxes.iter_mut().flatten() {
+                inbox.notify();
+                if inbox.is_closed() {
+                    debug!("runtime wanted to start block that already terminated");
+                }
+            }
+
+            for m in queue.into_iter() {
+                main_channel.try_send(m)?;
+            }
+
+            initialized.send(Ok(())).map_err(|_| {
+                Error::RuntimeError("main thread panic during flowgraph init".to_string())
+            })?;
+
+            if block_error {
+                main_channel.try_send(FlowgraphMessage::Terminate)?;
+            }
+
+            let mut terminated = false;
+
+            // main loop
+            loop {
+                if active_blocks == 0 {
+                    break;
+                }
+
+                let m = main_rx.recv().await.ok_or_else(|| {
+                    Error::RuntimeError("all senders to flowgraph inbox dropped".to_string())
+                })?;
+
+                match m {
+                    FlowgraphMessage::BlockCall {
+                        block_id,
+                        port_id,
+                        data,
+                        tx,
+                    } => {
+                        if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
+                            if inbox
+                                .send(BlockMessage::Call { port_id, data })
+                                .await
+                                .is_ok()
+                            {
+                                let _ = tx.send(Ok(()));
+                            } else {
+                                let _ = tx.send(Err(Error::BlockTerminated));
+                            }
+                        } else {
+                            let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                        }
+                    }
+                    FlowgraphMessage::BlockCallback {
+                        block_id,
+                        port_id,
+                        data,
+                        tx,
+                    } => {
+                        let (block_tx, block_rx) = oneshot::channel::<Result<Pmt, Error>>();
+                        if let Some(Some(inbox)) = inboxes.get_mut(block_id.0) {
+                            if inbox
+                                .send(BlockMessage::Callback {
+                                    port_id,
+                                    data,
+                                    tx: block_tx,
+                                })
+                                .await
+                                .is_ok()
+                            {
+                                match block_rx.await? {
+                                    Ok(p) => tx.send(Ok(p)).ok(),
+                                    Err(e) => tx.send(Err(Error::HandlerError(e.to_string()))).ok(),
+                                };
+                            } else {
+                                let _ = tx.send(Err(Error::BlockTerminated));
+                            }
+                        } else {
+                            let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                        }
+                    }
+                    FlowgraphMessage::BlockDone { .. } => {
+                        active_blocks -= 1;
+                    }
+                    FlowgraphMessage::BlockError { .. } => {
+                        block_error = true;
+                        active_blocks -= 1;
+                        let _ = main_channel.send(FlowgraphMessage::Terminate).await;
+                    }
+                    FlowgraphMessage::BlockDescription { block_id, tx } => {
+                        if let Some(Some(b)) = inboxes.get_mut(block_id.0) {
+                            let (b_tx, rx) = oneshot::channel::<BlockDescription>();
+                            if b.send(BlockMessage::BlockDescription { tx: b_tx })
+                                .await
+                                .is_ok()
+                            {
+                                if let Ok(b) = rx.await {
+                                    let _ = tx.send(Ok(b));
+                                } else {
+                                    let _ = tx.send(Err(Error::RuntimeError(format!(
+                                        "Block {block_id:?} terminated or crashed"
+                                    ))));
+                                }
+                            } else {
+                                let _ = tx.send(Err(Error::BlockTerminated));
+                            }
+                        } else {
+                            let _ = tx.send(Err(Error::InvalidBlock(block_id)));
+                        }
+                    }
+                    FlowgraphMessage::FlowgraphDescription { tx } => {
+                        let mut blocks = Vec::new();
+                        for id in ids.iter() {
+                            let (b_tx, rx) = oneshot::channel::<BlockDescription>();
+                            if let Some(Some(inbox)) = inboxes.get_mut(id.0)
+                                && inbox
+                                    .send(BlockMessage::BlockDescription { tx: b_tx })
+                                    .await
+                                    .is_ok()
+                            {
+                                blocks.push(rx.await?);
+                            }
+                        }
+
+                        if tx
+                            .send(FlowgraphDescription {
+                                blocks,
+                                stream_edges: stream_edges_desc.clone(),
+                                message_edges: message_edges_desc.clone(),
+                            })
+                            .is_err()
+                        {
+                            error!(
+                                "Failed to send flowgraph description. Receiver may have disconnected."
+                            );
+                        }
+                    }
+                    FlowgraphMessage::Terminate => {
+                        if !terminated {
+                            for inbox in inboxes.iter_mut().flatten() {
+                                if inbox.send(BlockMessage::Terminate).await.is_err() {
+                                    debug!(
+                                        "runtime tried to terminate block that was already terminated"
+                                    );
+                                }
+                            }
+                            terminated = true;
+                        }
+                    }
+                    _ => warn!("main loop received unhandled message"),
+                }
+            }
+
+            if block_error {
+                Err(Error::RuntimeError("A block raised an error".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+        .await;
+
+        if run_result.is_err() {
+            for inbox in inboxes.iter_mut().flatten() {
+                if inbox.send(BlockMessage::Terminate).await.is_err() {
+                    debug!("runtime tried to terminate block during shutdown cleanup");
+                }
+            }
+        }
+
+        let mut finished_blocks = Vec::with_capacity(block_tasks.len());
+        for task in block_tasks {
+            finished_blocks.push(task.await);
+        }
+        self.restore_blocks(finished_blocks)?;
+
+        self.join_local_domains(local_tasks).await?;
+
+        run_result?;
+        Ok(self)
+    }
+
     pub(crate) fn take_blocks(&mut self) -> Result<Vec<Box<dyn Block>>, Error> {
         let mut blocks = Vec::with_capacity(self.blocks.len());
         for entry in self.blocks.iter_mut() {
@@ -2221,7 +2466,7 @@ impl Flowgraph {
 
     pub(crate) async fn run_local_domains(
         &mut self,
-        main_channel: crate::runtime::channel::mpsc::Sender<crate::runtime::FlowgraphMessage>,
+        main_channel: Sender<FlowgraphMessage>,
     ) -> Result<Vec<oneshot::Receiver<Result<(), Error>>>, Error> {
         let mut tasks = Vec::new();
         for domain in self.local_domains.iter_mut() {
