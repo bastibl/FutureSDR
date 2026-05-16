@@ -28,7 +28,7 @@ use crate::runtime::dev::SendKernel;
 use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
 use crate::runtime::local_domain::LocalDomainRuntime;
-use crate::runtime::local_domain::LocalDomainState;
+use crate::runtime::local_domain_common::LocalDomainState;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
 static NEXT_FLOWGRAPH_ID: AtomicUsize = AtomicUsize::new(0);

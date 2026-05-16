@@ -52,6 +52,7 @@ mod local_domain;
 #[cfg(target_arch = "wasm32")]
 #[path = "local_domain_wasm.rs"]
 mod local_domain;
+mod local_domain_common;
 mod message_output;
 #[cfg(not(target_arch = "wasm32"))]
 /// Mocker for unit testing and benchmarking
