@@ -22,10 +22,8 @@ use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::BlockNotifier;
 use crate::runtime::dev::ItemTag;
 use crate::runtime::dev::MessageOutputs;
-use crate::runtime::dev::SendKernel;
 use crate::runtime::dev::WorkIo;
 use crate::runtime::kernel_interface::KernelInterface;
-use crate::runtime::kernel_interface::SendKernelInterface;
 use crate::runtime::wrapped_kernel::WrappedKernel;
 
 /// Native test harness for running one block without a [`Runtime`](crate::runtime::Runtime).
@@ -34,27 +32,27 @@ use crate::runtime::wrapped_kernel::WrappedKernel;
 /// drives `init`, `work`, message handlers, and `deinit` directly. It is useful
 /// for focused unit tests and microbenchmarks where constructing a full
 /// [`Flowgraph`](crate::runtime::Flowgraph) would add noise.
-pub struct Mocker<K: SendKernel> {
+pub struct Mocker<K: KernelInterface> {
     /// Wrapped Block
     block: WrappedKernel<K>,
     message_sinks: Vec<Receiver<BlockMessage>>,
     messages: Vec<Vec<Pmt>>,
 }
 
-impl<K: SendKernelInterface + SendKernel + 'static> Deref for Mocker<K> {
+impl<K: KernelInterface + 'static> Deref for Mocker<K> {
     type Target = K;
 
     fn deref(&self) -> &Self::Target {
         &self.block.kernel
     }
 }
-impl<K: SendKernelInterface + SendKernel + 'static> DerefMut for Mocker<K> {
+impl<K: KernelInterface + 'static> DerefMut for Mocker<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.block.kernel
     }
 }
 
-impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
+impl<K: KernelInterface + crate::runtime::dev::Kernel + 'static> Mocker<K> {
     /// Get the block id.
     pub fn id(&self) -> BlockId {
         self.block.id

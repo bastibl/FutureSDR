@@ -300,7 +300,10 @@ impl<K: KernelInterface + 'static> BlockObject for WrappedKernel<K> {
 }
 
 #[async_trait::async_trait]
-impl<K: SendKernelInterface + SendKernel + 'static> Block for WrappedKernel<K> {
+impl<K> Block for WrappedKernel<K>
+where
+    K: SendKernel + SendKernelInterface + 'static,
+{
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>) {
         match self.run_impl(main_inbox.clone()).await {
             Ok(_) => {

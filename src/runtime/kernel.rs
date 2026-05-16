@@ -8,9 +8,10 @@ use futuresdr::runtime::Result;
 
 /// Send-capable marker for normal runtime blocks.
 ///
-/// Custom block authors implement [`Kernel`]. Any `Kernel` whose value,
-/// block-on future, and kernel futures are `Send` automatically implements
-/// `SendKernel`, which is the proof required by normal flowgraph entry points.
+/// This keeps verbose return-type-notation bounds in one place: normal blocks
+/// must have a `Send` value, `Send` block-on future, and `Send` futures returned
+/// from the kernel lifecycle methods.
+#[doc(hidden)]
 pub trait SendKernel: Kernel<BlockOn: Send> + Send
 where
     Self: Kernel<work(..): Send, init(..): Send, deinit(..): Send>,
@@ -35,10 +36,9 @@ impl<T> SendKernel for T where
 /// should consume and produce exactly the number of stream items it handled and
 /// use [`WorkIo`] to request another immediate call, wait on a future, or finish.
 ///
-/// Normal runtime entry points accept only kernels that also satisfy
-/// [`SendKernel`], i.e., kernels whose value, block-on future, and returned
-/// futures are `Send`. Kernels that do not satisfy these bounds can still run in
-/// a local domain.
+/// Normal runtime entry points accept only kernels whose value, block-on future,
+/// and returned futures are `Send`. Kernels that do not satisfy these bounds can
+/// still run in a local domain.
 ///
 /// ```
 /// use futuresdr::runtime::dev::prelude::*;

@@ -33,6 +33,7 @@ pub use super::buffer::SendInplaceWriter;
 pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
+#[doc(hidden)]
 pub use super::kernel::SendKernel;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
@@ -79,7 +80,6 @@ pub mod prelude {
     pub use crate::runtime::dev::SendCircuitWriter;
     pub use crate::runtime::dev::SendInplaceReader;
     pub use crate::runtime::dev::SendInplaceWriter;
-    pub use crate::runtime::dev::SendKernel;
     pub use crate::runtime::dev::Tag;
     pub use crate::runtime::dev::TypedBlockGuard;
     pub use crate::runtime::dev::TypedBlockGuardMut;

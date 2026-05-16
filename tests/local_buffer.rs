@@ -29,7 +29,7 @@ struct TestKernel;
 
 impl Kernel for TestKernel {}
 
-fn assert_kernel<T: SendKernel>() {}
+fn assert_send_kernel<T: SendKernel>() {}
 fn assert_cpu_reader<T: SendCpuBufferReader>() {}
 fn assert_cpu_writer<T: SendCpuBufferWriter>() {}
 fn assert_kernel_interface<T: KernelInterface>() {}
@@ -45,7 +45,7 @@ fn assert_send_inplace_writer<T: SendInplaceWriter>() {}
 
 #[test]
 fn normal_and_local_types_use_the_same_traits() {
-    assert_kernel::<TestKernel>();
+    assert_send_kernel::<TestKernel>();
     assert_cpu_reader::<DefaultCpuReader<u8>>();
     assert_cpu_writer::<DefaultCpuWriter<u8>>();
     assert_local_cpu_reader::<DefaultCpuReader<u8>>();

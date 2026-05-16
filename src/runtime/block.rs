@@ -66,6 +66,10 @@ impl fmt::Debug for dyn Block {
     }
 }
 
+/// Runtime interface for blocks that stay inside a local domain.
+///
+/// This is separate from [`Block`] because the future returned by `run()` is not
+/// required to be `Send`; local-domain blocks never move between worker threads.
 #[async_trait::async_trait(?Send)]
 pub(crate) trait LocalBlock: BlockObject {
     async fn run(&mut self, main_inbox: Sender<FlowgraphMessage>);

@@ -11,11 +11,11 @@ use futuresdr::runtime::PortId;
 use futuresdr::runtime::Result;
 use futuresdr::runtime::buffer::BufferReader;
 
-/// Send-capable proof for the internal block interface.
+/// Send-capable proof for the generated block interface.
 ///
-/// Block authors should implement [`crate::runtime::dev::Kernel`], not this
-/// trait. `SendKernelInterface` is public only so downstream runtime internals
-/// can name the send-capable proof of a generated [`KernelInterface`] impl.
+/// This keeps return-type-notation bounds for generated async handlers in one
+/// place. Block authors should implement [`crate::runtime::dev::Kernel`], not
+/// this trait.
 #[doc(hidden)]
 pub trait SendKernelInterface: KernelInterface + Send
 where

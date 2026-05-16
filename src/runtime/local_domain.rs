@@ -25,8 +25,6 @@ type LocalDomainAsyncExec = Box<
         + 'static,
 >;
 
-pub(crate) type LocalExecutorFactory = Box<dyn FnOnce() -> LocalExecutor<'static> + Send + 'static>;
-
 type TopologyEdge = (BlockId, PortId, BlockId, PortId);
 
 pub(crate) struct LocalDomainState {
@@ -136,7 +134,6 @@ enum LocalDomainMessage {
     Exec(LocalDomainAsyncExec),
     Run {
         main_channel: Sender<FlowgraphMessage>,
-        executor_factory: LocalExecutorFactory,
         reply: oneshot::Sender<Result<(), Error>>,
     },
     Terminate,
@@ -212,10 +209,7 @@ impl LocalDomainRuntime {
         if self.blocks == 0 {
             return Ok(None);
         }
-        let task = self
-            .controller
-            .run(main_channel, default_local_executor_factory())
-            .await?;
+        let task = self.controller.run(main_channel).await?;
         self.running = true;
         Ok(Some(task))
     }
@@ -329,13 +323,11 @@ impl LocalDomainController {
     pub(crate) async fn run(
         &self,
         main_channel: Sender<FlowgraphMessage>,
-        executor_factory: LocalExecutorFactory,
     ) -> Result<oneshot::Receiver<Result<(), Error>>, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(LocalDomainMessage::Run {
                 main_channel,
-                executor_factory,
                 reply,
             })
             .await
@@ -382,12 +374,15 @@ async fn run_domain_thread(
             LocalDomainMessage::Exec(f) => f(&mut state).await,
             LocalDomainMessage::Run {
                 main_channel,
-                executor_factory,
                 reply,
             } => {
-                let executor = executor_factory();
-                let result =
-                    run_local_domain(&mut state, executor, main_channel, &mut terminate_rx).await;
+                let result = run_local_domain(
+                    &mut state,
+                    LocalExecutor::new(),
+                    main_channel,
+                    &mut terminate_rx,
+                )
+                .await;
                 let _ = reply.send(result);
             }
             LocalDomainMessage::Terminate => break,
@@ -447,10 +442,6 @@ async fn run_local_domain(
     finished
         .into_iter()
         .try_for_each(|(local_id, block)| state.insert_block(local_id, block))
-}
-
-pub(crate) fn default_local_executor_factory() -> LocalExecutorFactory {
-    Box::new(LocalExecutor::new)
 }
 
 #[cfg(test)]
@@ -558,8 +549,7 @@ mod tests {
             }),
         ))?;
         let (main_tx, _main_rx) = crate::runtime::channel::mpsc::channel(4);
-        let run =
-            crate::runtime::block_on(controller.run(main_tx, default_local_executor_factory()))?;
+        let run = crate::runtime::block_on(controller.run(main_tx))?;
 
         drop(controller);
 
