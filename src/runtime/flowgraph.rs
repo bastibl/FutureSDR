@@ -199,12 +199,12 @@ enum StreamPlan {
 }
 
 pub(crate) type TopologyEdge = (BlockId, PortId, BlockId, PortId);
-pub(crate) type StartupSnapshot = (
-    Vec<Option<BlockInbox>>,
-    Vec<BlockId>,
-    Vec<TopologyEdge>,
-    Vec<TopologyEdge>,
-);
+pub(crate) struct StartupSnapshot {
+    inboxes: Vec<Option<BlockInbox>>,
+    ids: Vec<BlockId>,
+    stream_edges: Vec<TopologyEdge>,
+    message_edges: Vec<TopologyEdge>,
+}
 
 /// Type-erased stream edge between two stream ports.
 #[derive(Debug, Clone)]
@@ -531,16 +531,16 @@ pub(crate) struct BlockEntry {
     block: Option<Box<dyn Block>>,
     placement: BlockPlacement,
     inbox: Option<BlockInbox>,
-    message_inputs: Option<&'static [&'static str]>,
+    message_inputs: &'static [&'static str],
 }
 
 impl BlockEntry {
-    fn empty(placement: BlockPlacement) -> Self {
+    fn reserved(placement: BlockPlacement, message_inputs: &'static [&'static str]) -> Self {
         Self {
             block: None,
             placement,
             inbox: None,
-            message_inputs: None,
+            message_inputs,
         }
     }
 
@@ -554,7 +554,7 @@ impl BlockEntry {
             block: Some(block),
             placement,
             inbox: Some(inbox),
-            message_inputs: Some(message_inputs),
+            message_inputs,
         }
     }
 }
@@ -811,7 +811,7 @@ impl Flowgraph {
                 block: None,
                 placement: entry.placement,
                 inbox: Some(entry.inbox),
-                message_inputs: Some(entry.message_inputs),
+                message_inputs: entry.message_inputs,
             }));
     }
 
@@ -925,9 +925,14 @@ impl Flowgraph {
         self.add_normal_block(Box::new(b), inbox, <K as KernelInterface>::message_inputs())
     }
 
-    fn reserve_block_id(&mut self, placement: BlockPlacement) -> BlockId {
+    fn reserve_block_id(
+        &mut self,
+        placement: BlockPlacement,
+        message_inputs: &'static [&'static str],
+    ) -> BlockId {
         let block_id = BlockId(self.blocks.len());
-        self.blocks.push(BlockEntry::empty(placement));
+        self.blocks
+            .push(BlockEntry::reserved(placement, message_inputs));
         block_id
     }
 
@@ -1018,7 +1023,7 @@ impl Flowgraph {
             domain_id,
             local_id,
         };
-        let block_id = self.reserve_block_id(placement);
+        let block_id = self.reserve_block_id(placement, K::message_inputs());
         let inbox = self.local_domains[domain_id]
             .build(
                 local_id,
@@ -1034,7 +1039,6 @@ impl Flowgraph {
             .expect("failed to build block in local domain");
         let entry = &mut self.blocks[block_id.0];
         entry.inbox = Some(inbox);
-        entry.message_inputs = Some(K::message_inputs());
         self.block_ref(block_id, placement)
     }
 
@@ -1069,6 +1073,30 @@ impl Flowgraph {
             .get(block_id.0)
             .map(|entry| entry.placement)
             .ok_or(Error::InvalidBlock(block_id))
+    }
+
+    fn two_block_entries_mut(
+        &mut self,
+        first: BlockId,
+        second: BlockId,
+    ) -> Result<(&mut BlockEntry, &mut BlockEntry), Error> {
+        if first == second {
+            return Err(Error::LockError);
+        }
+
+        let len = self.blocks.len();
+        let invalid_block = if first.0 >= len { first } else { second };
+        let [first_slot, second_slot] =
+            self.blocks
+                .get_disjoint_mut([first.0, second.0])
+                .map_err(|err| match err {
+                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
+                        Error::InvalidBlock(invalid_block)
+                    }
+                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
+                })?;
+
+        Ok((first_slot, second_slot))
     }
 
     fn stream_plan(
@@ -1203,21 +1231,7 @@ impl Flowgraph {
         KS: 'static,
         KD: 'static,
     {
-        if src_id == dst_id {
-            return Err(Error::LockError);
-        }
-
-        let len = self.blocks.len();
-        let invalid_block = if src_id.0 >= len { src_id } else { dst_id };
-        let [src_slot, dst_slot] =
-            self.blocks
-                .get_disjoint_mut([src_id.0, dst_id.0])
-                .map_err(|err| match err {
-                    std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                        Error::InvalidBlock(invalid_block)
-                    }
-                    std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-                })?;
+        let (src_slot, dst_slot) = self.two_block_entries_mut(src_id, dst_id)?;
 
         let src = src_slot
             .block
@@ -1329,34 +1343,14 @@ impl Flowgraph {
         })
     }
 
-    fn get_typed_block<K: 'static>(
-        &self,
-        block: &BlockRef<K>,
-    ) -> Result<TypedBlockGuard<'_, K>, Error> {
-        self.validate_block_ref(block)?;
-        self.get_typed_block_by_id(block.id)
-    }
-
-    fn get_typed_block_mut<K: 'static>(
-        &mut self,
-        block: &BlockRef<K>,
-    ) -> Result<TypedBlockGuardMut<'_, K>, Error> {
-        self.validate_block_ref(block)?;
-        let wrapped = self.get_typed_wrapped_block_mut_by_id::<K>(block.id)?;
-        Ok(TypedBlockGuardMut {
-            id: wrapped.id,
-            meta: &mut wrapped.meta,
-            kernel: &mut wrapped.kernel,
-        })
-    }
-
     /// Get typed shared access to a block in this flowgraph.
     ///
     /// The reference must have been returned by this flowgraph. Access fails
     /// while a local-domain block is running because its state lives in
     /// the local domain.
     pub fn block<K: 'static>(&self, block: &BlockRef<K>) -> Result<TypedBlockGuard<'_, K>, Error> {
-        self.get_typed_block(block)
+        self.validate_block_ref(block)?;
+        self.get_typed_block_by_id(block.id)
     }
 
     /// Get typed mutable access to a block in this flowgraph.
@@ -1369,7 +1363,13 @@ impl Flowgraph {
         &mut self,
         block: &BlockRef<K>,
     ) -> Result<TypedBlockGuardMut<'_, K>, Error> {
-        self.get_typed_block_mut(block)
+        self.validate_block_ref(block)?;
+        let wrapped = self.get_typed_wrapped_block_mut_by_id::<K>(block.id)?;
+        Ok(TypedBlockGuardMut {
+            id: wrapped.id,
+            meta: &mut wrapped.meta,
+            kernel: &mut wrapped.kernel,
+        })
     }
 
     fn connect_stream_ports<B: BufferWriter>(
@@ -1545,22 +1545,21 @@ impl Flowgraph {
             .block
             .take()
             .ok_or(Error::LockError)?;
-        let normal = Arc::new(Mutex::new(Some(normal)));
-        let domain_normal = Arc::clone(&normal);
 
-        let result = self.local_domains[local.domain_id]
+        let (normal, result) = self.local_domains[local.domain_id]
             .exec(move |state| {
-                let result = (|| {
-                    let mut normal_guard = domain_normal.lock().map_err(|_| Error::LockError)?;
-                    let normal = normal_guard.as_mut().ok_or(Error::LockError)?;
-                    let local = state.block_mut(local.local_id, local.block_id)?;
-                    f(normal.as_mut(), local)
-                })();
-                Box::pin(futures::future::ready(result))
+                Box::pin(async move {
+                    let mut normal = normal;
+                    let result = (|| {
+                        let local = state.block_mut(local.local_id, local.block_id)?;
+                        f(normal.as_mut(), local)
+                    })();
+                    Ok((normal, result))
+                })
             })
-            .await;
+            .await?;
 
-        self.blocks[normal_id.0].block = normal.lock().map_err(|_| Error::LockError)?.take();
+        self.blocks[normal_id.0].block = Some(normal);
         result
     }
 
@@ -1621,24 +1620,7 @@ impl Flowgraph {
         dst_block_id: BlockId,
         dst_port_id: &PortId,
     ) -> Result<StreamEdge, Error> {
-        if src_block_id == dst_block_id {
-            return Err(Error::LockError);
-        }
-        let len = self.blocks.len();
-        let invalid_block = if src_block_id.0 >= len {
-            src_block_id
-        } else {
-            dst_block_id
-        };
-        let [src_slot, dst_slot] = self
-            .blocks
-            .get_disjoint_mut([src_block_id.0, dst_block_id.0])
-            .map_err(|err| match err {
-                std::slice::GetDisjointMutError::IndexOutOfBounds => {
-                    Error::InvalidBlock(invalid_block)
-                }
-                std::slice::GetDisjointMutError::OverlappingIndices => Error::LockError,
-            })?;
+        let (src_slot, dst_slot) = self.two_block_entries_mut(src_block_id, dst_block_id)?;
         let src_block = src_slot
             .block
             .as_mut()
@@ -2126,7 +2108,7 @@ impl Flowgraph {
         let dst_inputs = self
             .blocks
             .get(dst_block_id.0)
-            .and_then(|entry| entry.message_inputs)
+            .map(|entry| entry.message_inputs)
             .ok_or(Error::InvalidBlock(dst_block_id))?;
         if !dst_inputs.contains(&dst_port_id.name()) {
             return Err(Error::InvalidMessagePort(
@@ -2177,8 +2159,12 @@ impl Flowgraph {
     ) -> Result<Flowgraph, Error> {
         debug!("in run_flowgraph");
 
-        let (mut inboxes, ids, stream_edges_desc, message_edges_desc) =
-            self.startup_snapshot()?.await?;
+        let StartupSnapshot {
+            mut inboxes,
+            ids,
+            stream_edges: stream_edges_desc,
+            message_edges: message_edges_desc,
+        } = self.startup_snapshot()?.await?;
         let blocks = self.take_blocks()?;
         let block_tasks = scheduler.run_domain(blocks, &main_channel);
         let local_tasks = self.run_local_domains(main_channel.clone()).await?;
@@ -2415,24 +2401,19 @@ impl Flowgraph {
         Ok(blocks)
     }
 
-    pub(crate) fn block_count(&self) -> usize {
-        self.blocks.len()
-    }
-
     pub(crate) fn inboxes(
         &self,
     ) -> Result<(Vec<Option<crate::runtime::dev::BlockInbox>>, Vec<BlockId>), Error> {
-        let mut inboxes = vec![None; self.block_count()];
-        let mut ids = Vec::new();
-        for (id, inbox) in inboxes.iter_mut().enumerate().take(self.block_count()) {
+        let mut inboxes = Vec::with_capacity(self.blocks.len());
+        let mut ids = Vec::with_capacity(self.blocks.len());
+        for (id, entry) in self.blocks.iter().enumerate() {
             let block_id = BlockId(id);
-            *inbox = Some(
-                self.blocks
-                    .get(id)
-                    .and_then(|entry| entry.inbox.as_ref())
-                    .cloned()
-                    .ok_or(Error::InvalidBlock(block_id))?,
-            );
+            let inbox = entry
+                .inbox
+                .as_ref()
+                .cloned()
+                .ok_or(Error::InvalidBlock(block_id))?;
+            inboxes.push(Some(inbox));
             ids.push(block_id);
         }
         Ok((inboxes, ids))
@@ -2460,7 +2441,12 @@ impl Flowgraph {
                 message_edges.extend(domain_message_edges);
             }
 
-            Ok((inboxes, ids, stream_edges, message_edges))
+            Ok(StartupSnapshot {
+                inboxes,
+                ids,
+                stream_edges,
+                message_edges,
+            })
         })
     }
 
