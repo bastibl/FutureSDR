@@ -722,7 +722,7 @@ impl HackRf {
 }
 
 #[doc(hidden)]
-impl LocalKernel for HackRf {
+impl Kernel for HackRf {
     async fn init(&mut self, _mo: &mut MessageOutputs, _b: &mut BlockMeta) -> Result<()> {
         let usb = {
             if let Some(window) = web_sys::window() {

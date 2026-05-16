@@ -12,7 +12,6 @@ use futuresdr::runtime::buffer::LocalCpuReader;
 use futuresdr::runtime::buffer::LocalCpuWriter;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::Kernel;
-use futuresdr::runtime::dev::LocalKernel;
 use futuresdr::runtime::dev::LocalWorkIo;
 use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
@@ -57,7 +56,7 @@ impl NonSendLocalBlock {
     }
 }
 
-impl LocalKernel for NonSendLocalBlock {
+impl Kernel for NonSendLocalBlock {
     type BlockOn = Pin<Box<dyn Future<Output = ()>>>;
 
     fn block_on(&mut self) -> Option<Pin<&mut Pin<Box<dyn Future<Output = ()>>>>> {
@@ -128,7 +127,7 @@ impl NonSendLocalSource {
     }
 }
 
-impl LocalKernel for NonSendLocalSource {
+impl Kernel for NonSendLocalSource {
     async fn work(
         &mut self,
         io: &mut LocalWorkIo,
@@ -177,7 +176,7 @@ impl NonSendLocalSink {
     }
 }
 
-impl LocalKernel for NonSendLocalSink {
+impl Kernel for NonSendLocalSink {
     async fn work(
         &mut self,
         io: &mut LocalWorkIo,

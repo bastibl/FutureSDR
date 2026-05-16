@@ -524,8 +524,8 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// Derive the runtime interface for an explicitly local block kernel.
 ///
 /// This is the local counterpart to `#[derive(Block)]`. It supports the same
-/// port and metadata attributes, but generated message handlers receive
-/// `LocalWorkIo` and the block is added through local flowgraph entry points.
+/// port and metadata attributes, but the block is added through local flowgraph
+/// entry points.
 #[proc_macro_derive(
     LocalBlock,
     attributes(
@@ -542,7 +542,7 @@ pub fn derive_local_block(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     derive_block_impl(input, true)
 }
 
-fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro::TokenStream {
+fn derive_block_impl(input: proc_macro::TokenStream, _local: bool) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let generics = &input.generics;
@@ -1109,11 +1109,7 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
                 }
             }
         } else if attr.path().is_ident("null_kernel") {
-            let kernel_trait = if local {
-                quote! { ::futuresdr::runtime::dev::LocalKernel }
-            } else {
-                quote! { ::futuresdr::runtime::dev::Kernel }
-            };
+            let kernel_trait = quote! { ::futuresdr::runtime::dev::Kernel };
             kernel = quote! {
                 #[doc(hidden)]
                 impl #generics #kernel_trait for #struct_name #generics
@@ -1162,46 +1158,20 @@ fn derive_block_impl(input: proc_macro::TokenStream, local: bool) -> proc_macro:
         })
         .collect::<Vec<_>>();
 
-    let interface_trait = if local {
-        quote! { ::futuresdr::runtime::__private::LocalKernelInterface }
-    } else {
-        quote! { ::futuresdr::runtime::__private::KernelInterface }
-    };
-    let work_io_type = if local {
-        quote! { ::futuresdr::runtime::dev::LocalWorkIo }
-    } else {
-        quote! { ::futuresdr::runtime::dev::WorkIo }
-    };
+    let interface_trait = quote! { ::futuresdr::runtime::__private::KernelInterface };
+    let work_io_type = quote! { ::futuresdr::runtime::dev::WorkIo };
     let mut add_local_generics = kernel_interface_generics.clone();
     {
         let where_clause = add_local_generics.make_where_clause();
         where_clause.predicates.push(parse_quote!(Self: 'static));
-        if local {
-            where_clause
-                .predicates
-                .push(parse_quote!(Self: ::futuresdr::runtime::dev::LocalKernel));
-        } else {
-            where_clause
-                .predicates
-                .push(parse_quote!(Self: ::futuresdr::runtime::dev::Kernel));
-        }
+        where_clause
+            .predicates
+            .push(parse_quote!(Self: ::futuresdr::runtime::dev::Kernel));
     }
     let (add_local_impl_generics, _, add_local_where_clause) = add_local_generics.split_for_impl();
-    let add_local_method = if local {
-        quote! { __add_local_from_local_kernel }
-    } else {
-        quote! { __add_local_from_kernel }
-    };
-    let add_local_async_method = if local {
-        format_ident!("__add_local_from_local_kernel_async")
-    } else {
-        format_ident!("__add_local_from_kernel_async")
-    };
-    let add_domain_method = if local {
-        quote! { __add_from_local_kernel }
-    } else {
-        quote! { __add_from_kernel }
-    };
+    let add_local_method = quote! { __add_local_from_kernel };
+    let add_local_async_method = format_ident!("__add_local_from_kernel_async");
+    let add_domain_method = quote! { __add_from_kernel };
     let port_getters = quote! {
         impl #generics #struct_name #unconstraint_generics
             #where_clause

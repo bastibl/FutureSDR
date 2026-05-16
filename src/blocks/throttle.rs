@@ -116,7 +116,7 @@ where
 
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
-impl<T, I, O> LocalKernel for Throttle<T, I, O>
+impl<T, I, O> Kernel for Throttle<T, I, O>
 where
     T: Copy + Send + 'static,
     I: CpuBufferReader<Item = T>,

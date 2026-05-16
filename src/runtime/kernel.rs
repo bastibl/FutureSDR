@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::runtime::dev::BlockMeta;
-use crate::runtime::dev::LocalWorkIo;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
 use futuresdr::runtime::Result;
@@ -23,18 +22,14 @@ impl Future for NoBlockOn {
 /// Custom block authors implement [`Kernel`]. Any `Kernel` whose value,
 /// block-on future, and kernel futures are `Send` automatically implements
 /// `SendKernel`, which is the proof required by normal flowgraph entry points.
-pub trait SendKernel: Kernel + Send
+pub trait SendKernel: Kernel<BlockOn: Send> + Send
 where
-    Self::BlockOn: Send,
     Self: Kernel<work(..): Send, init(..): Send, deinit(..): Send>,
-    Self: Send,
 {
 }
 
-impl<T> SendKernel for T
-where
-    T::BlockOn: Send,
-    T: Kernel<work(..): Send, init(..): Send, deinit(..): Send> + Send,
+impl<T> SendKernel for T where
+    T: Kernel<BlockOn: Send, work(..): Send, init(..): Send, deinit(..): Send> + Send
 {
 }
 
@@ -42,8 +37,8 @@ where
 ///
 /// `Kernel` is the central trait custom block authors implement. The
 /// `#[derive(Block)]` macro declares stream and message ports from annotated
-/// fields and methods; the `Kernel` implementation supplies
-/// initialization, work, and shutdown behavior.
+/// fields and methods; the `Kernel` implementation supplies initialization,
+/// work, and shutdown behavior.
 ///
 /// The runtime calls [`Kernel::init`] once, then repeatedly calls
 /// [`Kernel::work`] until the block marks itself finished or the flowgraph is
@@ -52,7 +47,9 @@ where
 /// use [`WorkIo`] to request another immediate call, wait on a future, or finish.
 ///
 /// Normal runtime entry points accept only kernels that also satisfy
-/// [`SendKernel`], i.e., send-capable kernels with `Send` futures.
+/// [`SendKernel`], i.e., kernels whose value, block-on future, and returned
+/// futures are `Send`. Kernels that do not satisfy these bounds can still run in
+/// a local domain.
 ///
 /// ```
 /// use futuresdr::runtime::dev::prelude::*;
@@ -94,7 +91,7 @@ where
 /// ```
 pub trait Kernel {
     /// Typed future that may be used to wake the block again.
-    type BlockOn: Future<Output = ()> + Send + 'static = NoBlockOn;
+    type BlockOn: Future<Output = ()> + 'static = NoBlockOn;
 
     /// Return the typed future that should wake this block again.
     ///
@@ -136,54 +133,6 @@ pub trait Kernel {
     /// This is called during block shutdown even when the block stopped because
     /// the flowgraph was terminated. It should release resources owned by the
     /// block and may post final messages.
-    fn deinit(
-        &mut self,
-        _mo: &mut MessageOutputs,
-        _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> {
-        async { Ok(()) }
-    }
-}
-
-/// Processing logic for explicitly local blocks.
-///
-/// `LocalKernel` mirrors [`Kernel`] but receives [`LocalWorkIo`], allowing a
-/// block to wait on non-`Send` futures. Such blocks are accepted only by local
-/// flowgraph entry points. They run inside a
-/// [`LocalDomain`](crate::runtime::LocalDomain), which is backed by a dedicated
-/// thread on native targets and by a web worker on WASM.
-pub trait LocalKernel {
-    /// Typed future that may be used to wake the block again.
-    type BlockOn: Future<Output = ()> + 'static = NoBlockOn;
-
-    /// Return the typed future that should wake this block again.
-    ///
-    /// This is queried after [`LocalWorkIo::block_on`] has been set. Returning
-    /// `None` falls back to waiting only for inbox/stream notifications.
-    fn block_on(&mut self) -> Option<Pin<&mut Self::BlockOn>> {
-        None
-    }
-
-    /// Process stream data and emit messages.
-    fn work(
-        &mut self,
-        _io: &mut LocalWorkIo,
-        _mo: &mut MessageOutputs,
-        _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> {
-        async { Ok(()) }
-    }
-
-    /// Initialize the kernel before normal work starts.
-    fn init(
-        &mut self,
-        _mo: &mut MessageOutputs,
-        _b: &mut BlockMeta,
-    ) -> impl Future<Output = Result<()>> {
-        async { Ok(()) }
-    }
-
-    /// De-initialize the kernel after work has stopped.
     fn deinit(
         &mut self,
         _mo: &mut MessageOutputs,

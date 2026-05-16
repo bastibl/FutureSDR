@@ -72,7 +72,7 @@ impl Kernel for MessageSource {
 
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
-impl LocalKernel for MessageSource {
+impl Kernel for MessageSource {
     type BlockOn = Timer;
 
     fn block_on(&mut self) -> Option<Pin<&mut Timer>> {

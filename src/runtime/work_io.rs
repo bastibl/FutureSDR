@@ -47,6 +47,6 @@ impl fmt::Debug for WorkIo {
 /// Work-loop control flags for explicitly local kernels.
 ///
 /// This is currently the same type as [`WorkIo`]. The local-vs-send distinction
-/// lives in [`LocalKernel`](crate::runtime::dev::LocalKernel)'s typed block-on
-/// future, which is allowed to be non-`Send`.
+/// is derived from whether the kernel value, its typed block-on future, and its
+/// returned futures are `Send`.
 pub type LocalWorkIo = WorkIo;

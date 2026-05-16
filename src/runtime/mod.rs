@@ -113,7 +113,6 @@ pub mod __private {
     pub use super::connect_add::ConnectAddAsync;
 
     pub use super::kernel_interface::KernelInterface;
-    pub use super::kernel_interface::LocalKernelInterface;
     pub use super::kernel_interface::SendKernelInterface;
 }
 

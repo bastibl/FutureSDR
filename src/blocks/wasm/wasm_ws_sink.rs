@@ -93,7 +93,7 @@ where
 }
 
 #[doc(hidden)]
-impl<T> LocalKernel for WasmWsSink<T>
+impl<T> Kernel for WasmWsSink<T>
 where
     T: CpuSample,
 {

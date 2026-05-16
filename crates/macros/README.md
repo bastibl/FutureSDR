@@ -74,5 +74,5 @@ Supported attributes:
 ## `#[derive(LocalBlock)]`
 
 `LocalBlock` supports the same attributes as `Block`, but targets the local
-runtime path and `LocalKernel` implementations. Use it for non-`Send` state,
-non-`Send` futures, or local-only buffers.
+runtime path. Use it for non-`Send` state, non-`Send` futures, or local-only
+buffers.
