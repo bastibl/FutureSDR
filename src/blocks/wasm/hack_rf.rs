@@ -271,7 +271,7 @@ impl HackRf {
 
     async fn freq(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -296,7 +296,7 @@ impl HackRf {
 
     async fn lna(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -321,7 +321,7 @@ impl HackRf {
 
     async fn vga(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -346,7 +346,7 @@ impl HackRf {
 
     async fn amp(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -368,7 +368,7 @@ impl HackRf {
 
     async fn set_sample_rate_msg(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -405,7 +405,7 @@ impl HackRf {
 
     async fn set_bandwidth_msg(
         &mut self,
-        _io: &mut LocalWorkIo,
+        _io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
         p: Pmt,
@@ -810,7 +810,7 @@ impl Kernel for HackRf {
 
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

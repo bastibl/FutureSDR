@@ -108,7 +108,6 @@ pub fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
 /// expansions can reference generated implementation details.
 #[doc(hidden)]
 pub mod __private {
-    pub use super::connect_add::AddLocal;
     pub use super::connect_add::ConnectAdd;
     pub use super::connect_add::ConnectAddAsync;
 

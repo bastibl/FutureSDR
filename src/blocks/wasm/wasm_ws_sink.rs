@@ -99,7 +99,7 @@ where
 {
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

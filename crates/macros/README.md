@@ -41,7 +41,7 @@ connect!(fg, monitor);
 
 ## `#[derive(Block)]`
 
-Derive the runtime interface for a normal block kernel. Annotated fields become
+Derive the runtime interface for a block kernel. Annotated fields become
 stream ports, and struct-level attributes declare message ports:
 
 ```rust
@@ -73,6 +73,6 @@ Supported attributes:
 
 ## `#[derive(LocalBlock)]`
 
-`LocalBlock` supports the same attributes as `Block`, but targets the local
-runtime path. Use it for non-`Send` state, non-`Send` futures, or local-only
+`LocalBlock` is an alias of `Block` for kernels intended to run in a local
+domain. Use it to document non-`Send` state, non-`Send` futures, or local-only
 buffers.

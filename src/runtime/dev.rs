@@ -33,12 +33,10 @@ pub use super::buffer::SendInplaceWriter;
 pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
-pub use super::kernel::NoBlockOn;
 pub use super::kernel::SendKernel;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
 pub use super::tag::Tag;
-pub use super::work_io::LocalWorkIo;
 pub use super::work_io::WorkIo;
 
 /// Prelude for implementing custom blocks and runtime extensions.
@@ -77,9 +75,7 @@ pub mod prelude {
     pub use crate::runtime::dev::Kernel;
     pub use crate::runtime::dev::LocalCpuReader;
     pub use crate::runtime::dev::LocalCpuWriter;
-    pub use crate::runtime::dev::LocalWorkIo;
     pub use crate::runtime::dev::MessageOutputs;
-    pub use crate::runtime::dev::NoBlockOn;
     pub use crate::runtime::dev::SendCircuitWriter;
     pub use crate::runtime::dev::SendInplaceReader;
     pub use crate::runtime::dev::SendInplaceWriter;

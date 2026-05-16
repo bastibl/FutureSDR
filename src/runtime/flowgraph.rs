@@ -27,7 +27,6 @@ use crate::runtime::dev::Kernel;
 use crate::runtime::dev::SendKernel;
 use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
-use crate::runtime::local_domain::LocalBlockBuilder;
 use crate::runtime::local_domain::LocalDomainRuntime;
 use crate::runtime::local_domain::LocalDomainState;
 use crate::runtime::wrapped_kernel::WrappedKernel;
@@ -281,16 +280,15 @@ impl<'a> LocalDomainContext<'a> {
     /// Add a block to this local domain.
     pub fn add<K>(&self, block: K) -> BlockRef<K>
     where
-        K: crate::runtime::__private::AddLocal + 'static,
+        K: Kernel + KernelInterface + 'static,
     {
-        crate::runtime::__private::AddLocal::add_domain(block, self)
+        self.add_kernel(block)
     }
 
-    fn add_wrapped<K>(
-        &self,
-        message_inputs: &'static [&'static str],
-        build: impl FnOnce(BlockId) -> Box<dyn crate::runtime::block::LocalBlock>,
-    ) -> BlockRef<K> {
+    fn add_kernel<K>(&self, block: K) -> BlockRef<K>
+    where
+        K: Kernel + KernelInterface + 'static,
+    {
         let mut inner = self.inner.borrow_mut();
         let block_id = BlockId(inner.next_block_id);
         inner.next_block_id += 1;
@@ -301,16 +299,19 @@ impl<'a> LocalDomainContext<'a> {
             local_id,
         };
 
-        let block = build(block_id);
+        let mut block = WrappedKernel::new(block, block_id);
+        block
+            .meta
+            .set_instance_name(format!("{}-{}", K::type_name(), block_id.0));
         let inbox = block.inbox();
         inner
             .state
-            .insert_block(local_id, block)
+            .insert_block(local_id, Box::new(block))
             .expect("failed to insert local-domain block");
         inner.entries.push(LocalDomainContextEntry {
             placement,
             inbox,
-            message_inputs,
+            message_inputs: K::message_inputs(),
         });
         BlockRef {
             id: block_id,
@@ -318,20 +319,6 @@ impl<'a> LocalDomainContext<'a> {
             placement,
             _marker: PhantomData,
         }
-    }
-
-    #[doc(hidden)]
-    pub fn __add_from_kernel<K>(&self, block: K) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
-        self.add_wrapped(<K as KernelInterface>::message_inputs(), move |block_id| {
-            let mut b = WrappedKernel::new(block, block_id);
-            let block_name = <K as KernelInterface>::type_name();
-            b.meta
-                .set_instance_name(format!("{}-{}", block_name, block_id.0));
-            Box::new(b)
-        })
     }
 
     /// Connect local-only stream ports between blocks in this domain context.
@@ -962,62 +949,14 @@ impl Flowgraph {
         self.block_ref(block_id, placement)
     }
 
-    async fn add_local_block_builder_async<K>(
-        &mut self,
-        domain_id: usize,
-        message_inputs: &'static [&'static str],
-        builder: impl FnOnce(BlockId) -> LocalBlockBuilder,
-        expect_msg: &str,
-    ) -> BlockRef<K> {
-        let local_id = self.local_domains[domain_id].reserve_block();
-        let placement = BlockPlacement::Local {
-            domain_id,
-            local_id,
-        };
-        let block_id = self.reserve_block_id(placement);
-        let inbox = self.local_domains[domain_id]
-            .build(local_id, builder(block_id))
-            .await
-            .expect(expect_msg);
-        let entry = &mut self.blocks[block_id.0];
-        entry.inbox = Some(inbox);
-        entry.message_inputs = Some(message_inputs);
-        self.block_ref(block_id, placement)
-    }
-
     /// Add a block to a local domain.
     ///
     /// The closure is executed inside the local domain, so it may construct
-    /// non-`Send` state that never leaves that domain. Use this for blocks
-    /// derived with `LocalBlock`, for non-`Send` buffers, or for integrations
-    /// that must remain thread-affine.
+    /// non-`Send` state that never leaves that domain. Use this for blocks with
+    /// non-`Send` buffers, non-`Send` futures, or integrations that must remain
+    /// thread-affine.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add_local<K>(
-        &mut self,
-        domain: LocalDomain,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: crate::runtime::__private::AddLocal + 'static,
-    {
-        crate::runtime::__private::AddLocal::add_local(block, self, domain)
-    }
-
-    /// Asynchronously add a block to a local domain.
-    pub async fn add_local_async<K>(
-        &mut self,
-        domain: LocalDomain,
-        block: impl FnOnce() -> K + Send + 'static,
-    ) -> BlockRef<K>
-    where
-        K: crate::runtime::__private::AddLocal + 'static,
-    {
-        crate::runtime::__private::AddLocal::add_local_async(block, self, domain).await
-    }
-
-    #[doc(hidden)]
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn __add_local_from_kernel<K>(
         &mut self,
         domain: LocalDomain,
         block: impl FnOnce() -> K + Send + 'static,
@@ -1031,8 +970,8 @@ impl Flowgraph {
         self.add_kernel_to_domain(domain_id, block)
     }
 
-    #[doc(hidden)]
-    pub async fn __add_local_from_kernel_async<K>(
+    /// Asynchronously add a block to a local domain.
+    pub async fn add_local_async<K>(
         &mut self,
         domain: LocalDomain,
         block: impl FnOnce() -> K + Send + 'static,
@@ -1066,21 +1005,29 @@ impl Flowgraph {
     where
         K: Kernel + KernelInterface + 'static,
     {
-        self.add_local_block_builder_async(
+        let local_id = self.local_domains[domain_id].reserve_block();
+        let placement = BlockPlacement::Local {
             domain_id,
-            <K as KernelInterface>::message_inputs(),
-            move |block_id| {
+            local_id,
+        };
+        let block_id = self.reserve_block_id(placement);
+        let inbox = self.local_domains[domain_id]
+            .build(
+                local_id,
                 Box::new(move || {
-                    let mut b = WrappedKernel::new(block(), block_id);
-                    let block_name = <K as KernelInterface>::type_name();
-                    b.meta
-                        .set_instance_name(format!("{}-{}", block_name, block_id.0));
-                    Box::new(b)
-                })
-            },
-            "failed to build block in local domain",
-        )
-        .await
+                    let mut block = WrappedKernel::new(block(), block_id);
+                    block
+                        .meta
+                        .set_instance_name(format!("{}-{}", K::type_name(), block_id.0));
+                    Box::new(block)
+                }),
+            )
+            .await
+            .expect("failed to build block in local domain");
+        let entry = &mut self.blocks[block_id.0];
+        entry.inbox = Some(inbox);
+        entry.message_inputs = Some(K::message_inputs());
+        self.block_ref(block_id, placement)
     }
 
     pub(crate) fn validate_block_ref<K>(&self, block: &BlockRef<K>) -> Result<(), Error> {

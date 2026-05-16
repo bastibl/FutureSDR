@@ -4,12 +4,10 @@
 //!
 //! - `connect!`, which adds blocks to a flowgraph and wires stream, local
 //!   stream, message, and circuit connections.
-//! - `#[derive(Block)]`, which generates the runtime interface for normal
-//!   send-capable block kernels.
-//! - `#[derive(LocalBlock)]`, which generates the runtime interface for
-//!   explicitly local block kernels.
+//! - `#[derive(Block)]`, which generates the runtime interface for block kernels.
+//! - `#[derive(LocalBlock)]`, an alias for `Block` used to document kernels meant
+//!   for local domains.
 use proc_macro::TokenStream;
-use quote::format_ident;
 use quote::quote;
 use syn::Attribute;
 use syn::Data;
@@ -469,7 +467,7 @@ fn port_bound_types(ty: &Type) -> Vec<Type> {
 //=========================================================================
 // BLOCK MACRO
 //=========================================================================
-/// Derive the runtime interface for a normal block kernel.
+/// Derive the runtime interface for a block kernel.
 ///
 /// `#[derive(Block)]` is used on a struct that implements `Kernel`. Fields
 /// marked with `#[input]` or `#[output]` become stream ports. Struct-level
@@ -518,14 +516,13 @@ fn port_bound_types(ty: &Type) -> Vec<Type> {
     )
 )]
 pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    derive_block_impl(input, false)
+    derive_block_impl(input)
 }
 
-/// Derive the runtime interface for an explicitly local block kernel.
+/// Alias for `#[derive(Block)]` kept for blocks that are intended to run in a
+/// local domain.
 ///
-/// This is the local counterpart to `#[derive(Block)]`. It supports the same
-/// port and metadata attributes, but the block is added through local flowgraph
-/// entry points.
+/// It supports the same port and metadata attributes as `Block`.
 #[proc_macro_derive(
     LocalBlock,
     attributes(
@@ -539,10 +536,10 @@ pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     )
 )]
 pub fn derive_local_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    derive_block_impl(input, true)
+    derive_block_impl(input)
 }
 
-fn derive_block_impl(input: proc_macro::TokenStream, _local: bool) -> proc_macro::TokenStream {
+fn derive_block_impl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let generics = &input.generics;
@@ -1160,18 +1157,6 @@ fn derive_block_impl(input: proc_macro::TokenStream, _local: bool) -> proc_macro
 
     let interface_trait = quote! { ::futuresdr::runtime::__private::KernelInterface };
     let work_io_type = quote! { ::futuresdr::runtime::dev::WorkIo };
-    let mut add_local_generics = kernel_interface_generics.clone();
-    {
-        let where_clause = add_local_generics.make_where_clause();
-        where_clause.predicates.push(parse_quote!(Self: 'static));
-        where_clause
-            .predicates
-            .push(parse_quote!(Self: ::futuresdr::runtime::dev::Kernel));
-    }
-    let (add_local_impl_generics, _, add_local_where_clause) = add_local_generics.split_for_impl();
-    let add_local_method = quote! { __add_local_from_kernel };
-    let add_local_async_method = format_ident!("__add_local_from_kernel_async");
-    let add_domain_method = quote! { __add_from_kernel };
     let port_getters = quote! {
         impl #generics #struct_name #unconstraint_generics
             #where_clause
@@ -1290,38 +1275,6 @@ fn derive_block_impl(input: proc_macro::TokenStream, _local: bool) -> proc_macro
 
                         #[allow(unreachable_code)]
                         ret.map_err(|e| Error::HandlerError(e.to_string()))
-            }
-        }
-
-        #[doc(hidden)]
-        impl #add_local_impl_generics ::futuresdr::runtime::__private::AddLocal for #struct_name #unconstraint_generics
-            #add_local_where_clause
-        {
-            #[cfg(not(target_arch = "wasm32"))]
-            fn add_local(
-                block: impl FnOnce() -> Self + Send + 'static,
-                fg: &mut ::futuresdr::runtime::Flowgraph,
-                domain: ::futuresdr::runtime::LocalDomain,
-            ) -> ::futuresdr::runtime::BlockRef<Self>
-            {
-                fg.#add_local_method(domain, block)
-            }
-
-            async fn add_local_async(
-                block: impl FnOnce() -> Self + Send + 'static,
-                fg: &mut ::futuresdr::runtime::Flowgraph,
-                domain: ::futuresdr::runtime::LocalDomain,
-            ) -> ::futuresdr::runtime::BlockRef<Self>
-            {
-                fg.#add_local_async_method(domain, block).await
-            }
-
-            fn add_domain(
-                block: Self,
-                ctx: &::futuresdr::runtime::LocalDomainContext<'_>,
-            ) -> ::futuresdr::runtime::BlockRef<Self>
-            {
-                ctx.#add_domain_method(block)
             }
         }
 

@@ -2,28 +2,11 @@ use crate::runtime::BlockRef;
 use crate::runtime::Error;
 use crate::runtime::Flowgraph;
 use crate::runtime::Result;
+use crate::runtime::dev::Kernel;
 use crate::runtime::dev::SendKernel;
-use crate::runtime::flowgraph::LocalDomain;
 use crate::runtime::flowgraph::LocalDomainContext;
+use crate::runtime::kernel_interface::KernelInterface;
 use crate::runtime::kernel_interface::SendKernelInterface;
-
-#[doc(hidden)]
-pub trait AddLocal: Sized {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn add_local(
-        block: impl FnOnce() -> Self + Send + 'static,
-        fg: &mut Flowgraph,
-        domain: LocalDomain,
-    ) -> BlockRef<Self>;
-
-    async fn add_local_async(
-        block: impl FnOnce() -> Self + Send + 'static,
-        fg: &mut Flowgraph,
-        domain: LocalDomain,
-    ) -> BlockRef<Self>;
-
-    fn add_domain(block: Self, ctx: &LocalDomainContext<'_>) -> BlockRef<Self>;
-}
 
 #[doc(hidden)]
 pub trait ConnectAdd<B> {
@@ -81,7 +64,7 @@ impl<K: 'static> ConnectAddAsync<BlockRef<K>> for &mut Flowgraph {
 
 impl<'ctx, 'borrow, K> ConnectAdd<K> for &'borrow LocalDomainContext<'ctx>
 where
-    K: AddLocal + 'static,
+    K: Kernel + KernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 
@@ -92,7 +75,7 @@ where
 
 impl<'ctx, 'borrow, K> ConnectAddAsync<K> for &'borrow LocalDomainContext<'ctx>
 where
-    K: AddLocal + 'static,
+    K: Kernel + KernelInterface + 'static,
 {
     type Added = BlockRef<K>;
 

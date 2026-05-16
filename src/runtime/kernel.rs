@@ -6,17 +6,6 @@ use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
 use futuresdr::runtime::Result;
 
-/// Default typed block-on future for kernels that never wait on a custom future.
-pub enum NoBlockOn {}
-
-impl Future for NoBlockOn {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-        match *self {}
-    }
-}
-
 /// Send-capable marker for normal runtime blocks.
 ///
 /// Custom block authors implement [`Kernel`]. Any `Kernel` whose value,
@@ -91,7 +80,7 @@ impl<T> SendKernel for T where
 /// ```
 pub trait Kernel {
     /// Typed future that may be used to wake the block again.
-    type BlockOn: Future<Output = ()> + 'static = NoBlockOn;
+    type BlockOn: Future<Output = ()> + 'static = std::future::Pending<()>;
 
     /// Return the typed future that should wake this block again.
     ///

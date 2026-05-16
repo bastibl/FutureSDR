@@ -4,9 +4,9 @@ Custom blocks implement the processing logic that runs inside a flowgraph. A blo
 
 - stream input/output fields marked with `#[input]` and `#[output]`,
 - optional message inputs and outputs declared on the struct,
-- a `Kernel` or `LocalKernel` implementation with `init()`, `work()`, and `deinit()` methods.
+- a `Kernel` implementation with `init()`, `work()`, and `deinit()` methods.
 
-Most native blocks should derive `Block` and implement `Kernel`. Use `LocalBlock` and `LocalKernel` only when the block needs non-`Send` state, non-`Send` futures, or local-only buffers.
+Most native blocks should derive `Block` and implement `Kernel`. Use `LocalBlock` as documentation when the block is meant for a local domain because it needs non-`Send` state, non-`Send` futures, or local-only buffers.
 
 ## Stream Block
 
@@ -120,7 +120,7 @@ The block may still be called earlier if stream data or a message arrives.
 
 ## Local Blocks
 
-Use `LocalBlock` and `LocalKernel` for non-`Send` state or non-`Send` futures:
+Use a local domain for non-`Send` state or non-`Send` futures. `LocalBlock` is an alias for `Block` that documents this intent:
 
 ```rust
 use futuresdr::runtime::dev::prelude::*;
@@ -131,10 +131,10 @@ pub struct UiBoundBlock {
     input: LocalCpuReader<f32>,
 }
 
-impl LocalKernel for UiBoundBlock {
+impl Kernel for UiBoundBlock {
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

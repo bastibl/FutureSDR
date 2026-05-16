@@ -12,7 +12,6 @@ use futuresdr::runtime::buffer::LocalCpuReader;
 use futuresdr::runtime::buffer::LocalCpuWriter;
 use futuresdr::runtime::dev::BlockMeta;
 use futuresdr::runtime::dev::Kernel;
-use futuresdr::runtime::dev::LocalWorkIo;
 use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
@@ -65,7 +64,7 @@ impl Kernel for NonSendLocalBlock {
 
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
@@ -130,7 +129,7 @@ impl NonSendLocalSource {
 impl Kernel for NonSendLocalSource {
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
@@ -179,7 +178,7 @@ impl NonSendLocalSink {
 impl Kernel for NonSendLocalSink {
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {

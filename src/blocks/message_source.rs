@@ -81,7 +81,7 @@ impl Kernel for MessageSource {
 
     async fn work(
         &mut self,
-        io: &mut LocalWorkIo,
+        io: &mut WorkIo,
         mo: &mut MessageOutputs,
         _b: &mut BlockMeta,
     ) -> Result<()> {
