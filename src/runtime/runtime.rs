@@ -114,6 +114,14 @@ impl<S: Scheduler> Runtime<S> {
         self.scheduler.spawn(future)
     }
 
+    /// Spawn an async task on the runtime scheduler and detach it immediately.
+    pub fn spawn_background<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) {
+        self.scheduler.spawn(future).detach();
+    }
+
     /// Start a [`Flowgraph`] on the [`Runtime`] and await initialization.
     ///
     /// Returns once the flowgraph is initialized and running. The returned
@@ -154,14 +162,6 @@ impl<S: Scheduler> Runtime<S> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<S: Scheduler> Runtime<S> {
-    /// Spawn an async task on the runtime scheduler and detach it immediately.
-    pub fn spawn_background<T: Send + 'static>(
-        &self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) {
-        self.scheduler.spawn(future).detach();
-    }
-
     /// Start a [`Flowgraph`] on the [`Runtime`].
     ///
     /// Blocks until the flowgraph is initialized and running.
@@ -304,34 +304,11 @@ async fn start_flowgraph<S: Scheduler>(
     let (tx, rx) = oneshot::channel::<Result<(), Error>>();
     let task = spawn_run_flowgraph(scheduler, fg, fg_inbox.clone(), fg_inbox_rx, tx);
 
-    await_flowgraph_startup(rx)
-        .await
+    rx.await
         .map_err(|_| Error::RuntimeError("run_flowgraph panicked".to_string()))??;
 
     let handle = FlowgraphHandle::new(fg_inbox);
     Ok(RunningFlowgraph::new(handle, FlowgraphTask::new(task)))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn await_flowgraph_startup(
-    rx: oneshot::Receiver<Result<(), Error>>,
-) -> std::result::Result<Result<(), Error>, oneshot::Canceled> {
-    rx.await
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn await_flowgraph_startup(
-    rx: oneshot::Receiver<Result<(), Error>>,
-) -> std::result::Result<Result<(), Error>, oneshot::Canceled> {
-    use futures::FutureExt;
-
-    let mut rx = Box::pin(rx);
-    loop {
-        if let Some(result) = rx.as_mut().now_or_never() {
-            return result;
-        }
-        gloo_timers::future::TimeoutFuture::new(1).await;
-    }
 }
 
 fn spawn_run_flowgraph<S: Scheduler>(
