@@ -1,5 +1,6 @@
 #![warn(missing_docs)]
 #![feature(return_type_notation)]
+#![feature(associated_type_defaults)]
 #![recursion_limit = "512"]
 
 //! An experimental asynchronous SDR runtime for heterogeneous architectures that is:

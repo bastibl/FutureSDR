@@ -7,6 +7,7 @@ use futures::future::Either;
 use futures::sink::Sink;
 use futures::sink::SinkExt;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -43,6 +44,7 @@ pub struct WebsocketPmtSink {
     listener: Option<Arc<Async<TcpListener>>>,
     conn: Option<WsStream>,
     pmts: VecDeque<Pmt>,
+    block_on: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl WebsocketPmtSink {
@@ -53,6 +55,7 @@ impl WebsocketPmtSink {
             listener: None,
             conn: None,
             pmts: VecDeque::new(),
+            block_on: None,
         }
     }
 
@@ -77,6 +80,12 @@ impl WebsocketPmtSink {
 
 #[doc(hidden)]
 impl Kernel for WebsocketPmtSink {
+    type BlockOn = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Pin<Box<dyn Future<Output = ()> + Send>>>> {
+        self.block_on.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut WorkIo,
@@ -186,9 +195,10 @@ impl Kernel for WebsocketPmtSink {
                 }
                 _ => {
                     let l = self.listener.as_ref().unwrap().clone();
-                    io.block_on(async move {
+                    self.block_on = Some(Box::pin(async move {
                         l.readable().await.unwrap();
-                    });
+                    }));
+                    io.block_on();
                 }
             }
         }

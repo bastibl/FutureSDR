@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use crate::runtime::Timer;
 use crate::runtime::dev::prelude::*;
 use web_time::Instant;
@@ -32,6 +34,7 @@ pub struct Throttle<
     rate: f64,
     t_init: Instant,
     n_items: usize,
+    timer: Option<Timer>,
 }
 
 impl<T, I, O> Throttle<T, I, O>
@@ -48,6 +51,7 @@ where
             rate,
             t_init: Instant::now(),
             n_items: 0,
+            timer: None,
         }
     }
 }
@@ -60,6 +64,12 @@ where
     I: CpuBufferReader<Item = T>,
     O: CpuBufferWriter<Item = T>,
 {
+    type BlockOn = Timer;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Timer>> {
+        self.timer.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut WorkIo,
@@ -91,9 +101,8 @@ where
             io.finished = true;
         }
 
-        io.block_on(async {
-            Timer::after(std::time::Duration::from_millis(100)).await;
-        });
+        self.timer = Some(Timer::after(std::time::Duration::from_millis(100)));
+        io.block_on();
 
         Ok(())
     }
@@ -113,6 +122,12 @@ where
     I: CpuBufferReader<Item = T>,
     O: CpuBufferWriter<Item = T>,
 {
+    type BlockOn = Timer;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Timer>> {
+        self.timer.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut LocalWorkIo,
@@ -144,9 +159,8 @@ where
             io.finished = true;
         }
 
-        io.block_on(async {
-            Timer::after(std::time::Duration::from_millis(100)).await;
-        });
+        self.timer = Some(Timer::after(std::time::Duration::from_millis(100)));
+        io.block_on();
 
         Ok(())
     }

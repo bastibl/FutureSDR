@@ -120,7 +120,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         let mut io = WorkIo {
             call_again: false,
             finished: false,
-            block_on: None,
+            block_on: false,
         };
 
         let WrappedKernel {
@@ -177,7 +177,7 @@ impl<K: SendKernelInterface + SendKernel + 'static> Mocker<K> {
         let mut io = WorkIo {
             call_again: false,
             finished: false,
-            block_on: None,
+            block_on: false,
         };
 
         loop {

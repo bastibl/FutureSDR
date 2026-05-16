@@ -18,6 +18,8 @@ use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
 use futuresdr::runtime::macros::LocalBlock;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -42,6 +44,7 @@ fn assert_validation_contains(
 struct NonSendLocalBlock {
     state: Rc<()>,
     waited: bool,
+    block_on: Option<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl NonSendLocalBlock {
@@ -49,11 +52,18 @@ impl NonSendLocalBlock {
         Self {
             state: Rc::new(()),
             waited: false,
+            block_on: None,
         }
     }
 }
 
 impl LocalKernel for NonSendLocalBlock {
+    type BlockOn = Pin<Box<dyn Future<Output = ()>>>;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Pin<Box<dyn Future<Output = ()>>>>> {
+        self.block_on.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut LocalWorkIo,
@@ -66,9 +76,10 @@ impl LocalKernel for NonSendLocalBlock {
             self.waited = true;
             let state = self.state.clone();
             io.call_again = false;
-            io.block_on(async move {
+            self.block_on = Some(Box::pin(async move {
                 let _state = state;
-            });
+            }));
+            io.block_on();
         }
         Ok(())
     }

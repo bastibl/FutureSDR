@@ -34,6 +34,7 @@ pub use super::flowgraph::TypedBlockGuard;
 pub use super::flowgraph::TypedBlockGuardMut;
 pub use super::kernel::Kernel;
 pub use super::kernel::LocalKernel;
+pub use super::kernel::NoBlockOn;
 pub use super::kernel::SendKernel;
 pub use super::message_output::MessageOutputs;
 pub use super::tag::ItemTag;
@@ -80,6 +81,7 @@ pub mod prelude {
     pub use crate::runtime::dev::LocalKernel;
     pub use crate::runtime::dev::LocalWorkIo;
     pub use crate::runtime::dev::MessageOutputs;
+    pub use crate::runtime::dev::NoBlockOn;
     pub use crate::runtime::dev::SendCircuitWriter;
     pub use crate::runtime::dev::SendInplaceReader;
     pub use crate::runtime::dev::SendInplaceWriter;

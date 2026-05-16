@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::pin::Pin;
 
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::LocalWorkIo;
@@ -6,19 +7,36 @@ use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
 use futuresdr::runtime::Result;
 
+/// Default typed block-on future for kernels that never wait on a custom future.
+pub enum NoBlockOn {}
+
+impl Future for NoBlockOn {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        match *self {}
+    }
+}
+
 /// Send-capable marker for normal runtime blocks.
 ///
-/// Custom block authors implement [`Kernel`]. Any `Kernel` whose value and
-/// kernel futures are `Send` automatically implements `SendKernel`, which is
-/// the proof required by normal flowgraph entry points.
+/// Custom block authors implement [`Kernel`]. Any `Kernel` whose value,
+/// block-on future, and kernel futures are `Send` automatically implements
+/// `SendKernel`, which is the proof required by normal flowgraph entry points.
 pub trait SendKernel: Kernel + Send
 where
+    Self::BlockOn: Send,
     Self: Kernel<work(..): Send, init(..): Send, deinit(..): Send>,
     Self: Send,
 {
 }
 
-impl<T> SendKernel for T where T: Kernel<work(..): Send, init(..): Send, deinit(..): Send> + Send {}
+impl<T> SendKernel for T
+where
+    T::BlockOn: Send,
+    T: Kernel<work(..): Send, init(..): Send, deinit(..): Send> + Send,
+{
+}
 
 /// Processing logic for a block.
 ///
@@ -75,6 +93,17 @@ impl<T> SendKernel for T where T: Kernel<work(..): Send, init(..): Send, deinit(
 /// }
 /// ```
 pub trait Kernel {
+    /// Typed future that may be used to wake the block again.
+    type BlockOn: Future<Output = ()> + Send + 'static = NoBlockOn;
+
+    /// Return the typed future that should wake this block again.
+    ///
+    /// This is queried after [`WorkIo::block_on`] has been set. Returning
+    /// `None` falls back to waiting only for inbox/stream notifications.
+    fn block_on(&mut self) -> Option<Pin<&mut Self::BlockOn>> {
+        None
+    }
+
     /// Process stream data and emit messages.
     ///
     /// Implementations inspect their input buffers, write output buffers, update
@@ -124,6 +153,17 @@ pub trait Kernel {
 /// [`LocalDomain`](crate::runtime::LocalDomain), which is backed by a dedicated
 /// thread on native targets and by a web worker on WASM.
 pub trait LocalKernel {
+    /// Typed future that may be used to wake the block again.
+    type BlockOn: Future<Output = ()> + 'static = NoBlockOn;
+
+    /// Return the typed future that should wake this block again.
+    ///
+    /// This is queried after [`LocalWorkIo::block_on`] has been set. Returning
+    /// `None` falls back to waiting only for inbox/stream notifications.
+    fn block_on(&mut self) -> Option<Pin<&mut Self::BlockOn>> {
+        None
+    }
+
     /// Process stream data and emit messages.
     fn work(
         &mut self,

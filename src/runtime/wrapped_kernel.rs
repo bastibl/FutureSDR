@@ -1,4 +1,3 @@
-use futures::future::Either;
 use std::any::Any;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -104,7 +103,7 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
         let mut work_io = WorkIo {
             call_again: true,
             finished: false,
-            block_on: None,
+            block_on: false,
         };
 
         loop {
@@ -245,23 +244,25 @@ impl<K: KernelInterface + 'static> WrappedKernel<K> {
             }
 
             if !work_io.call_again {
-                match work_io.block_on.take() {
-                    Some(f) => {
-                        if let Either::Right((_, f)) =
-                            futures::future::select(f, inbox.notified()).await
-                        {
-                            work_io.block_on = Some(f);
+                if work_io.block_on {
+                    match <K as Kernel>::block_on(kernel) {
+                        Some(f) => {
+                            let _ = futures::future::select(f, inbox.notified()).await;
+                        }
+                        None => {
+                            inbox.notified().await;
                         }
                     }
-                    None => {
-                        inbox.notified().await;
-                    }
+                } else {
+                    inbox.notified().await;
                 }
+                work_io.block_on = false;
                 work_io.call_again = true;
                 continue;
             }
 
             work_io.call_again = false;
+            work_io.block_on = false;
             if let Err(e) = kernel.work(&mut work_io, mo, meta).await {
                 error!("{}: Error in work(). Terminating. ({:?})", instance_name, e);
                 return Err(Error::RuntimeError(e.to_string()));
@@ -313,7 +314,7 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
         let mut work_io = LocalWorkIo {
             call_again: true,
             finished: false,
-            block_on: None,
+            block_on: false,
         };
 
         loop {
@@ -454,23 +455,25 @@ impl<K: LocalKernelInterface + 'static> WrappedLocalKernel<K> {
             }
 
             if !work_io.call_again {
-                match work_io.block_on.take() {
-                    Some(f) => {
-                        if let Either::Right((_, f)) =
-                            futures::future::select(f, inbox.notified()).await
-                        {
-                            work_io.block_on = Some(f);
+                if work_io.block_on {
+                    match <K as LocalKernel>::block_on(kernel) {
+                        Some(f) => {
+                            let _ = futures::future::select(f, inbox.notified()).await;
+                        }
+                        None => {
+                            inbox.notified().await;
                         }
                     }
-                    None => {
-                        inbox.notified().await;
-                    }
+                } else {
+                    inbox.notified().await;
                 }
+                work_io.block_on = false;
                 work_io.call_again = true;
                 continue;
             }
 
             work_io.call_again = false;
+            work_io.block_on = false;
             if let Err(e) = LocalKernel::work(kernel, &mut work_io, mo, meta).await {
                 error!("{}: Error in work(). Terminating. ({:?})", instance_name, e);
                 return Err(Error::RuntimeError(e.to_string()));

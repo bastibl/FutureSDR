@@ -1,14 +1,11 @@
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 
 /// Work-loop control flags returned from [`Kernel::work`](crate::runtime::dev::Kernel::work).
 ///
 /// A block sets these fields during `work()` to tell the scheduler whether it
 /// should run again immediately, wait on an async condition, or stop the block.
-/// The runtime creates a fresh value for each scheduling turn, except for the
-/// future stored in [`WorkIo::block_on`] while it is waiting.
-pub struct WorkIo<F: Future<Output = ()> + ?Sized = dyn Future<Output = ()> + Send> {
+/// The runtime creates a fresh value for each scheduling turn.
+pub struct WorkIo {
     /// Schedule the block again immediately after the current `work()` call.
     ///
     /// Use this when the block knows it can make more progress without waiting
@@ -19,44 +16,37 @@ pub struct WorkIo<F: Future<Output = ()> + ?Sized = dyn Future<Output = ()> + Se
     /// Once set, the runtime stops calling `work()` for the block and notifies
     /// connected downstream ports.
     pub finished: bool,
-    /// Future that must resolve before the block is called again.
+    /// Wait for the block's typed future before calling `work()` again.
     ///
-    /// The block will be called if new work arrives or if the future resolves,
+    /// The block will be called if new work arrives or if the future returned
+    /// from [`Kernel::block_on`](crate::runtime::dev::Kernel::block_on) resolves,
     /// whichever happens first.
-    pub block_on: Option<Pin<Box<F>>>,
+    pub block_on: bool,
 }
 
-impl WorkIo<dyn Future<Output = ()> + Send> {
-    /// Set the future that should wake this block again.
+impl WorkIo {
+    /// Wait for the block's typed future before calling this block again.
     ///
     /// The block may still be called earlier if stream data, a message, or a
     /// control notification arrives before the future resolves.
-    pub fn block_on<F: Future<Output = ()> + Send + 'static>(&mut self, f: F) {
-        self.block_on = Some(Box::pin(f));
+    pub fn block_on(&mut self) {
+        self.block_on = true;
     }
 }
 
-impl<F: Future<Output = ()> + ?Sized> fmt::Debug for WorkIo<F> {
+impl fmt::Debug for WorkIo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("WorkIo")
             .field("call_again", &self.call_again)
             .field("finished", &self.finished)
+            .field("block_on", &self.block_on)
             .finish()
     }
 }
 
 /// Work-loop control flags for explicitly local kernels.
 ///
-/// This is the local counterpart to [`WorkIo`]. Its `block_on` method accepts
-/// non-`Send` futures, so using it keeps a block on the local runtime path.
-pub type LocalWorkIo = WorkIo<dyn Future<Output = ()>>;
-
-impl WorkIo<dyn Future<Output = ()>> {
-    /// Set the future that should wake this block again.
-    ///
-    /// The future is polled on the local-domain executor and therefore does not
-    /// need to be `Send`.
-    pub fn block_on<F: Future<Output = ()> + 'static>(&mut self, f: F) {
-        self.block_on = Some(Box::pin(f));
-    }
-}
+/// This is currently the same type as [`WorkIo`]. The local-vs-send distinction
+/// lives in [`LocalKernel`](crate::runtime::dev::LocalKernel)'s typed block-on
+/// future, which is allowed to be non-`Send`.
+pub type LocalWorkIo = WorkIo;

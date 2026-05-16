@@ -1,3 +1,4 @@
+use std::pin::Pin;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -13,6 +14,7 @@ pub struct MessageSource {
     interval: Duration,
     t_last: Instant,
     n_messages: Option<usize>,
+    timer: Option<Timer>,
 }
 
 impl MessageSource {
@@ -23,17 +25,20 @@ impl MessageSource {
             interval,
             t_last: Instant::now(),
             n_messages,
+            timer: None,
         }
-    }
-
-    async fn sleep(dur: Duration) {
-        Timer::after(dur).await;
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 impl Kernel for MessageSource {
+    type BlockOn = Timer;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Timer>> {
+        self.timer.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut WorkIo,
@@ -53,9 +58,8 @@ impl Kernel for MessageSource {
             }
         }
 
-        io.block_on(MessageSource::sleep(
-            self.t_last + self.interval - Instant::now(),
-        ));
+        self.timer = Some(Timer::after(self.t_last + self.interval - Instant::now()));
+        io.block_on();
 
         Ok(())
     }
@@ -69,6 +73,12 @@ impl Kernel for MessageSource {
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 impl LocalKernel for MessageSource {
+    type BlockOn = Timer;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Timer>> {
+        self.timer.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut LocalWorkIo,
@@ -88,9 +98,8 @@ impl LocalKernel for MessageSource {
             }
         }
 
-        io.block_on(MessageSource::sleep(
-            self.t_last + self.interval - Instant::now(),
-        ));
+        self.timer = Some(Timer::after(self.t_last + self.interval - Instant::now()));
+        io.block_on();
 
         Ok(())
     }

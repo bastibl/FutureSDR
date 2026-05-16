@@ -6,6 +6,7 @@ use futures::future;
 use futures::future::Either;
 use futures::sink::Sink;
 use futures::sink::SinkExt;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::net::SocketAddr;
@@ -52,6 +53,7 @@ pub struct WebsocketSink<T: CpuSample, I: CpuBufferReader<Item = T> = DefaultCpu
     listener: Option<Arc<Async<TcpListener>>>,
     conn: Option<WsStream>,
     mode: WebsocketSinkMode,
+    block_on: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     _p: PhantomData<T>,
 }
 
@@ -68,6 +70,7 @@ where
             listener: None,
             conn: None,
             mode,
+            block_on: None,
             _p: PhantomData,
         }
     }
@@ -79,6 +82,12 @@ where
     T: CpuSample,
     I: CpuBufferReader<Item = T>,
 {
+    type BlockOn = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+    fn block_on(&mut self) -> Option<Pin<&mut Pin<Box<dyn Future<Output = ()> + Send>>>> {
+        self.block_on.as_mut().map(Pin::new)
+    }
+
     async fn work(
         &mut self,
         io: &mut WorkIo,
@@ -175,9 +184,10 @@ where
                     }
 
                     let l = self.listener.as_ref().unwrap().clone();
-                    io.block_on(async move {
+                    self.block_on = Some(Box::pin(async move {
                         l.readable().await.unwrap();
-                    });
+                    }));
+                    io.block_on();
                 }
             }
         }
