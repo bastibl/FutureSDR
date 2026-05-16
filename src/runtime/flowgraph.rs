@@ -12,6 +12,7 @@ use crate::runtime::BlockDescription;
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::BlockPortCtx;
+use crate::runtime::Edge;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphDescription;
 use crate::runtime::FlowgraphId;
@@ -198,32 +199,11 @@ enum StreamPlan {
     },
 }
 
-pub(crate) type TopologyEdge = (BlockId, PortId, BlockId, PortId);
 pub(crate) struct StartupSnapshot {
     inboxes: Vec<Option<BlockInbox>>,
     ids: Vec<BlockId>,
-    stream_edges: Vec<TopologyEdge>,
-    message_edges: Vec<TopologyEdge>,
-}
-
-/// Type-erased stream edge between two stream ports.
-#[derive(Debug, Clone)]
-pub(crate) struct StreamEdge {
-    pub(crate) src_block: BlockId,
-    pub(crate) src_port: PortId,
-    pub(crate) dst_block: BlockId,
-    pub(crate) dst_port: PortId,
-}
-
-impl StreamEdge {
-    pub(crate) fn endpoints(&self) -> TopologyEdge {
-        (
-            self.src_block,
-            self.src_port.clone(),
-            self.dst_block,
-            self.dst_port.clone(),
-        )
-    }
+    stream_edges: Vec<Edge>,
+    message_edges: Vec<Edge>,
 }
 
 /// Handle for a local scheduling domain inside a [`Flowgraph`].
@@ -409,7 +389,7 @@ impl<'a> LocalDomainContext<'a> {
             )?;
             Flowgraph::connect_stream_ports(src_port(src), dst_port(dst))
         };
-        inner.state.add_stream_edge(edge.endpoints());
+        inner.state.add_stream_edge(edge);
         Ok(())
     }
 
@@ -520,9 +500,12 @@ impl<'a> LocalDomainContext<'a> {
         let dst_box = dst_block.inbox();
         let src_block = inner.state.block_mut(src_local, src_block_id)?;
         src_block.connect(&src_port_id, dst_box, &dst_port_id)?;
-        inner
-            .state
-            .add_message_edge((src_block_id, src_port_id, dst_block_id, dst_port_id));
+        inner.state.add_message_edge(Edge::new(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ));
         Ok(())
     }
 }
@@ -760,8 +743,8 @@ pub struct Flowgraph {
     pub(crate) id: FlowgraphId,
     pub(crate) blocks: Vec<BlockEntry>,
     pub(crate) local_domains: Vec<LocalDomainRuntime>,
-    pub(crate) stream_edges: Vec<StreamEdge>,
-    pub(crate) message_edges: Vec<TopologyEdge>,
+    pub(crate) stream_edges: Vec<Edge>,
+    pub(crate) message_edges: Vec<Edge>,
 }
 
 impl Flowgraph {
@@ -1372,16 +1355,13 @@ impl Flowgraph {
         })
     }
 
-    fn connect_stream_ports<B: BufferWriter>(
-        src_port: &mut B,
-        dst_port: &mut B::Reader,
-    ) -> StreamEdge {
-        let edge = StreamEdge {
-            src_block: src_port.block_id(),
-            src_port: src_port.port_id(),
-            dst_block: dst_port.block_id(),
-            dst_port: dst_port.port_id(),
-        };
+    fn connect_stream_ports<B: BufferWriter>(src_port: &mut B, dst_port: &mut B::Reader) -> Edge {
+        let edge = Edge::new(
+            src_port.block_id(),
+            src_port.port_id(),
+            dst_port.block_id(),
+            dst_port.port_id(),
+        );
         src_port.connect(dst_port);
         edge
     }
@@ -1393,7 +1373,7 @@ impl Flowgraph {
         dst_block_id: BlockId,
         dst_port_id: &PortId,
         dst_block: &mut dyn BlockObject,
-    ) -> Result<StreamEdge, Error> {
+    ) -> Result<Edge, Error> {
         let reader = dst_block.stream_input(dst_port_id).map_err(|e| match e {
             Error::InvalidStreamPort(_, port) => {
                 Error::InvalidStreamPort(crate::runtime::BlockPortCtx::Id(dst_block_id), port)
@@ -1410,12 +1390,12 @@ impl Flowgraph {
                 o => o,
             })?;
 
-        Ok(StreamEdge {
-            src_block: src_block_id,
-            src_port: src_port_id.clone(),
-            dst_block: dst_block_id,
-            dst_port: dst_port_id.clone(),
-        })
+        Ok(Edge::new(
+            src_block_id,
+            src_port_id.clone(),
+            dst_block_id,
+            dst_port_id.clone(),
+        ))
     }
 
     async fn connect_local_local_stream_async<KS, KD, B, FS, FD>(
@@ -1424,7 +1404,7 @@ impl Flowgraph {
         src_port: FS,
         dst: LocalEndpoint,
         dst_port: FD,
-    ) -> Result<StreamEdge, Error>
+    ) -> Result<Edge, Error>
     where
         KS: 'static,
         KD: 'static,
@@ -1462,7 +1442,7 @@ impl Flowgraph {
         src_port: FS,
         dst: LocalEndpoint,
         dst_port: FD,
-    ) -> Result<StreamEdge, Error>
+    ) -> Result<Edge, Error>
     where
         KS: 'static,
         KD: 'static,
@@ -1569,7 +1549,7 @@ impl Flowgraph {
         src_port: FS,
         dst_id: BlockId,
         dst_port: FD,
-    ) -> Result<StreamEdge, Error>
+    ) -> Result<Edge, Error>
     where
         KS: 'static,
         KD: 'static,
@@ -1594,7 +1574,7 @@ impl Flowgraph {
         src_port: FS,
         dst: LocalEndpoint,
         dst_port: FD,
-    ) -> Result<StreamEdge, Error>
+    ) -> Result<Edge, Error>
     where
         KS: 'static,
         KD: 'static,
@@ -1619,7 +1599,7 @@ impl Flowgraph {
         src_port_id: &PortId,
         dst_block_id: BlockId,
         dst_port_id: &PortId,
-    ) -> Result<StreamEdge, Error> {
+    ) -> Result<Edge, Error> {
         let (src_slot, dst_slot) = self.two_block_entries_mut(src_block_id, dst_block_id)?;
         let src_block = src_slot
             .block
@@ -1647,7 +1627,7 @@ impl Flowgraph {
         src_port_id: PortId,
         dst: LocalEndpoint,
         dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
+    ) -> Result<Edge, Error> {
         if src.domain_id != dst.domain_id {
             return Err(Error::ValidationError(
                 "stream connections between different local domains are not supported".to_string(),
@@ -1684,7 +1664,7 @@ impl Flowgraph {
         src_port_id: PortId,
         dst_id: BlockId,
         dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
+    ) -> Result<Edge, Error> {
         self.with_normal_local_blocks_mut_async(dst_id, src, move |dst_block, src_block| {
             Self::connect_stream_ports_dyn(
                 src.block_id,
@@ -1704,7 +1684,7 @@ impl Flowgraph {
         src_port_id: PortId,
         dst: LocalEndpoint,
         dst_port_id: PortId,
-    ) -> Result<StreamEdge, Error> {
+    ) -> Result<Edge, Error> {
         self.with_normal_local_blocks_mut_async(src_id, dst, move |src_block, dst_block| {
             Self::connect_stream_ports_dyn(
                 src_id,
@@ -2145,8 +2125,12 @@ impl Flowgraph {
                     .await?;
             }
         }
-        self.message_edges
-            .push((src_block_id, src_port_id, dst_block_id, dst_port_id));
+        self.message_edges.push(Edge::new(
+            src_block_id,
+            src_port_id,
+            dst_block_id,
+            dst_port_id,
+        ));
         Ok(())
     }
 
@@ -2162,9 +2146,11 @@ impl Flowgraph {
         let StartupSnapshot {
             mut inboxes,
             ids,
-            stream_edges: stream_edges_desc,
-            message_edges: message_edges_desc,
+            stream_edges,
+            message_edges,
         } = self.startup_snapshot()?.await?;
+        let stream_edges_desc = Self::edge_endpoints(&stream_edges);
+        let message_edges_desc = Self::edge_endpoints(&message_edges);
         let blocks = self.take_blocks()?;
         let block_tasks = scheduler.run_domain(blocks, &main_channel);
         let local_tasks = self.run_local_domains(main_channel.clone()).await?;
@@ -2426,7 +2412,7 @@ impl Flowgraph {
         Error,
     > {
         let (inboxes, ids) = self.inboxes()?;
-        let mut stream_edges = self.stream_edge_endpoints();
+        let mut stream_edges = self.stream_edges.clone();
         let mut message_edges = self.message_edges.clone();
         let domain_handles = self
             .local_domains
@@ -2463,11 +2449,8 @@ impl Flowgraph {
         Ok(tasks)
     }
 
-    pub(crate) fn stream_edge_endpoints(&self) -> Vec<TopologyEdge> {
-        self.stream_edges
-            .iter()
-            .map(StreamEdge::endpoints)
-            .collect()
+    pub(crate) fn edge_endpoints(edges: &[Edge]) -> Vec<(BlockId, PortId, BlockId, PortId)> {
+        edges.iter().map(Edge::endpoints).collect()
     }
 
     pub(crate) fn restore_blocks(

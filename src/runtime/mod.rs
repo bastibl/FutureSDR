@@ -95,6 +95,39 @@ pub use futuresdr_types::Pmt;
 pub use futuresdr_types::PmtKind;
 pub use futuresdr_types::PortId;
 
+#[derive(Debug, Clone)]
+pub(crate) struct Edge {
+    pub(crate) src_block: BlockId,
+    pub(crate) src_port: PortId,
+    pub(crate) dst_block: BlockId,
+    pub(crate) dst_port: PortId,
+}
+
+impl Edge {
+    pub(crate) fn new(
+        src_block: BlockId,
+        src_port: PortId,
+        dst_block: BlockId,
+        dst_port: PortId,
+    ) -> Self {
+        Self {
+            src_block,
+            src_port,
+            dst_block,
+            dst_port,
+        }
+    }
+
+    pub(crate) fn endpoints(&self) -> (BlockId, PortId, BlockId, PortId) {
+        (
+            self.src_block,
+            self.src_port.clone(),
+            self.dst_block,
+            self.dst_port.clone(),
+        )
+    }
+}
+
 /// Block the current thread until a future completes.
 ///
 /// This is a small convenience wrapper around the native async executor and is

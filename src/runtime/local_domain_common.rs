@@ -2,9 +2,9 @@ use futures::Future;
 use std::pin::Pin;
 
 use crate::runtime::BlockId;
+use crate::runtime::Edge;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
-use crate::runtime::PortId;
 use crate::runtime::block::BlockObject;
 use crate::runtime::block::LocalBlock;
 use crate::runtime::channel::mpsc::Sender;
@@ -19,12 +19,10 @@ pub(crate) type LocalDomainAsyncExec = Box<
         + 'static,
 >;
 
-pub(crate) type TopologyEdge = (BlockId, PortId, BlockId, PortId);
-
 pub(crate) struct LocalDomainState {
     blocks: Vec<Option<Box<dyn LocalBlock>>>,
-    stream_edges: Vec<TopologyEdge>,
-    message_edges: Vec<TopologyEdge>,
+    stream_edges: Vec<Edge>,
+    message_edges: Vec<Edge>,
 }
 
 impl LocalDomainState {
@@ -36,15 +34,15 @@ impl LocalDomainState {
         }
     }
 
-    pub(crate) fn add_stream_edge(&mut self, edge: TopologyEdge) {
+    pub(crate) fn add_stream_edge(&mut self, edge: Edge) {
         self.stream_edges.push(edge);
     }
 
-    pub(crate) fn add_message_edge(&mut self, edge: TopologyEdge) {
+    pub(crate) fn add_message_edge(&mut self, edge: Edge) {
         self.message_edges.push(edge);
     }
 
-    pub(crate) fn topology(&self) -> (Vec<TopologyEdge>, Vec<TopologyEdge>) {
+    pub(crate) fn topology(&self) -> (Vec<Edge>, Vec<Edge>) {
         (self.stream_edges.clone(), self.message_edges.clone())
     }
 

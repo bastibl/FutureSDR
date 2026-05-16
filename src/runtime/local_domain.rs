@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::thread;
 
 use crate::runtime::BlockMessage;
+use crate::runtime::Edge;
 use crate::runtime::Error;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::channel::mpsc;
@@ -15,7 +16,6 @@ use crate::runtime::dev::BlockInbox;
 use crate::runtime::local_domain_common::LocalBlockBuilder;
 use crate::runtime::local_domain_common::LocalDomainMessage;
 use crate::runtime::local_domain_common::LocalDomainState;
-use crate::runtime::local_domain_common::TopologyEdge;
 
 pub(crate) struct LocalDomainRuntime {
     controller: LocalDomainController,
@@ -109,9 +109,7 @@ pub(crate) struct LocalDomainHandle {
 }
 
 impl LocalDomainHandle {
-    pub(crate) async fn topology_async(
-        &self,
-    ) -> Result<(Vec<TopologyEdge>, Vec<TopologyEdge>), Error> {
+    pub(crate) async fn topology_async(&self) -> Result<(Vec<Edge>, Vec<Edge>), Error> {
         self.exec(|state| Box::pin(async move { Ok(state.topology()) }))
             .await
     }
