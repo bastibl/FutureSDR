@@ -6,8 +6,7 @@ use crate::runtime::Timer;
 use crate::runtime::dev::prelude::*;
 
 /// Output the same message periodically.
-#[cfg_attr(not(target_arch = "wasm32"), derive(Block))]
-#[cfg_attr(target_arch = "wasm32", derive(LocalBlock))]
+#[derive(Block)]
 #[message_outputs(out)]
 pub struct MessageSource {
     message: Pmt,

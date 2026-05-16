@@ -69,7 +69,6 @@ mod wrapped_kernel;
 /// Macros for building flowgraphs and implementing blocks.
 pub mod macros {
     pub use futuresdr_macros::Block;
-    pub use futuresdr_macros::LocalBlock;
     pub use futuresdr_macros::connect;
     pub use futuresdr_macros::connect_async;
 }

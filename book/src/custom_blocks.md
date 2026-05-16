@@ -6,7 +6,7 @@ Custom blocks implement the processing logic that runs inside a flowgraph. A blo
 - optional message inputs and outputs declared on the struct,
 - a `Kernel` implementation with `init()`, `work()`, and `deinit()` methods.
 
-Most native blocks should derive `Block` and implement `Kernel`. Use `LocalBlock` as documentation when the block is meant for a local domain because it needs non-`Send` state, non-`Send` futures, or local-only buffers.
+Blocks derive `Block` and implement `Kernel`. Blocks that need non-`Send` state, non-`Send` futures, or local-only buffers can run in a local domain.
 
 ## Stream Block
 
@@ -110,22 +110,16 @@ Use `#[message_inputs(set_gain = "gain")]` when the public port name should diff
 
 All methods receive `MessageOutputs` and `BlockMeta`. `work()` also receives `WorkIo`, which is the block's way to communicate scheduling decisions back to the runtime.
 
-Use `io.block_on(future)` when the block should sleep until a timer or other async condition completes:
-
-```rust
-io.block_on(Timer::after(std::time::Duration::from_millis(10)));
-```
-
-The block may still be called earlier if stream data or a message arrives.
+Use `io.block_on()` when the block should sleep until the future returned by `Kernel::block_on()` completes. The block may still be called earlier if stream data or a message arrives.
 
 ## Local Blocks
 
-Use a local domain for non-`Send` state or non-`Send` futures. `LocalBlock` is an alias for `Block` that documents this intent:
+Use a local domain for non-`Send` state or non-`Send` futures:
 
 ```rust
 use futuresdr::runtime::dev::prelude::*;
 
-#[derive(LocalBlock)]
+#[derive(Block)]
 pub struct UiBoundBlock {
     #[input]
     input: LocalCpuReader<f32>,

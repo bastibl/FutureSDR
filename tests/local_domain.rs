@@ -15,7 +15,6 @@ use futuresdr::runtime::dev::Kernel;
 use futuresdr::runtime::dev::MessageOutputs;
 use futuresdr::runtime::dev::WorkIo;
 use futuresdr::runtime::macros::Block;
-use futuresdr::runtime::macros::LocalBlock;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -38,7 +37,7 @@ fn assert_validation_contains(
     }
 }
 
-#[derive(LocalBlock)]
+#[derive(Block)]
 struct NonSendLocalBlock {
     state: Rc<()>,
     waited: bool,
@@ -108,7 +107,7 @@ impl Kernel for BlockingNoop {
     }
 }
 
-#[derive(LocalBlock)]
+#[derive(Block)]
 struct NonSendLocalSource {
     state: Rc<()>,
     emitted: bool,
@@ -153,7 +152,7 @@ impl Kernel for NonSendLocalSource {
     }
 }
 
-#[derive(LocalBlock)]
+#[derive(Block)]
 struct NonSendLocalSink {
     state: Rc<()>,
     n_received: usize,

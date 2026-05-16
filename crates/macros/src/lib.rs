@@ -5,8 +5,6 @@
 //! - `connect!`, which adds blocks to a flowgraph and wires stream, local
 //!   stream, message, and circuit connections.
 //! - `#[derive(Block)]`, which generates the runtime interface for block kernels.
-//! - `#[derive(LocalBlock)]`, an alias for `Block` used to document kernels meant
-//!   for local domains.
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::Attribute;
@@ -516,26 +514,6 @@ fn port_bound_types(ty: &Type) -> Vec<Type> {
     )
 )]
 pub fn derive_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    derive_block_impl(input)
-}
-
-/// Alias for `#[derive(Block)]` kept for blocks that are intended to run in a
-/// local domain.
-///
-/// It supports the same port and metadata attributes as `Block`.
-#[proc_macro_derive(
-    LocalBlock,
-    attributes(
-        input,
-        output,
-        message_inputs,
-        message_outputs,
-        blocking,
-        type_name,
-        null_kernel
-    )
-)]
-pub fn derive_local_block(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     derive_block_impl(input)
 }
 

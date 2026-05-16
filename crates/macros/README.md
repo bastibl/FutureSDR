@@ -70,9 +70,3 @@ Supported attributes:
 - `#[blocking]`.
 - `#[type_name(Name)]`.
 - `#[null_kernel]`.
-
-## `#[derive(LocalBlock)]`
-
-`LocalBlock` is an alias of `Block` for kernels intended to run in a local
-domain. Use it to document non-`Send` state, non-`Send` futures, or local-only
-buffers.

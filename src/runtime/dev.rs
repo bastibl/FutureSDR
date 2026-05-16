@@ -85,5 +85,4 @@ pub mod prelude {
     pub use crate::runtime::dev::TypedBlockGuardMut;
     pub use crate::runtime::dev::WorkIo;
     pub use crate::runtime::macros::Block;
-    pub use crate::runtime::macros::LocalBlock;
 }

@@ -28,7 +28,6 @@ pub trait Scheduler: Clone + Send + 'static {
 
 Schedulers handle only the normal scheduling domain. The runtime manages local domains separately for:
 
-- blocks derived with `LocalBlock`,
 - blocks added through `Flowgraph::add_local()`,
 - blocks marked with `#[blocking]`.
 

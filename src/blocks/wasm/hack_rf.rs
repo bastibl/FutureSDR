@@ -129,7 +129,7 @@ impl From<JsValue> for Error {
 ///
 /// let source = HackRf::new();
 /// ```
-#[derive(LocalBlock)]
+#[derive(Block)]
 #[message_inputs(
     freq,
     vga,

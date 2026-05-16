@@ -27,7 +27,7 @@ use crate::runtime::dev::prelude::*;
 ///
 /// let sink = WasmWsSink::<f32>::new("ws://localhost:9001".to_string(), 4);
 /// ```
-#[derive(LocalBlock)]
+#[derive(Block)]
 pub struct WasmWsSink<T>
 where
     T: CpuSample,

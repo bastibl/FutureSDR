@@ -20,8 +20,7 @@ use web_time::Instant;
 ///
 /// let throttle = Throttle::<u8>::new(1_000_000.0);
 /// ```
-#[cfg_attr(not(target_arch = "wasm32"), derive(Block))]
-#[cfg_attr(target_arch = "wasm32", derive(LocalBlock))]
+#[derive(Block)]
 pub struct Throttle<
     T: Copy + Send + 'static,
     I: CpuBufferReader<Item = T> = DefaultCpuReader<T>,
