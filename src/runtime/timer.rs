@@ -7,9 +7,9 @@ use std::time::Duration;
 /// Cross-target timer used by FutureSDR async code.
 pub struct Timer {
     #[cfg(not(target_arch = "wasm32"))]
-    inner: Pin<Box<dyn Future<Output = ()> + Send>>,
+    inner: async_io::Timer,
     #[cfg(target_arch = "wasm32")]
-    inner: Pin<Box<dyn Future<Output = ()>>>,
+    inner: gloo_timers::future::TimeoutFuture,
 }
 
 impl Timer {
@@ -18,17 +18,13 @@ impl Timer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             Self {
-                inner: Box::pin(async move {
-                    async_io::Timer::after(duration).await;
-                }),
+                inner: async_io::Timer::after(duration),
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
             Self {
-                inner: Box::pin(async move {
-                    gloo_timers::future::sleep(duration).await;
-                }),
+                inner: gloo_timers::future::sleep(duration),
             }
         }
     }
@@ -38,6 +34,13 @@ impl Future for Timer {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.inner.as_mut().poll(cx)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Pin::new(&mut self.inner).poll(cx).map(|_| ())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Pin::new(&mut self.inner).poll(cx)
+        }
     }
 }
