@@ -1,6 +1,3 @@
-use crate::runtime::channel::mpsc::Receiver;
-use crate::runtime::channel::mpsc::Sender;
-use crate::runtime::channel::oneshot;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -28,6 +25,9 @@ use crate::runtime::buffer::BufferReader;
 use crate::runtime::buffer::BufferWriter;
 use crate::runtime::buffer::CircuitWriter;
 use crate::runtime::buffer::SendBufferWriter;
+use crate::runtime::channel::mpsc::Receiver;
+use crate::runtime::channel::mpsc::Sender;
+use crate::runtime::channel::oneshot;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::Kernel;

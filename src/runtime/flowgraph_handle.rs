@@ -1,15 +1,15 @@
-use crate::runtime::channel::mpsc::Sender;
-use crate::runtime::channel::oneshot;
 use std::fmt::Debug;
 
-use futuresdr::runtime::BlockDescription;
-use futuresdr::runtime::BlockId;
-use futuresdr::runtime::Error;
-use futuresdr::runtime::FlowgraphDescription;
-use futuresdr::runtime::FlowgraphMessage;
-use futuresdr::runtime::Pmt;
-use futuresdr::runtime::PortId;
-use futuresdr::runtime::Timer;
+use crate::runtime::BlockDescription;
+use crate::runtime::BlockId;
+use crate::runtime::Error;
+use crate::runtime::FlowgraphDescription;
+use crate::runtime::FlowgraphMessage;
+use crate::runtime::Pmt;
+use crate::runtime::PortId;
+use crate::runtime::Timer;
+use crate::runtime::channel::mpsc::Sender;
+use crate::runtime::channel::oneshot;
 
 /// Clonable control handle for a running [`crate::runtime::Flowgraph`].
 ///

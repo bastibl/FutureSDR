@@ -1,5 +1,4 @@
 //! Remote Control through REST API
-use crate::runtime::channel::oneshot;
 use axum::Json;
 use axum::Router;
 use axum::extract::Path;
@@ -21,6 +20,7 @@ use crate::runtime::FlowgraphId;
 use crate::runtime::Pmt;
 use crate::runtime::PortId;
 use crate::runtime::RuntimeHandle;
+use crate::runtime::channel::oneshot;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
 

@@ -1,4 +1,3 @@
-use crate::runtime::channel::oneshot;
 use async_executor::Executor;
 use async_executor::Task;
 use futures::future::Future;
@@ -13,6 +12,7 @@ use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::block::Block;
 use crate::runtime::channel::mpsc::Sender;
+use crate::runtime::channel::oneshot;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
 

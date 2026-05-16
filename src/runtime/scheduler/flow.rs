@@ -1,4 +1,3 @@
-use crate::runtime::channel::oneshot;
 use async_lock::Barrier;
 use async_task::Runnable;
 use async_task::Task;
@@ -27,6 +26,7 @@ use crate::runtime::BlockId;
 use crate::runtime::FlowgraphMessage;
 use crate::runtime::block::Block;
 use crate::runtime::channel::mpsc::Sender;
+use crate::runtime::channel::oneshot;
 use crate::runtime::config;
 use crate::runtime::scheduler::Scheduler;
 

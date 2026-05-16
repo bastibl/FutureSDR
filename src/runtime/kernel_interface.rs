@@ -1,15 +1,15 @@
 use std::future::Future;
 
+use crate::runtime::BlockId;
+use crate::runtime::Error;
+use crate::runtime::Pmt;
+use crate::runtime::PortId;
+use crate::runtime::Result;
+use crate::runtime::buffer::BufferReader;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
-use futuresdr::runtime::BlockId;
-use futuresdr::runtime::Error;
-use futuresdr::runtime::Pmt;
-use futuresdr::runtime::PortId;
-use futuresdr::runtime::Result;
-use futuresdr::runtime::buffer::BufferReader;
 
 /// Send-capable proof for the generated block interface.
 ///

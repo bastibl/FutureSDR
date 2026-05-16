@@ -1,6 +1,5 @@
 //! Message/Event/RPC-based Ports
-use futuresdr_types::BlockId;
-
+use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::BlockPortCtx;
 use crate::runtime::Error;

@@ -1,3 +1,12 @@
+#[cfg(not(target_arch = "wasm32"))]
+use concurrent_queue::ConcurrentQueue;
+use std::any::Any;
+#[cfg(target_arch = "wasm32")]
+use std::collections::VecDeque;
+use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::Mutex;
+
 use crate::runtime::BlockId;
 use crate::runtime::BlockMessage;
 use crate::runtime::Error;
@@ -20,14 +29,6 @@ use crate::runtime::buffer::Tags;
 use crate::runtime::config::config;
 use crate::runtime::dev::BlockInbox;
 use crate::runtime::dev::ItemTag;
-#[cfg(not(target_arch = "wasm32"))]
-use concurrent_queue::ConcurrentQueue;
-use std::any::Any;
-#[cfg(target_arch = "wasm32")]
-use std::collections::VecDeque;
-use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use std::sync::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 type Queue<T> = ConcurrentQueue<T>;

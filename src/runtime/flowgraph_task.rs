@@ -1,11 +1,12 @@
-use crate::runtime::Error;
-use crate::runtime::Flowgraph;
-use crate::runtime::Result;
-use crate::runtime::scheduler::Task;
 use futures::FutureExt;
 use std::pin::Pin;
 use std::task;
 use std::task::Poll;
+
+use crate::runtime::Error;
+use crate::runtime::Flowgraph;
+use crate::runtime::Result;
+use crate::runtime::scheduler::Task;
 
 enum TaskState {
     Running(Task<Result<Flowgraph, Error>>),

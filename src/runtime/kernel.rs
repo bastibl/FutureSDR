@@ -1,10 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::runtime::Result;
 use crate::runtime::dev::BlockMeta;
 use crate::runtime::dev::MessageOutputs;
 use crate::runtime::dev::WorkIo;
-use futuresdr::runtime::Result;
 
 /// Send-capable marker for normal runtime blocks.
 ///
