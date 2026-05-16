@@ -270,13 +270,6 @@ impl<'a> LocalDomainContext<'a> {
     where
         K: Kernel + KernelInterface + 'static,
     {
-        self.add_kernel(block)
-    }
-
-    fn add_kernel<K>(&self, block: K) -> BlockRef<K>
-    where
-        K: Kernel + KernelInterface + 'static,
-    {
         let mut inner = self.inner.borrow_mut();
         let block_id = BlockId(inner.next_block_id);
         inner.next_block_id += 1;
