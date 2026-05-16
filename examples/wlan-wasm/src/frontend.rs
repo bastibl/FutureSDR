@@ -521,7 +521,7 @@ async fn start_receiver(
     ));
 
     let mut fg = Flowgraph::new();
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
 
     let failure_for_task = failure.clone();
     spawn_local(async move {

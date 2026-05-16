@@ -24,13 +24,9 @@ pub(crate) struct LocalDomainRuntime {
 }
 
 impl LocalDomainRuntime {
-    pub(crate) fn new() -> Self {
-        Self::try_new().expect("failed to create local domain")
-    }
-
-    pub(crate) fn try_new() -> Result<Self, Error> {
+    pub(crate) fn new() -> Result<Self, Error> {
         Ok(Self {
-            controller: LocalDomainController::try_new()?,
+            controller: LocalDomainController::new()?,
             blocks: 0,
             running: false,
         })
@@ -140,7 +136,7 @@ impl LocalDomainHandle {
 }
 
 impl LocalDomainController {
-    pub(crate) fn try_new() -> Result<Self, Error> {
+    pub(crate) fn new() -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel(config::config().queue_size);
         let (terminate_tx, terminate_rx) = oneshot::channel();
         let join = thread::Builder::new()
@@ -413,7 +409,7 @@ mod tests {
 
     #[test]
     fn controller_drop_terminates_running_local_blocks() -> Result<(), Error> {
-        let controller = LocalDomainController::try_new()?;
+        let controller = LocalDomainController::new()?;
         crate::runtime::block_on(controller.build(
             0,
             Box::new(|| {

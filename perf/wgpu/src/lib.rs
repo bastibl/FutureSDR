@@ -31,7 +31,7 @@ pub async fn run(run: u64, scheduler: String, samples: u64, buffer_size: u64) ->
 
     #[cfg(target_arch = "wasm32")]
     let snk = {
-        let local = fg.local_domain();
+        let local = fg.local_domain()?;
         let input = orig.clone();
         fg.domain_run_async(local, async move |ctx: &LocalDomainContext<'_>| {
             let src = ctx.add(VectorSource::<f32, H2DWriter<f32>>::new(input));

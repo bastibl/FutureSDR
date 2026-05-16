@@ -10,7 +10,7 @@ use futuresdr::runtime::buffer::LocalCpuWriter;
 
 fn main() -> Result<()> {
     let mut fg = Flowgraph::new();
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
 
     let src = fg.add_local(local, || {
         VectorSource::<u8, LocalCpuWriter<u8>>::new(vec![1, 2, 3, 4])

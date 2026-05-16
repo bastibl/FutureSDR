@@ -300,7 +300,7 @@ async fn start_receiver(
     spawn_local(poll_frames(frame_rx, set_n_frames, set_frames, set_status));
 
     let mut fg = Flowgraph::new();
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
     let src = fg.add_local_async(local, HackRf::new).await;
     let source = src.id();
 

@@ -114,7 +114,7 @@ use futuresdr::runtime::buffer::LocalCpuReader;
 use futuresdr::runtime::buffer::LocalCpuWriter;
 
 let mut fg = Flowgraph::new();
-let local = fg.local_domain();
+let local = fg.local_domain()?;
 
 let src = fg.add_local(local, || {
     NullSource::<f32, LocalCpuWriter<f32>>::new()

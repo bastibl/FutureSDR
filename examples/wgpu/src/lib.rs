@@ -67,7 +67,7 @@ async fn build_flowgraph(
     fg: &mut Flowgraph,
     orig: Vec<f32>,
 ) -> Result<BlockRef<VectorSink<f32, D2HReader<f32>>>> {
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
     Ok(fg
         .domain_run_async(local, async move |ctx: &LocalDomainContext<'_>| {
             let instance = wgpu::Instance::new().await;

@@ -16,7 +16,7 @@ fn run_and_check(fg: Flowgraph, snk: BlockRef<NullSink<u8, LocalCpuReader<u8>>>)
 #[test]
 fn connect_macro_works_in_local_domain_context() -> Result<()> {
     let mut fg = Flowgraph::new();
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
 
     let snk = fg.domain_run(local, |ctx| {
         let src = ctx.add(NullSource::<u8, LocalCpuWriter<u8>>::new());
@@ -35,7 +35,7 @@ fn connect_macro_works_in_local_domain_context() -> Result<()> {
 fn connect_macro_works_in_async_local_domain_context() -> Result<()> {
     futuresdr::runtime::block_on(async {
         let mut fg = Flowgraph::new();
-        let local = fg.local_domain();
+        let local = fg.local_domain()?;
 
         let snk = fg
             .domain_run_async(local, async |ctx: &LocalDomainContext<'_>| {

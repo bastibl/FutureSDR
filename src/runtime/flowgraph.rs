@@ -765,18 +765,12 @@ impl Flowgraph {
     /// [`Flowgraph::add_local`]. Blocks in one local domain can use local-only
     /// stream buffers with [`Flowgraph::stream_local`]. Normal send-capable
     /// stream buffers may connect local-domain blocks to normal blocks.
-    pub fn local_domain(&mut self) -> LocalDomain {
-        self.try_local_domain()
-            .expect("failed to create local domain")
-    }
-
-    /// Try to create a local scheduling domain.
     ///
-    /// This is mainly useful on WASM, where local domains require an application
-    /// worker script to be available.
-    pub fn try_local_domain(&mut self) -> Result<LocalDomain, Error> {
+    /// This can fail on WASM when the local-domain worker script cannot be
+    /// started.
+    pub fn local_domain(&mut self) -> Result<LocalDomain, Error> {
         let domain_id = self.local_domains.len();
-        self.local_domains.push(LocalDomainRuntime::try_new()?);
+        self.local_domains.push(LocalDomainRuntime::new()?);
         Ok(LocalDomain {
             flowgraph_id: self.id,
             domain_id,
@@ -887,7 +881,8 @@ impl Flowgraph {
     {
         if <K as KernelInterface>::is_blocking() {
             let domain_id = self.local_domains.len();
-            self.local_domains.push(LocalDomainRuntime::new());
+            self.local_domains
+                .push(LocalDomainRuntime::new().expect("failed to create local domain"));
             self.add_kernel_to_domain_async(domain_id, move || block)
                 .await
         } else {

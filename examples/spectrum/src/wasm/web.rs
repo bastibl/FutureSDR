@@ -485,7 +485,7 @@ async fn run(
 
     let mut fg = Flowgraph::new();
 
-    let local = fg.local_domain();
+    let local = fg.local_domain()?;
     let hackrf_block_id = fg
         .domain_run_async(local, async move |ctx: &LocalDomainContext<'_>| {
             let src = ctx.add(HackRf::new());
