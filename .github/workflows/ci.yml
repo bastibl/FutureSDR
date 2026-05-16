@@ -433,9 +433,8 @@ jobs:
     env:
       RUST_BACKTRACE: full
     steps:
-      - uses: crazy-max/ghaction-chocolatey@v3
-        with:
-          args: install ninja
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo test --all-targets --workspace --features=burn,aaronia_http,flow_scheduler,seify_dummy,wgpu
